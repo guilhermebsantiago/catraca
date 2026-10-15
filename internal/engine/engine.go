@@ -52,9 +52,11 @@ type Recorder interface {
 
 // Dispatcher triggers the effects of enforced matches, such as a webhook
 // that revokes a key. Dispatch is called synchronously by Decide, only for
-// decisions with enforced effects, with a context that is not canceled when
-// the caller goes away. It should persist the work, for example to an outbox,
-// and deliver it in the background.
+// decisions with enforced effects (decision.Decision.Effects: never those
+// of shadow matches or of rules that matched only by failing closed), with
+// a context that is not canceled when the caller goes away. It should
+// persist the work, for example to an outbox, and deliver it in the
+// background.
 type Dispatcher interface {
 	Dispatch(ctx context.Context, ev event.Event, d decision.Decision)
 }
@@ -151,8 +153,8 @@ func New(opts Options) (*Engine, error) {
 //  4. evaluate every rule: the most severe enforced match is the action,
 //     shadow matches are recorded, and rules that cannot be evaluated follow
 //     on_error;
-//  5. queue the decision for the Recorder and, when enforced rules have
-//     effects, call the Dispatcher.
+//  5. queue the decision for the Recorder and, when enforced rules that
+//     matched have effects, call the Dispatcher.
 //
 // Decide returns an error only when nothing was observed, so the caller may
 // retry: the event is invalid (ErrInvalidEvent), no ruleset is loaded

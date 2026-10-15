@@ -7,7 +7,8 @@ This page covers when a webhook is called, what it receives, how to verify
 it, and how retries and idempotency work.
 
 The code is in `internal/hooks`; the outbox it uses lives in the audit
-database (`internal/audit`).
+database (`internal/audit`), and the signature scheme in the public
+`signature` package.
 
 ## Configuring hooks
 
@@ -32,10 +33,12 @@ Dispatcher-wide settings:
 
 ## When a webhook is called
 
-For each decision, the engine hands the decision to the dispatcher, which
-writes one delivery per effect of the **enforced** matches. Effects of shadow
-matches never fire: a shadow rule only records what it would have done. An
-effect with no configured hook is skipped.
+For each decision whose enforced matches have effects, the engine hands the
+decision to the dispatcher, which writes one delivery per effect. Effects of
+shadow matches never fire: a shadow rule only records what it would have
+done. Nor do the effects of a rule that matched only because it fails closed
+(`errored` in the decision): while the store is down such a rule matches
+every event it covers. An effect with no configured hook is skipped.
 
 The delivery is written to the `outbox` table in the audit database before
 `Dispatch` returns, so it survives a crash or a restart. A background worker
@@ -112,61 +115,24 @@ switch Catraca to the new one, then drop the old one.
 
 ### Go
 
-Code inside the Catraca module can call `hooks.Verify(secret, header, body,
-tolerance)`. A receiver in another module cannot import an `internal`
-package, so here is the same check with only the standard library:
+The public package
+[`github.com/guilhermebsantiago/catraca/signature`](../signature) implements
+the scheme, so a receiver in any module can import it:
 
 ```go
-package webhook
+import "github.com/guilhermebsantiago/catraca/signature"
 
-import (
-	"crypto/hmac"
-	"crypto/sha256"
-	"encoding/hex"
-	"errors"
-	"strconv"
-	"strings"
-	"time"
-)
-
-// verifyCatraca checks a Catraca-Signature header against the raw body.
-func verifyCatraca(secret, header string, body []byte, tolerance time.Duration) error {
-	var ts string
-	var sigs []string
-	for _, part := range strings.Split(header, ",") {
-		k, v, _ := strings.Cut(strings.TrimSpace(part), "=")
-		switch k {
-		case "t":
-			ts = v
-		case "v1":
-			sigs = append(sigs, v)
-		}
-	}
-	unix, err := strconv.ParseInt(ts, 10, 64)
-	if err != nil || len(sigs) == 0 {
-		return errors.New("malformed Catraca-Signature header")
-	}
-	mac := hmac.New(sha256.New, []byte(secret))
-	mac.Write([]byte(ts + "."))
-	mac.Write(body)
-	want := mac.Sum(nil)
-	match := false
-	for _, s := range sigs {
-		if got, err := hex.DecodeString(s); err == nil && hmac.Equal(got, want) {
-			match = true
-		}
-	}
-	if !match {
-		return errors.New("signature does not match")
-	}
-	if age := time.Since(time.Unix(unix, 0)); age > tolerance || age < -tolerance {
-		return errors.New("signature timestamp outside tolerance")
-	}
-	return nil
-}
+err := signature.Verify(secret, r.Header.Get(signature.Header), body, 0)
 ```
 
-And a handler that uses it:
+`Verify` returns nil, or one of `signature.ErrMalformed` (the header cannot
+be parsed), `signature.ErrMismatch` (no `v1` matches: forged, altered, or
+signed with another secret), `signature.ErrExpired` (authentic, but the
+timestamp is outside the tolerance) and `signature.ErrEmptySecret`. A zero
+tolerance means `signature.DefaultTolerance`, five minutes. During a secret
+rotation, try the new secret and then the old one.
+
+In a handler:
 
 ```go
 func revokeKey(w http.ResponseWriter, r *http.Request) {
@@ -175,7 +141,7 @@ func revokeKey(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "read error", http.StatusBadRequest)
 		return
 	}
-	err = verifyCatraca(os.Getenv("CATRACA_HOOK_SECRET"), r.Header.Get("Catraca-Signature"), body, 5*time.Minute)
+	err = signature.Verify(os.Getenv("CATRACA_HOOK_SECRET"), r.Header.Get(signature.Header), body, 0)
 	if err != nil {
 		http.Error(w, "invalid signature", http.StatusUnauthorized)
 		return

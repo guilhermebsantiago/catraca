@@ -50,7 +50,27 @@ A rule that reads an absent signal fails, and its `on_error` policy decides:
 - `domain` is present when `from` has a domain.
 - `account.new_ip` and `key.new_ip` are absent when the event has no `ip`.
 - When the counter store fails or does not answer within the deadline, only
-  `event` is present and the decision is marked degraded.
+  `event` is present and the decision is marked degraded, with one
+  exception: for a key this Catraca process knows was leaked, `key` holds
+  `leaked: true` and nothing else.
+
+### Leaked keys while the store is down
+
+Each Catraca process keeps the ids of the leaked keys it knows in memory:
+those it marked (a `key_leak` event or `MarkLeaked`, even when the store
+write failed) and those a store read showed as leaked, so a key reported to
+another replica is learned the next time it is used here. When the store
+fails, `key.leaked` is `true` for those keys and absent for every other
+key, so a rule like `leaked-key-send` can fail open without letting known
+leaked keys send. The trade-off: a key reported to another replica during
+the outage is not seen here until the store recovers. Keys this process
+knows are written back to the store when they are next used, so a report
+whose store write failed reaches every replica once the store is back.
+
+The set holds up to 10,000 keys, about 1.5 MB, and forgets the least
+recently seen key beyond that. The store keeps every leaked key, so the cap
+only limits what this process can answer during an outage. The set starts
+empty after a restart and fills as leaked keys are used.
 
 ## What each event records
 
@@ -142,7 +162,7 @@ The API key the event names.
 | `distinct_ips_24h` | int | 24 h | distinct IPs of send events with the key |
 | `new_ip` | bool | 30 d | true when no send event with the key came from this IP in the last 30 days |
 | `age_hours` | double | | hours since the key was first seen in any event, for example an `account` event with action `api_key_created` |
-| `leaked` | bool | | true once the key was reported leaked, by a `key_leak` event or by the engine; it never resets |
+| `leaked` | bool | | true once the key was reported leaked, by a `key_leak` event or by the engine; it never resets. While the store is down it is the only `key` signal, present for keys known to be leaked (see above) |
 
 ## `ip`
 

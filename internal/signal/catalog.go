@@ -37,12 +37,17 @@ func NewCatalog(s store.Store, opts Options) Catalog {
 	if opts.Retention <= 0 {
 		opts.Retention = DefaultRetention
 	}
-	return &catalog{store: s, retention: opts.Retention}
+	return &catalog{store: s, retention: opts.Retention, leaked: newLeakedKeys(maxLeakedKeys)}
 }
 
 type catalog struct {
 	store     store.Store
 	retention time.Duration
+	// leaked answers key.leaked when the store cannot. Without it a store
+	// outage leaves the signal absent for every key, and a rule that fails
+	// closed on it blocks every send with a key, while one that fails open
+	// lets known leaked keys send.
+	leaked *leakedKeys
 }
 
 // Store keys, before the store's own prefix and layout. Entity ids come last
@@ -55,7 +60,13 @@ func domainKey(name, d string) string   { return "domain:" + name + ":" + d }
 func (c *catalog) Observe(ctx context.Context, ev event.Event) (Set, error) {
 	f := factsOf(ev)
 	set := Set{Event: eventSignals(ev, f)}
+	if ev.Type == event.KeyLeak && ev.APIKeyID != "" {
+		// The event is the report itself; remember it before the store
+		// write, which may fail.
+		c.leaked.add(ev.APIKeyID)
+	}
 	if ev.Time.IsZero() {
+		set.Key = c.knownLeaked(ev.APIKeyID)
 		return set, errors.New("signal: event has no time")
 	}
 
@@ -75,19 +86,40 @@ func (c *catalog) Observe(ctx context.Context, ev event.Event) (Set, error) {
 	}
 
 	if err := c.store.Do(ctx, &b); err != nil {
+		set.Key = c.knownLeaked(ev.APIKeyID)
 		return set, fmt.Errorf("signal: observe %s event: %w", ev.Type, err)
 	}
 	set.Account = acct.signals(ev.Time)
 	set.Key = key.signals(ev.Time)
 	set.IP = ip.signals()
 	set.Domain = dom.signals()
+	if key != nil && key.leaked.Found() {
+		// Keys reported to other replicas, or before a restart, are
+		// learned here when they are next used.
+		c.leaked.add(ev.APIKeyID)
+	}
 	return set, nil
+}
+
+// knownLeaked returns the key signals for an event the store could not
+// answer for: leaked alone, for a key this catalog knows leaked, and nil for
+// any other key, so rules that read key signals follow on_error.
+func (c *catalog) knownLeaked(apiKeyID string) map[string]any {
+	if apiKeyID == "" || !c.leaked.has(apiKeyID) {
+		return nil
+	}
+	return map[string]any{"leaked": true}
 }
 
 func (c *catalog) MarkLeaked(ctx context.Context, apiKeyID string) error {
 	if apiKeyID == "" {
 		return errors.New("signal: mark leaked: empty API key id")
 	}
+	// Remembered even when the write below fails, so key.leaked holds for
+	// the key in this process through the outage. The error tells the
+	// caller to retry; if it does not, Observe writes the key again the next
+	// time it is used here.
+	c.leaked.add(apiKeyID)
 	var b store.Batch
 	b.Set(apiKeyKey("leaked", apiKeyID), "1", 0)
 	if err := c.store.Do(ctx, &b); err != nil {
@@ -241,17 +273,20 @@ func (c *catalog) apiKey(b *store.Batch, ev event.Event, f facts) *apiKeyReads {
 	at := ev.Time
 	sends, ips, leaked := apiKeyKey("sends", id), apiKeyKey("ips", id), apiKeyKey("leaked", id)
 
-	switch ev.Type {
-	case event.Send:
+	if ev.Type == event.Send {
 		b.Incr(sends, time.Minute, at, 1)
 		b.Incr(sends, time.Hour, at, 1)
 		if f.ip != "" {
 			b.AddDistinct(ips, f.ip, time.Hour, at)
 			b.AddDistinct(ips, f.ip, day, at)
 		}
-	case event.KeyLeak:
-		// The report itself; MarkLeaked does the same for callers that learn
-		// of a leak some other way.
+	}
+	// A key_leak event is the report itself; MarkLeaked does the same for
+	// callers that learn of a leak some other way. A key this process
+	// already knows leaked is written again, so a report whose write failed
+	// during an outage reaches the store, and every replica, the next time
+	// the key is used here.
+	if ev.Type == event.KeyLeak || c.leaked.has(id) {
 		b.Set(leaked, "1", 0)
 	}
 

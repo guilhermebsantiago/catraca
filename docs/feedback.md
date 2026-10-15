@@ -249,17 +249,18 @@ Catraca-Signature: t=1760529600,v1=5f1c...e9
 - Fields that do not belong to a feedback event (`to`, `subject`, ...) are
   dropped.
 
-`Catraca-Signature` is the scheme Catraca signs its own webhooks with:
-`t` is the Unix time in seconds and `v1` the hex HMAC-SHA256 of
-`<t>.<raw body>` with the shared secret. The timestamp must be within five
-minutes of Catraca's clock. Several `v1` values may be sent while rotating
-the secret. In Go:
+`Catraca-Signature` is the scheme Catraca signs its own webhooks with
+(see [Hooks](hooks.md#verifying-the-signature)): `t` is the Unix time in
+seconds and `v1` the hex HMAC-SHA256 of `<t>.<raw body>` with the shared
+secret. The timestamp must be within five minutes of Catraca's clock
+(`GenericConfig.Tolerance`). Several `v1` values may be sent while rotating
+the secret. In Go, sign with the public
+[`signature`](../signature) package:
 
 ```go
-ts := strconv.FormatInt(time.Now().Unix(), 10)
-mac := hmac.New(sha256.New, []byte(secret))
-mac.Write([]byte(ts + "." + string(body)))
-req.Header.Set("Catraca-Signature", "t="+ts+",v1="+hex.EncodeToString(mac.Sum(nil)))
+import "github.com/guilhermebsantiago/catraca/signature"
+
+req.Header.Set(signature.Header, signature.Sign(secret, time.Now(), body))
 ```
 
 The answer is `202 Accepted` with the decision, as for `POST /v1/events`;
