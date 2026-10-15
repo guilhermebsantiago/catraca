@@ -1,0 +1,28 @@
+# Configuration for compose.yaml: counters in Redis, so several instances
+# share them, and the audit log in Postgres.
+server:
+  listen: :8080
+
+auth:
+  tokens:
+    - name: platform
+      token: ${CATRACA_API_TOKEN}
+
+rules:
+  path: rules/default.yaml
+
+store:
+  backend: redis
+  redis:
+    url: ${CATRACA_REDIS_URL:-redis://redis:6379/0}
+
+audit:
+  dsn: ${CATRACA_AUDIT_DSN:-postgres://catraca:catraca@postgres:5432/catraca?sslmode=disable}
+
+feedback:
+  generic:
+    secret: ${CATRACA_FEEDBACK_SECRET}
+
+logging:
+  level: ${CATRACA_LOG_LEVEL:-info}
+  format: json

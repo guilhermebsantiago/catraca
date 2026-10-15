@@ -143,6 +143,43 @@ jobs:
             echo "::endgroup::"
           done
 
+  docker:
+    name: Docker image and compose
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    env:
+      CATRACA_API_TOKEN: ci-token-0123456789abcdef
+      CATRACA_FEEDBACK_SECRET: ci-feedback-0123456789abcdef
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      # Runs the stack the README's quick start describes (Redis counters,
+      # Postgres audit log) and asks it for a decision.
+      - name: Compose up
+        working-directory: deploy
+        run: docker compose up --build --detach --wait --wait-timeout 180
+      - name: Decide
+        run: |
+          for _ in $(seq 1 30); do
+            curl -fsS localhost:8080/readyz && break
+            sleep 2
+          done
+          curl -fsS localhost:8080/v1/decide \
+            -H "Authorization: Bearer $CATRACA_API_TOKEN" \
+            -H "Content-Type: application/json" \
+            -d '{"type":"send","account_id":"acc_ci","from":"hello@example.com","to":["someone@example.org"]}' \
+            | tee decision.json
+          grep -q '"action":"allow"' decision.json
+      - name: Logs
+        if: failure()
+        working-directory: deploy
+        run: docker compose logs
+      - name: Compose down
+        if: always()
+        working-directory: deploy
+        run: docker compose down --volumes
+
   examples-ts:
     name: TypeScript example ${{ matrix.example }} (Node ${{ matrix.node }})
     strategy:

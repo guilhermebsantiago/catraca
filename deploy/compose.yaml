@@ -1,0 +1,52 @@
+# Catraca with Redis for counters and Postgres for the audit log.
+#
+#   cd deploy
+#   export CATRACA_API_TOKEN=$(openssl rand -hex 32) CATRACA_FEEDBACK_SECRET=$(openssl rand -hex 32)
+#   docker compose up --build
+#
+# Then: curl localhost:8080/readyz
+name: catraca
+
+services:
+  catraca:
+    build:
+      context: ..
+    ports:
+      - "8080:8080"
+    environment:
+      CATRACA_API_TOKEN: ${CATRACA_API_TOKEN:?set CATRACA_API_TOKEN}
+      CATRACA_FEEDBACK_SECRET: ${CATRACA_FEEDBACK_SECRET:?set CATRACA_FEEDBACK_SECRET}
+      CATRACA_CONFIG: /etc/catraca/compose.yaml
+    volumes:
+      - ./catraca.compose.yaml:/etc/catraca/compose.yaml:ro
+    depends_on:
+      redis:
+        condition: service_healthy
+      postgres:
+        condition: service_healthy
+    restart: unless-stopped
+
+  redis:
+    image: redis:7-alpine
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 2s
+      timeout: 3s
+      retries: 30
+
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: catraca
+      POSTGRES_PASSWORD: catraca
+      POSTGRES_DB: catraca
+    volumes:
+      - postgres:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U catraca"]
+      interval: 2s
+      timeout: 3s
+      retries: 30
+
+volumes:
+  postgres:

@@ -1,0 +1,10 @@
+.git
+.github
+.claude
+examples/**/node_modules
+examples/replay/events.jsonl
+*.db
+*.db-*
+/catraca
+/catraca.exe
+/dist
