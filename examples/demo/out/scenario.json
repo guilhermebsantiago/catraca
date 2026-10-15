@@ -1,0 +1,2996 @@
+{
+  "note": "Recorded by examples/demo against a real catraca serve with examples/demo/rules.yaml. Ids, times and latencies change on every run.",
+  "generated_at": "2026-10-15T23:17:50Z",
+  "catraca_version": "catraca dev (a60afdadbe77) go1.27.2 windows/amd64",
+  "ruleset_version": "3ed1ef48775c",
+  "history": {
+    "farm": 61,
+    "login": 4,
+    "send": 1850,
+    "shortener": 9,
+    "signup": 10,
+    "total": 1934
+  },
+  "steps": {
+    "allow": {
+      "method": "POST",
+      "path": "/v1/decide",
+      "request": {
+        "type": "send",
+        "account_id": "acct_lumen",
+        "api_key_id": "key_4f1a",
+        "ip": "203.0.113.10",
+        "from": "receipts@lumen.example",
+        "to": [
+          "rafa.46@mail.example"
+        ],
+        "subject": "Your receipt #30002"
+      },
+      "status": 200,
+      "status_text": "OK",
+      "response_headers": {
+        "Content-Type": "application/json",
+        "X-Request-Id": "8cd8ef708ae98ef40d99e797cdd8fc9d"
+      },
+      "response": {
+        "decision": {
+          "id": "01M50XQ41EMFWEFEADWDS8W07D",
+          "event_id": "01M50XQ41EMFWEFEADWDS8W07C",
+          "time": "2026-10-15T20:17:50.7665861-03:00",
+          "action": "allow",
+          "ruleset_version": "3ed1ef48775c",
+          "latency_us": 0
+        }
+      }
+    },
+    "block": {
+      "method": "POST",
+      "path": "/v1/decide",
+      "request": {
+        "type": "send",
+        "account_id": "acct_tidal",
+        "api_key_id": "key_9c2e",
+        "ip": "192.0.2.200",
+        "from": "alerts@tidal.example",
+        "to": [
+          "carla.34@box.example"
+        ],
+        "subject": "Urgent: verify your account"
+      },
+      "status": 200,
+      "status_text": "OK",
+      "response_headers": {
+        "Content-Type": "application/json",
+        "X-Request-Id": "eca1c111247231fce9ebb3d1dcfb8141"
+      },
+      "response": {
+        "decision": {
+          "id": "01M50XQ42BJ24XKRC39N0Y72GR",
+          "event_id": "01M50XQ42BJ24XKRC39N0Y72GQ",
+          "time": "2026-10-15T20:17:50.795586-03:00",
+          "action": "block",
+          "matches": [
+            {
+              "rule_id": "leaked-key-send",
+              "reason": "This API key was found in public and must be rotated before it can send again",
+              "action": "block",
+              "mode": "enforce",
+              "effects": [
+                "revoke_key"
+              ]
+            }
+          ],
+          "ruleset_version": "3ed1ef48775c",
+          "latency_us": 0
+        }
+      }
+    },
+    "burst_100": {
+      "method": "POST",
+      "path": "/v1/decide",
+      "request": {
+        "type": "send",
+        "account_id": "acct_x7q2",
+        "api_key_id": "key_5d0c",
+        "ip": "198.51.100.23",
+        "from": "promo@quickdeals.example",
+        "to": [
+          "paula.45@inbox.example"
+        ],
+        "subject": "Limited offer: 90% off today only"
+      },
+      "status": 200,
+      "status_text": "OK",
+      "response_headers": {
+        "Content-Type": "application/json",
+        "X-Request-Id": "ad343213b7103dbf2809ce1e43fd23c6"
+      },
+      "response": {
+        "decision": {
+          "id": "01M50XQ41Z2F9BSXR2HDTNJAF2",
+          "event_id": "01M50XQ41Z2F9BSXR2HDTNJAF1",
+          "time": "2026-10-15T20:17:50.7835863-03:00",
+          "action": "allow",
+          "ruleset_version": "3ed1ef48775c",
+          "latency_us": 0
+        }
+      }
+    },
+    "burst_first": {
+      "method": "POST",
+      "path": "/v1/decide",
+      "request": {
+        "type": "send",
+        "account_id": "acct_x7q2",
+        "api_key_id": "key_5d0c",
+        "ip": "198.51.100.23",
+        "from": "promo@quickdeals.example",
+        "to": [
+          "marta.11@mail.example"
+        ],
+        "subject": "Limited offer: 90% off today only"
+      },
+      "status": 200,
+      "status_text": "OK",
+      "response_headers": {
+        "Content-Type": "application/json",
+        "X-Request-Id": "87e92e21c703fef628435d849020169d"
+      },
+      "response": {
+        "decision": {
+          "id": "01M50XQ41GCA3WZ3HBJ30MWENT",
+          "event_id": "01M50XQ41GCA3WZ3HBJ30MWENS",
+          "time": "2026-10-15T20:17:50.7685853-03:00",
+          "action": "allow",
+          "ruleset_version": "3ed1ef48775c",
+          "latency_us": 0
+        }
+      }
+    },
+    "burst_signup": {
+      "method": "POST",
+      "path": "/v1/events",
+      "request": {
+        "type": "account",
+        "account_id": "acct_x7q2",
+        "ip": "198.51.100.23",
+        "account": {
+          "action": "signup",
+          "created_at": "2026-10-15T23:17:50Z"
+        }
+      },
+      "status": 202,
+      "status_text": "Accepted",
+      "response_headers": {
+        "Content-Type": "application/json",
+        "X-Request-Id": "f7a24cd19ceab0bbeca8b9f1869b046c"
+      },
+      "response": {
+        "decision": {
+          "id": "01M50XQ41GCA3WZ3HBJ30MWENR",
+          "event_id": "01M50XQ41GCA3WZ3HBJ30MWENQ",
+          "time": "2026-10-15T20:17:50.7680857-03:00",
+          "action": "allow",
+          "ruleset_version": "3ed1ef48775c",
+          "latency_us": 499
+        }
+      }
+    },
+    "complaint_1": {
+      "method": "POST",
+      "path": "/v1/feedback",
+      "request_headers": {
+        "Catraca-Signature": "t=1792106270,v1=0f1c0810df30fc88f0287b3ebf02d0eaa04f7bd87801172c37c13e864f609d31"
+      },
+      "request": {
+        "account_id": "acct_fernway",
+        "from": "news@fernway.example",
+        "feedback": {
+          "kind": "complaint",
+          "recipient": "diego.61@mail.example",
+          "message_id": "msg_fw_81247"
+        }
+      },
+      "status": 202,
+      "status_text": "Accepted",
+      "response_headers": {
+        "Content-Type": "application/json",
+        "X-Request-Id": "e1e940fcc474ae52579997be60f084c9"
+      },
+      "response": {
+        "decision": {
+          "id": "01M50XQ427VF3CMXSKKPNYQRBK",
+          "event_id": "01M50XQ427VF3CMXSKKPNYQRBJ",
+          "time": "2026-10-15T20:17:50.7910879-03:00",
+          "action": "allow",
+          "ruleset_version": "3ed1ef48775c",
+          "latency_us": 0
+        }
+      }
+    },
+    "complaint_2": {
+      "method": "POST",
+      "path": "/v1/feedback",
+      "request_headers": {
+        "Catraca-Signature": "t=1792106270,v1=043dc12df64bb0d9274a3125fdf298a76b900fe1166f3be8bd70fa6a0353db28"
+      },
+      "request": {
+        "account_id": "acct_fernway",
+        "from": "news@fernway.example",
+        "feedback": {
+          "kind": "complaint",
+          "recipient": "elena.82@mail.example",
+          "message_id": "msg_fw_81264"
+        }
+      },
+      "status": 202,
+      "status_text": "Accepted",
+      "response_headers": {
+        "Content-Type": "application/json",
+        "X-Request-Id": "7b974d57630821cd2414e6991ccce0d2"
+      },
+      "response": {
+        "decision": {
+          "id": "01M50XQ4287BCGYQPYHAM2FYDC",
+          "event_id": "01M50XQ4287BCGYQPYHAM2FYDB",
+          "time": "2026-10-15T20:17:50.7920862-03:00",
+          "action": "allow",
+          "ruleset_version": "3ed1ef48775c",
+          "latency_us": 0
+        }
+      }
+    },
+    "complaint_3": {
+      "method": "POST",
+      "path": "/v1/feedback",
+      "request_headers": {
+        "Catraca-Signature": "t=1792106270,v1=98ab8e22e420ddc44c64b4c2dc698f5541edf034b651795c819664ad040c64b7"
+      },
+      "request": {
+        "account_id": "acct_fernway",
+        "from": "news@fernway.example",
+        "feedback": {
+          "kind": "complaint",
+          "recipient": "marta.82@box.example",
+          "message_id": "msg_fw_81281"
+        }
+      },
+      "status": 202,
+      "status_text": "Accepted",
+      "response_headers": {
+        "Content-Type": "application/json",
+        "X-Request-Id": "d2603d5533f4bfa29c91e5dd5d724ef7"
+      },
+      "response": {
+        "decision": {
+          "id": "01M50XQ4298MVGK67P06FDKZWF",
+          "event_id": "01M50XQ4298MVGK67P06FDKZWE",
+          "time": "2026-10-15T20:17:50.7930863-03:00",
+          "action": "allow",
+          "ruleset_version": "3ed1ef48775c",
+          "latency_us": 0
+        }
+      }
+    },
+    "complaint_4": {
+      "method": "POST",
+      "path": "/v1/feedback",
+      "request_headers": {
+        "Catraca-Signature": "t=1792106270,v1=01a9a064ae3181cfa13ebfb8941fe14770d6848805fbf6142e218ab357619c3e"
+      },
+      "request": {
+        "account_id": "acct_fernway",
+        "from": "news@fernway.example",
+        "feedback": {
+          "kind": "complaint",
+          "recipient": "diego.40@box.example",
+          "message_id": "msg_fw_81298"
+        }
+      },
+      "status": 202,
+      "status_text": "Accepted",
+      "response_headers": {
+        "Content-Type": "application/json",
+        "X-Request-Id": "13cf2945b257875c7e459042dad07069"
+      },
+      "response": {
+        "decision": {
+          "id": "01M50XQ4298MVGK67P06FDKZWQ",
+          "event_id": "01M50XQ4298MVGK67P06FDKZWP",
+          "time": "2026-10-15T20:17:50.7935861-03:00",
+          "action": "allow",
+          "ruleset_version": "3ed1ef48775c",
+          "latency_us": 0
+        }
+      }
+    },
+    "complaint_send_1": {
+      "method": "POST",
+      "path": "/v1/decide",
+      "request": {
+        "type": "send",
+        "account_id": "acct_fernway",
+        "api_key_id": "key_7b3d",
+        "ip": "203.0.113.24",
+        "from": "news@fernway.example",
+        "to": [
+          "carla.41@inbox.example"
+        ],
+        "subject": "Fernway weekly, issue 30003"
+      },
+      "status": 200,
+      "status_text": "OK",
+      "response_headers": {
+        "Content-Type": "application/json",
+        "X-Request-Id": "6b02aea4f1509166cac87672d3c986da"
+      },
+      "response": {
+        "decision": {
+          "id": "01M50XQ427VF3CMXSKKPNYQRBQ",
+          "event_id": "01M50XQ427VF3CMXSKKPNYQRBP",
+          "time": "2026-10-15T20:17:50.7915872-03:00",
+          "action": "allow",
+          "ruleset_version": "3ed1ef48775c",
+          "latency_us": 0
+        }
+      }
+    },
+    "complaint_send_2": {
+      "method": "POST",
+      "path": "/v1/decide",
+      "request": {
+        "type": "send",
+        "account_id": "acct_fernway",
+        "api_key_id": "key_7b3d",
+        "ip": "203.0.113.24",
+        "from": "news@fernway.example",
+        "to": [
+          "carla.44@mail.example"
+        ],
+        "subject": "Fernway weekly, issue 30004"
+      },
+      "status": 200,
+      "status_text": "OK",
+      "response_headers": {
+        "Content-Type": "application/json",
+        "X-Request-Id": "3765e8d5bf07048c0d240b71f067e6d4"
+      },
+      "response": {
+        "decision": {
+          "id": "01M50XQ4287BCGYQPYHAM2FYDG",
+          "event_id": "01M50XQ4287BCGYQPYHAM2FYDF",
+          "time": "2026-10-15T20:17:50.7925865-03:00",
+          "action": "allow",
+          "ruleset_version": "3ed1ef48775c",
+          "latency_us": 0
+        }
+      }
+    },
+    "complaint_send_3": {
+      "method": "POST",
+      "path": "/v1/decide",
+      "request": {
+        "type": "send",
+        "account_id": "acct_fernway",
+        "api_key_id": "key_7b3d",
+        "ip": "203.0.113.24",
+        "from": "news@fernway.example",
+        "to": [
+          "hugo.69@letters.example"
+        ],
+        "subject": "Fernway weekly, issue 30005"
+      },
+      "status": 200,
+      "status_text": "OK",
+      "response_headers": {
+        "Content-Type": "application/json",
+        "X-Request-Id": "ca3bdc2abdc31fe594014a0f5ddb9a09"
+      },
+      "response": {
+        "decision": {
+          "id": "01M50XQ4298MVGK67P06FDKZWK",
+          "event_id": "01M50XQ4298MVGK67P06FDKZWJ",
+          "time": "2026-10-15T20:17:50.7930863-03:00",
+          "action": "allow",
+          "ruleset_version": "3ed1ef48775c",
+          "latency_us": 499
+        }
+      }
+    },
+    "complaint_send_4": {
+      "method": "POST",
+      "path": "/v1/decide",
+      "request": {
+        "type": "send",
+        "account_id": "acct_fernway",
+        "api_key_id": "key_7b3d",
+        "ip": "203.0.113.24",
+        "from": "news@fernway.example",
+        "to": [
+          "joao.80@letters.example"
+        ],
+        "subject": "Fernway weekly, issue 30006"
+      },
+      "status": 200,
+      "status_text": "OK",
+      "response_headers": {
+        "Content-Type": "application/json",
+        "X-Request-Id": "8e83bed8bfd555b93cb17745a1ba68de"
+      },
+      "response": {
+        "decision": {
+          "id": "01M50XQ42A6P0G3NCWWGZGBJMV",
+          "event_id": "01M50XQ42A6P0G3NCWWGZGBJMT",
+          "time": "2026-10-15T20:17:50.7940855-03:00",
+          "action": "hold",
+          "matches": [
+            {
+              "rule_id": "complaint-rate-high",
+              "reason": "Spam complaint rate above 0.3% in the last 24 hours",
+              "action": "hold",
+              "mode": "enforce"
+            }
+          ],
+          "ruleset_version": "3ed1ef48775c",
+          "latency_us": 0
+        }
+      }
+    },
+    "flag": {
+      "method": "POST",
+      "path": "/v1/decide",
+      "request": {
+        "type": "send",
+        "account_id": "acct_n10",
+        "api_key_id": "key_n10",
+        "ip": "198.51.100.110",
+        "from": "hello@n10.example",
+        "to": [
+          "lia.47@inbox.example"
+        ],
+        "subject": "You're invited",
+        "links": [
+          "https://bit.ly/3N10Qx"
+        ]
+      },
+      "status": 200,
+      "status_text": "OK",
+      "response_headers": {
+        "Content-Type": "application/json",
+        "X-Request-Id": "64223ce28a963e30951117a7b35690f0"
+      },
+      "response": {
+        "decision": {
+          "id": "01M50XQ41FEZG7N5WDVFWEVEHQ",
+          "event_id": "01M50XQ41FEZG7N5WDVFWEVEHP",
+          "time": "2026-10-15T20:17:50.7670858-03:00",
+          "action": "flag",
+          "matches": [
+            {
+              "rule_id": "shortener-links-new-account",
+              "reason": "New account linking through a URL shortener",
+              "action": "flag",
+              "mode": "enforce"
+            }
+          ],
+          "ruleset_version": "3ed1ef48775c",
+          "latency_us": 0
+        }
+      }
+    },
+    "hold": {
+      "method": "POST",
+      "path": "/v1/decide",
+      "request": {
+        "type": "send",
+        "account_id": "acct_fernway",
+        "api_key_id": "key_7b3d",
+        "ip": "203.0.113.24",
+        "from": "news@fernway.example",
+        "to": [
+          "joao.80@letters.example"
+        ],
+        "subject": "Fernway weekly, issue 30006"
+      },
+      "status": 200,
+      "status_text": "OK",
+      "response_headers": {
+        "Content-Type": "application/json",
+        "X-Request-Id": "8e83bed8bfd555b93cb17745a1ba68de"
+      },
+      "response": {
+        "decision": {
+          "id": "01M50XQ42A6P0G3NCWWGZGBJMV",
+          "event_id": "01M50XQ42A6P0G3NCWWGZGBJMT",
+          "time": "2026-10-15T20:17:50.7940855-03:00",
+          "action": "hold",
+          "matches": [
+            {
+              "rule_id": "complaint-rate-high",
+              "reason": "Spam complaint rate above 0.3% in the last 24 hours",
+              "action": "hold",
+              "mode": "enforce"
+            }
+          ],
+          "ruleset_version": "3ed1ef48775c",
+          "latency_us": 0
+        }
+      }
+    },
+    "key_leak": {
+      "method": "POST",
+      "path": "/v1/events",
+      "request": {
+        "type": "key_leak",
+        "account_id": "acct_tidal",
+        "api_key_id": "key_9c2e",
+        "leak": {
+          "source": "public-repo",
+          "url": "https://code.example/tidal-ops/deploy/blob/main/.env"
+        }
+      },
+      "status": 202,
+      "status_text": "Accepted",
+      "response_headers": {
+        "Content-Type": "application/json",
+        "X-Request-Id": "34f87c104b46a5497ad06a16fac702e8"
+      },
+      "response": {
+        "decision": {
+          "id": "01M50XQ42A6P0G3NCWWGZGBJN3",
+          "event_id": "01M50XQ42A6P0G3NCWWGZGBJN2",
+          "time": "2026-10-15T20:17:50.7945851-03:00",
+          "action": "allow",
+          "ruleset_version": "3ed1ef48775c",
+          "latency_us": 0
+        }
+      }
+    },
+    "key_rotated": {
+      "method": "POST",
+      "path": "/v1/events",
+      "request": {
+        "type": "account",
+        "account_id": "acct_tidal",
+        "api_key_id": "key_b61e",
+        "ip": "203.0.113.37",
+        "account": {
+          "action": "api_key_created"
+        }
+      },
+      "status": 202,
+      "status_text": "Accepted",
+      "response_headers": {
+        "Content-Type": "application/json",
+        "X-Request-Id": "7789e7e7664b138b3f985ea22ad67424"
+      },
+      "response": {
+        "decision": {
+          "id": "01M50XQ435ZE7HW4HXHJ4XWPWG",
+          "event_id": "01M50XQ435ZE7HW4HXHJ4XWPWF",
+          "time": "2026-10-15T20:17:50.821124-03:00",
+          "action": "allow",
+          "ruleset_version": "3ed1ef48775c",
+          "latency_us": 0
+        }
+      }
+    },
+    "shadow": {
+      "method": "POST",
+      "path": "/v1/events",
+      "request": {
+        "type": "account",
+        "account_id": "acct_f64",
+        "ip": "198.51.100.77",
+        "account": {
+          "action": "signup",
+          "created_at": "2026-10-15T23:17:50Z"
+        }
+      },
+      "status": 202,
+      "status_text": "Accepted",
+      "response_headers": {
+        "Content-Type": "application/json",
+        "X-Request-Id": "79fc244c43932e19cc88bf510481f511"
+      },
+      "response": {
+        "decision": {
+          "id": "01M50XQ4373DFMCM4XWGYYS4NG",
+          "event_id": "01M50XQ4373DFMCM4XWGYYS4NF",
+          "time": "2026-10-15T20:17:50.8236274-03:00",
+          "action": "allow",
+          "shadow": [
+            {
+              "rule_id": "signup-farm-ip",
+              "reason": "Many signups from the same IP address in the last 24 hours",
+              "action": "flag",
+              "mode": "shadow"
+            }
+          ],
+          "ruleset_version": "3ed1ef48775c",
+          "latency_us": 0
+        }
+      }
+    },
+    "shadow_first": {
+      "method": "POST",
+      "path": "/v1/events",
+      "request": {
+        "type": "account",
+        "account_id": "acct_f62",
+        "ip": "198.51.100.77",
+        "account": {
+          "action": "signup",
+          "created_at": "2026-10-15T23:17:50Z"
+        }
+      },
+      "status": 202,
+      "status_text": "Accepted",
+      "response_headers": {
+        "Content-Type": "application/json",
+        "X-Request-Id": "074161798262ee1ece0c8d7661ce0c30"
+      },
+      "response": {
+        "decision": {
+          "id": "01M50XQ436TSEJVC6XB5VWD20J",
+          "event_id": "01M50XQ436TSEJVC6XB5VWD20H",
+          "time": "2026-10-15T20:17:50.822629-03:00",
+          "action": "allow",
+          "shadow": [
+            {
+              "rule_id": "signup-farm-ip",
+              "reason": "Many signups from the same IP address in the last 24 hours",
+              "action": "flag",
+              "mode": "shadow"
+            }
+          ],
+          "ruleset_version": "3ed1ef48775c",
+          "latency_us": 0
+        }
+      }
+    },
+    "throttle": {
+      "method": "POST",
+      "path": "/v1/decide",
+      "request": {
+        "type": "send",
+        "account_id": "acct_x7q2",
+        "api_key_id": "key_5d0c",
+        "ip": "198.51.100.23",
+        "from": "promo@quickdeals.example",
+        "to": [
+          "elena.64@letters.example"
+        ],
+        "subject": "Limited offer: 90% off today only"
+      },
+      "status": 200,
+      "status_text": "OK",
+      "response_headers": {
+        "Content-Type": "application/json",
+        "Retry-After": "60",
+        "X-Request-Id": "f8b8cd0872703b756bf6785aecef8e00"
+      },
+      "response": {
+        "decision": {
+          "id": "01M50XQ41Z2F9BSXR2HDTNJAF4",
+          "event_id": "01M50XQ41Z2F9BSXR2HDTNJAF3",
+          "time": "2026-10-15T20:17:50.7835863-03:00",
+          "action": "throttle",
+          "matches": [
+            {
+              "rule_id": "new-account-burst",
+              "reason": "New account sending at burst volume; slow down and retry later",
+              "action": "throttle",
+              "mode": "enforce",
+              "retry_after": 60
+            }
+          ],
+          "ruleset_version": "3ed1ef48775c",
+          "latency_us": 0,
+          "retry_after": 60
+        }
+      }
+    }
+  },
+  "burst": {
+    "allow": 100,
+    "first_throttle_at": 101,
+    "throttle": 40
+  },
+  "complaints": [
+    {
+      "complaints": 1,
+      "next_send_action": "allow",
+      "next_send_decision_id": "01M50XQ427VF3CMXSKKPNYQRBQ"
+    },
+    {
+      "complaints": 2,
+      "next_send_action": "allow",
+      "next_send_decision_id": "01M50XQ4287BCGYQPYHAM2FYDG"
+    },
+    {
+      "complaints": 3,
+      "next_send_action": "allow",
+      "next_send_decision_id": "01M50XQ4298MVGK67P06FDKZWK"
+    },
+    {
+      "complaints": 4,
+      "next_send_action": "hold",
+      "next_send_decision_id": "01M50XQ42A6P0G3NCWWGZGBJMV"
+    }
+  ],
+  "hook": {
+    "method": "POST",
+    "path": "/hooks/revoke-key",
+    "headers": {
+      "Catraca-Attempt": "1",
+      "Catraca-Idempotency-Key": "01M50XQ42BJ24XKRC39N0Y72GR:revoke_key",
+      "Catraca-Signature": "t=1792106270,v1=5da3629d3c82e917949d6a30dc2cf83af6d49c36ef064d0ab83f8147b7ad4fa1",
+      "Content-Type": "application/json",
+      "User-Agent": "Catraca-Hooks/1"
+    },
+    "body": {
+      "effect": "revoke_key",
+      "decision_id": "01M50XQ42BJ24XKRC39N0Y72GR",
+      "event_id": "01M50XQ42BJ24XKRC39N0Y72GQ",
+      "event_type": "send",
+      "account_id": "acct_tidal",
+      "api_key_id": "key_9c2e",
+      "action": "block",
+      "rule_ids": [
+        "leaked-key-send"
+      ],
+      "reasons": [
+        "This API key was found in public and must be rotated before it can send again"
+      ],
+      "time": "2026-10-15T20:17:50.795586-03:00"
+    },
+    "verified": "ok",
+    "status": 204,
+    "received_at": "2026-10-15T23:17:50.7965861Z"
+  },
+  "labels": {
+    "false_positive": 7,
+    "true_positive": 105
+  },
+  "cli": {
+    "label_fp": {
+      "args": [
+        "catraca",
+        "label",
+        "01M50XQ3YQWKFJMWSR2N9KDQSW",
+        "--verdict",
+        "false_positive",
+        "--by",
+        "support@platform.example",
+        "--rule",
+        "signup-farm-ip",
+        "--reason",
+        "real customer behind the same office NAT"
+      ],
+      "stdout": "labeled decision 01M50XQ3YQWKFJMWSR2N9KDQSW false_positive for rule signup-farm-ip; it has 1 label(s)\n",
+      "exit": 0
+    },
+    "label_tp": {
+      "args": [
+        "catraca",
+        "label",
+        "01M50XQ4373DFMCM4XWGYYS4NG",
+        "--verdict",
+        "true_positive",
+        "--by",
+        "trust@platform.example",
+        "--rule",
+        "signup-farm-ip"
+      ],
+      "stdout": "labeled decision 01M50XQ4373DFMCM4XWGYYS4NG true_positive for rule signup-farm-ip; it has 1 label(s)\n",
+      "exit": 0
+    },
+    "report": {
+      "args": [
+        "catraca",
+        "report",
+        "--rules",
+        "rules.yaml",
+        "--audit",
+        "sqlite:audit.db"
+      ],
+      "stdout": "Ruleset 3ed1ef48775c, matches since 2026-09-15T23:17:51Z\nGate: at least 30 labeled matches and a precision lower bound of 0.90 (Wilson 95%)\n\nRULE                         MODE     MATCHES  LABELED  TP  FP  PRECISION  95% CI          STATUS\nleaked-key-send              enforce  1        1        1   0   1.000      [0.207, 1.000]  insufficient_labels (override)\nnew-account-burst            enforce  40       40       40  0   1.000      [0.912, 1.000]  passes\ncomplaint-rate-high          enforce  1        1        1   0   1.000      [0.207, 1.000]  insufficient_labels\nhard-bounce-rate-high        shadow   0        0        0   0   -          -               insufficient_labels\nkey-many-ips                 shadow   0        0        0   0   -          -               insufficient_labels\naccount-takeover-volume      shadow   0        0        0   0   -          -               insufficient_labels\nshortener-links-new-account  enforce  10       10       4   6   0.400      [0.168, 0.687]  below_precision\nsignup-farm-ip               shadow   60       60       59  1   0.983      [0.911, 0.997]  passes\nrecipient-domain-spray       shadow   0        0        0   0   -          -               insufficient_labels\n\nPromote candidates (shadow rules that pass the gate):\n  signup-farm-ip: precision 0.983 [0.911, 0.997] on 60 labeled matches\n\nRetire candidates (enforced rules below the gate):\n  shortener-links-new-account: precision 0.400 [0.168, 0.687] on 10 labeled matches\n",
+      "exit": 0
+    },
+    "report_json": {
+      "args": [
+        "catraca",
+        "report",
+        "--rules",
+        "rules.yaml",
+        "--audit",
+        "sqlite:audit.db",
+        "--json"
+      ],
+      "stdout": "{\n  \"since\": \"2026-09-15T23:17:51.9770474Z\",\n  \"ruleset_version\": \"3ed1ef48775c\",\n  \"gate\": {\n    \"min_labeled\": 30,\n    \"min_precision\": 0.9\n  },\n  \"rules\": [\n    {\n      \"rule_id\": \"leaked-key-send\",\n      \"mode\": \"enforce\",\n      \"matches\": 1,\n      \"errored\": 0,\n      \"labeled\": 1,\n      \"true_positives\": 1,\n      \"false_positives\": 0,\n      \"precision\": 1,\n      \"precision_lower\": 0.20654931437723742,\n      \"precision_upper\": 1,\n      \"status\": \"insufficient_labels\",\n      \"override\": true\n    },\n    {\n      \"rule_id\": \"new-account-burst\",\n      \"mode\": \"enforce\",\n      \"matches\": 40,\n      \"errored\": 0,\n      \"labeled\": 40,\n      \"true_positives\": 40,\n      \"false_positives\": 0,\n      \"precision\": 1,\n      \"precision_lower\": 0.9123783988027134,\n      \"precision_upper\": 1,\n      \"status\": \"passes\"\n    },\n    {\n      \"rule_id\": \"complaint-rate-high\",\n      \"mode\": \"enforce\",\n      \"matches\": 1,\n      \"errored\": 0,\n      \"labeled\": 1,\n      \"true_positives\": 1,\n      \"false_positives\": 0,\n      \"precision\": 1,\n      \"precision_lower\": 0.20654931437723742,\n      \"precision_upper\": 1,\n      \"status\": \"insufficient_labels\"\n    },\n    {\n      \"rule_id\": \"hard-bounce-rate-high\",\n      \"mode\": \"shadow\",\n      \"matches\": 0,\n      \"errored\": 0,\n      \"labeled\": 0,\n      \"true_positives\": 0,\n      \"false_positives\": 0,\n      \"precision\": 0,\n      \"precision_lower\": 0,\n      \"precision_upper\": 1,\n      \"status\": \"insufficient_labels\"\n    },\n    {\n      \"rule_id\": \"key-many-ips\",\n      \"mode\": \"shadow\",\n      \"matches\": 0,\n      \"errored\": 0,\n      \"labeled\": 0,\n      \"true_positives\": 0,\n      \"false_positives\": 0,\n      \"precision\": 0,\n      \"precision_lower\": 0,\n      \"precision_upper\": 1,\n      \"status\": \"insufficient_labels\"\n    },\n    {\n      \"rule_id\": \"account-takeover-volume\",\n      \"mode\": \"shadow\",\n      \"matches\": 0,\n      \"errored\": 0,\n      \"labeled\": 0,\n      \"true_positives\": 0,\n      \"false_positives\": 0,\n      \"precision\": 0,\n      \"precision_lower\": 0,\n      \"precision_upper\": 1,\n      \"status\": \"insufficient_labels\"\n    },\n    {\n      \"rule_id\": \"shortener-links-new-account\",\n      \"mode\": \"enforce\",\n      \"matches\": 10,\n      \"errored\": 0,\n      \"labeled\": 10,\n      \"true_positives\": 4,\n      \"false_positives\": 6,\n      \"precision\": 0.4,\n      \"precision_lower\": 0.1681803297062362,\n      \"precision_upper\": 0.6873262302663418,\n      \"status\": \"below_precision\"\n    },\n    {\n      \"rule_id\": \"signup-farm-ip\",\n      \"mode\": \"shadow\",\n      \"matches\": 60,\n      \"errored\": 0,\n      \"labeled\": 60,\n      \"true_positives\": 59,\n      \"false_positives\": 1,\n      \"precision\": 0.9833333333333333,\n      \"precision_lower\": 0.9114487027240993,\n      \"precision_upper\": 0.9970518402052138,\n      \"status\": \"passes\"\n    },\n    {\n      \"rule_id\": \"recipient-domain-spray\",\n      \"mode\": \"shadow\",\n      \"matches\": 0,\n      \"errored\": 0,\n      \"labeled\": 0,\n      \"true_positives\": 0,\n      \"false_positives\": 0,\n      \"precision\": 0,\n      \"precision_lower\": 0,\n      \"precision_upper\": 1,\n      \"status\": \"insufficient_labels\"\n    }\n  ],\n  \"promote\": [\n    {\n      \"rule_id\": \"signup-farm-ip\",\n      \"mode\": \"shadow\",\n      \"matches\": 60,\n      \"errored\": 0,\n      \"labeled\": 60,\n      \"true_positives\": 59,\n      \"false_positives\": 1,\n      \"precision\": 0.9833333333333333,\n      \"precision_lower\": 0.9114487027240993,\n      \"precision_upper\": 0.9970518402052138,\n      \"status\": \"passes\"\n    }\n  ],\n  \"retire\": [\n    {\n      \"rule_id\": \"shortener-links-new-account\",\n      \"mode\": \"enforce\",\n      \"matches\": 10,\n      \"errored\": 0,\n      \"labeled\": 10,\n      \"true_positives\": 4,\n      \"false_positives\": 6,\n      \"precision\": 0.4,\n      \"precision_lower\": 0.1681803297062362,\n      \"precision_upper\": 0.6873262302663418,\n      \"status\": \"below_precision\"\n    }\n  ]\n}\n",
+      "exit": 0
+    }
+  },
+  "lane": [
+    {
+      "seq": 1,
+      "phase": "flow",
+      "type": "send",
+      "account_id": "acct_lumen",
+      "api_key_id": "key_4f1a",
+      "decision_id": "01M50XQ41EMFWEFEADWDS8W075",
+      "action": "allow",
+      "latency_us": 0
+    },
+    {
+      "seq": 2,
+      "phase": "flow",
+      "type": "send",
+      "account_id": "acct_okapi",
+      "api_key_id": "key_2e8b",
+      "decision_id": "01M50XQ41EMFWEFEADWDS8W077",
+      "action": "allow",
+      "latency_us": 0
+    },
+    {
+      "seq": 3,
+      "phase": "flow",
+      "type": "send",
+      "account_id": "acct_fernway",
+      "api_key_id": "key_7b3d",
+      "decision_id": "01M50XQ41EMFWEFEADWDS8W079",
+      "action": "allow",
+      "latency_us": 0
+    },
+    {
+      "seq": 4,
+      "phase": "flow",
+      "type": "send",
+      "account_id": "acct_tidal",
+      "api_key_id": "key_9c2e",
+      "decision_id": "01M50XQ41EMFWEFEADWDS8W07B",
+      "action": "allow",
+      "latency_us": 0
+    },
+    {
+      "seq": 5,
+      "phase": "flow",
+      "type": "send",
+      "account_id": "acct_lumen",
+      "api_key_id": "key_4f1a",
+      "decision_id": "01M50XQ41EMFWEFEADWDS8W07D",
+      "action": "allow",
+      "latency_us": 0
+    },
+    {
+      "seq": 6,
+      "phase": "flow",
+      "type": "send",
+      "account_id": "acct_okapi",
+      "api_key_id": "key_2e8b",
+      "decision_id": "01M50XQ41FEZG7N5WDVFWEVEHN",
+      "action": "allow",
+      "latency_us": 0
+    },
+    {
+      "seq": 7,
+      "phase": "flow",
+      "type": "send",
+      "account_id": "acct_n10",
+      "api_key_id": "key_n10",
+      "decision_id": "01M50XQ41FEZG7N5WDVFWEVEHQ",
+      "action": "flag",
+      "rules": [
+        "shortener-links-new-account"
+      ],
+      "latency_us": 0
+    },
+    {
+      "seq": 8,
+      "phase": "flow",
+      "type": "send",
+      "account_id": "acct_lumen",
+      "api_key_id": "key_4f1a",
+      "decision_id": "01M50XQ41FEZG7N5WDVFWEVEHS",
+      "action": "allow",
+      "latency_us": 500
+    },
+    {
+      "seq": 9,
+      "phase": "flow",
+      "type": "send",
+      "account_id": "acct_tidal",
+      "api_key_id": "key_9c2e",
+      "decision_id": "01M50XQ41FEZG7N5WDVFWEVEHV",
+      "action": "allow",
+      "latency_us": 0
+    },
+    {
+      "seq": 10,
+      "phase": "flow",
+      "type": "send",
+      "account_id": "acct_fernway",
+      "api_key_id": "key_7b3d",
+      "decision_id": "01M50XQ41FEZG7N5WDVFWEVEHX",
+      "action": "allow",
+      "latency_us": 0
+    },
+    {
+      "seq": 11,
+      "phase": "flow",
+      "type": "send",
+      "account_id": "acct_okapi",
+      "api_key_id": "key_2e8b",
+      "decision_id": "01M50XQ41GCA3WZ3HBJ30MWENM",
+      "action": "allow",
+      "latency_us": 0
+    },
+    {
+      "seq": 12,
+      "phase": "flow",
+      "type": "send",
+      "account_id": "acct_lumen",
+      "api_key_id": "key_4f1a",
+      "decision_id": "01M50XQ41GCA3WZ3HBJ30MWENP",
+      "action": "allow",
+      "latency_us": 0
+    },
+    {
+      "seq": 13,
+      "phase": "burst",
+      "type": "account",
+      "account_id": "acct_x7q2",
+      "decision_id": "01M50XQ41GCA3WZ3HBJ30MWENR",
+      "action": "allow",
+      "latency_us": 499
+    },
+    {
+      "seq": 14,
+      "phase": "burst",
+      "type": "send",
+      "account_id": "acct_x7q2",
+      "api_key_id": "key_5d0c",
+      "decision_id": "01M50XQ41GCA3WZ3HBJ30MWENT",
+      "action": "allow",
+      "latency_us": 0
+    },
+    {
+      "seq": 15,
+      "phase": "burst",
+      "type": "send",
+      "account_id": "acct_x7q2",
+      "api_key_id": "key_5d0c",
+      "decision_id": "01M50XQ41GCA3WZ3HBJ30MWENW",
+      "action": "allow",
+      "latency_us": 0
+    },
+    {
+      "seq": 16,
+      "phase": "burst",
+      "type": "send",
+      "account_id": "acct_x7q2",
+      "api_key_id": "key_5d0c",
+      "decision_id": "01M50XQ41GCA3WZ3HBJ30MWENY",
+      "action": "allow",
+      "latency_us": 0
+    },
+    {
+      "seq": 17,
+      "phase": "burst",
+      "type": "send",
+      "account_id": "acct_x7q2",
+      "api_key_id": "key_5d0c",
+      "decision_id": "01M50XQ41HE78SQB3727V1HSC4",
+      "action": "allow",
+      "latency_us": 0
+    },
+    {
+      "seq": 18,
+      "phase": "burst",
+      "type": "send",
+      "account_id": "acct_x7q2",
+      "api_key_id": "key_5d0c",
+      "decision_id": "01M50XQ41HE78SQB3727V1HSC6",
+      "action": "allow",
+      "latency_us": 0
+    },
+    {
+      "seq": 19,
+      "phase": "burst",
+      "type": "send",
+      "account_id": "acct_x7q2",
+      "api_key_id": "key_5d0c",
+      "decision_id": "01M50XQ41HE78SQB3727V1HSC8",
+      "action": "allow",
+      "latency_us": 0
+    },
+    {
+      "seq": 20,
+      "phase": "burst",
+      "type": "send",
+      "account_id": "acct_x7q2",
+      "api_key_id": "key_5d0c",
+      "decision_id": "01M50XQ41HE78SQB3727V1HSCA",
+      "action": "allow",
+      "latency_us": 0
+    },
+    {
+      "seq": 21,
+      "phase": "burst",
+      "type": "send",
+      "account_id": "acct_x7q2",
+      "api_key_id": "key_5d0c",
+      "decision_id": "01M50XQ41HE78SQB3727V1HSCC",
+      "action": "allow",
+      "latency_us": 0
+    },
+    {
+      "seq": 22,
+      "phase": "burst",
+      "type": "send",
+      "account_id": "acct_x7q2",
+      "api_key_id": "key_5d0c",
+      "decision_id": "01M50XQ41HE78SQB3727V1HSCE",
+      "action": "allow",
+      "latency_us": 0
+    },
+    {
+      "seq": 23,
+      "phase": "burst",
+      "type": "send",
+      "account_id": "acct_x7q2",
+      "api_key_id": "key_5d0c",
+      "decision_id": "01M50XQ41HE78SQB3727V1HSCG",
+      "action": "allow",
+      "latency_us": 0
+    },
+    {
+      "seq": 24,
+      "phase": "burst",
+      "type": "send",
+      "account_id": "acct_x7q2",
+      "api_key_id": "key_5d0c",
+      "decision_id": "01M50XQ41J2KG9EY6ZGVQAXZVS",
+      "action": "allow",
+      "latency_us": 0
+    },
+    {
+      "seq": 25,
+      "phase": "burst",
+      "type": "send",
+      "account_id": "acct_x7q2",
+      "api_key_id": "key_5d0c",
+      "decision_id": "01M50XQ41J2KG9EY6ZGVQAXZVV",
+      "action": "allow",
+      "latency_us": 0
+    },
+    {
+      "seq": 26,
+      "phase": "burst",
+      "type": "send",
+      "account_id": "acct_x7q2",
+      "api_key_id": "key_5d0c",
+      "decision_id": "01M50XQ41J2KG9EY6ZGVQAXZVX",
+      "action": "allow",
+      "latency_us": 0
+    },
+    {
+      "seq": 27,
+      "phase": "burst",
+      "type": "send",
+      "account_id": "acct_x7q2",
+      "api_key_id": "key_5d0c",
+      "decision_id": "01M50XQ41J2KG9EY6ZGVQAXZVZ",
+      "action": "allow",
+      "latency_us": 499
+    },
+    {
+      "seq": 28,
+      "phase": "burst",
+      "type": "send",
+      "account_id": "acct_x7q2",
+      "api_key_id": "key_5d0c",
+      "decision_id": "01M50XQ41J2KG9EY6ZGVQAXZW1",
+      "action": "allow",
+      "latency_us": 0
+    },
+    {
+      "seq": 29,
+      "phase": "burst",
+      "type": "send",
+      "account_id": "acct_x7q2",
+      "api_key_id": "key_5d0c",
+      "decision_id": "01M50XQ41J2KG9EY6ZGVQAXZW3",
+      "action": "allow",
+      "latency_us": 0
+    },
+    {
+      "seq": 30,
+      "phase": "burst",
+      "type": "send",
+      "account_id": "acct_x7q2",
+      "api_key_id": "key_5d0c",
+      "decision_id": "01M50XQ41J2KG9EY6ZGVQAXZW5",
+      "action": "allow",
+      "latency_us": 0
+    },
+    {
+      "seq": 31,
+      "phase": "burst",
+      "type": "send",
+      "account_id": "acct_x7q2",
+      "api_key_id": "key_5d0c",
+      "decision_id": "01M50XQ41K4487RZ0M4VKW8TPH",
+      "action": "allow",
+      "latency_us": 0
+    },
+    {
+      "seq": 32,
+      "phase": "burst",
+      "type": "send",
+      "account_id": "acct_x7q2",
+      "api_key_id": "key_5d0c",
+      "decision_id": "01M50XQ41K4487RZ0M4VKW8TPK",
+      "action": "allow",
+      "latency_us": 0
+    },
+    {
+      "seq": 33,
+      "phase": "burst",
+      "type": "send",
+      "account_id": "acct_x7q2",
+      "api_key_id": "key_5d0c",
+      "decision_id": "01M50XQ41K4487RZ0M4VKW8TPN",
+      "action": "allow",
+      "latency_us": 0
+    },
+    {
+      "seq": 34,
+      "phase": "burst",
+      "type": "send",
+      "account_id": "acct_x7q2",
+      "api_key_id": "key_5d0c",
+      "decision_id": "01M50XQ41K4487RZ0M4VKW8TPQ",
+      "action": "allow",
+      "latency_us": 0
+    },
+    {
+      "seq": 35,
+      "phase": "burst",
+      "type": "send",
+      "account_id": "acct_x7q2",
+      "api_key_id": "key_5d0c",
+      "decision_id": "01M50XQ41K4487RZ0M4VKW8TPS",
+      "action": "allow",
+      "latency_us": 0
+    },
+    {
+      "seq": 36,
+      "phase": "burst",
+      "type": "send",
+      "account_id": "acct_x7q2",
+      "api_key_id": "key_5d0c",
+      "decision_id": "01M50XQ41MBRBC43YBE8P4VF3P",
+      "action": "allow",
+      "latency_us": 0
+    },
+    {
+      "seq": 37,
+      "phase": "burst",
+      "type": "send",
+      "account_id": "acct_x7q2",
+      "api_key_id": "key_5d0c",
+      "decision_id": "01M50XQ41MBRBC43YBE8P4VF3R",
+      "action": "allow",
+      "latency_us": 0
+    },
+    {
+      "seq": 38,
+      "phase": "burst",
+      "type": "send",
+      "account_id": "acct_x7q2",
+      "api_key_id": "key_5d0c",
+      "decision_id": "01M50XQ41MBRBC43YBE8P4VF3T",
+      "action": "allow",
+      "latency_us": 0
+    },
+    {
+      "seq": 39,
+      "phase": "burst",
+      "type": "send",
+      "account_id": "acct_x7q2",
+      "api_key_id": "key_5d0c",
+      "decision_id": "01M50XQ41MBRBC43YBE8P4VF3W",
+      "action": "allow",
+      "latency_us": 499
+    },
+    {
+      "seq": 40,
+      "phase": "burst",
+      "type": "send",
+      "account_id": "acct_x7q2",
+      "api_key_id": "key_5d0c",
+      "decision_id": "01M50XQ41MBRBC43YBE8P4VF3Y",
+      "action": "allow",
+      "latency_us": 0
+    },
+    {
+      "seq": 41,
+      "phase": "burst",
+      "type": "send",
+      "account_id": "acct_x7q2",
+      "api_key_id": "key_5d0c",
+      "decision_id": "01M50XQ41MBRBC43YBE8P4VF40",
+      "action": "allow",
+      "latency_us": 0
+    },
+    {
+      "seq": 42,
+      "phase": "burst",
+      "type": "send",
+      "account_id": "acct_x7q2",
+      "api_key_id": "key_5d0c",
+      "decision_id": "01M50XQ41MBRBC43YBE8P4VF42",
+      "action": "allow",
+      "latency_us": 0
+    },
+    {
+      "seq": 43,
+      "phase": "burst",
+      "type": "send",
+      "account_id": "acct_x7q2",
+      "api_key_id": "key_5d0c",
+      "decision_id": "01M50XQ41NKQP8THXC1HRZK83R",
+      "action": "allow",
+      "latency_us": 0
+    },
+    {
+      "seq": 44,
+      "phase": "burst",
+      "type": "send",
+      "account_id": "acct_x7q2",
+      "api_key_id": "key_5d0c",
+      "decision_id": "01M50XQ41NKQP8THXC1HRZK83T",
+      "action": "allow",
+      "latency_us": 0
+    },
+    {
+      "seq": 45,
+      "phase": "burst",
+      "type": "send",
+      "account_id": "acct_x7q2",
+      "api_key_id": "key_5d0c",
+      "decision_id": "01M50XQ41NKQP8THXC1HRZK83W",
+      "action": "allow",
+      "latency_us": 0
+    },
+    {
+      "seq": 46,
+      "phase": "burst",
+      "type": "send",
+      "account_id": "acct_x7q2",
+      "api_key_id": "key_5d0c",
+      "decision_id": "01M50XQ41NKQP8THXC1HRZK83Y",
+      "action": "allow",
+      "latency_us": 0
+    },
+    {
+      "seq": 47,
+      "phase": "burst",
+      "type": "send",
+      "account_id": "acct_x7q2",
+      "api_key_id": "key_5d0c",
+      "decision_id": "01M50XQ41NKQP8THXC1HRZK840",
+      "action": "allow",
+      "latency_us": 0
+    },
+    {
+      "seq": 48,
+      "phase": "burst",
+      "type": "send",
+      "account_id": "acct_x7q2",
+      "api_key_id": "key_5d0c",
+      "decision_id": "01M50XQ41NKQP8THXC1HRZK842",
+      "action": "allow",
+      "latency_us": 0
+    },
+    {
+      "seq": 49,
+      "phase": "burst",
+      "type": "send",
+      "account_id": "acct_x7q2",
+      "api_key_id": "key_5d0c",
+      "decision_id": "01M50XQ41NKQP8THXC1HRZK844",
+      "action": "allow",
+      "latency_us": 499
+    },
+    {
+      "seq": 50,
+      "phase": "burst",
+      "type": "send",
+      "account_id": "acct_x7q2",
+      "api_key_id": "key_5d0c",
+      "decision_id": "01M50XQ41PZ6X5F9EY9W817ZS1",
+      "action": "allow",
+      "latency_us": 0
+    },
+    {
+      "seq": 51,
+      "phase": "burst",
+      "type": "send",
+      "account_id": "acct_x7q2",
+      "api_key_id": "key_5d0c",
+      "decision_id": "01M50XQ41PZ6X5F9EY9W817ZS3",
+      "action": "allow",
+      "latency_us": 0
+    },
+    {
+      "seq": 52,
+      "phase": "burst",
+      "type": "send",
+      "account_id": "acct_x7q2",
+      "api_key_id": "key_5d0c",
+      "decision_id": "01M50XQ41PZ6X5F9EY9W817ZS5",
+      "action": "allow",
+      "latency_us": 0
+    },
+    {
+      "seq": 53,
+      "phase": "burst",
+      "type": "send",
+      "account_id": "acct_x7q2",
+      "api_key_id": "key_5d0c",
+      "decision_id": "01M50XQ41PZ6X5F9EY9W817ZS7",
+      "action": "allow",
+      "latency_us": 0
+    },
+    {
+      "seq": 54,
+      "phase": "burst",
+      "type": "send",
+      "account_id": "acct_x7q2",
+      "api_key_id": "key_5d0c",
+      "decision_id": "01M50XQ41PZ6X5F9EY9W817ZS9",
+      "action": "allow",
+      "latency_us": 0
+    },
+    {
+      "seq": 55,
+      "phase": "burst",
+      "type": "send",
+      "account_id": "acct_x7q2",
+      "api_key_id": "key_5d0c",
+      "decision_id": "01M50XQ41PZ6X5F9EY9W817ZSB",
+      "action": "allow",
+      "latency_us": 0
+    },
+    {
+      "seq": 56,
+      "phase": "burst",
+      "type": "send",
+      "account_id": "acct_x7q2",
+      "api_key_id": "key_5d0c",
+      "decision_id": "01M50XQ41PZ6X5F9EY9W817ZSD",
+      "action": "allow",
+      "latency_us": 499
+    },
+    {
+      "seq": 57,
+      "phase": "burst",
+      "type": "send",
+      "account_id": "acct_x7q2",
+      "api_key_id": "key_5d0c",
+      "decision_id": "01M50XQ41Q37ZF9TT63RDKKSTS",
+      "action": "allow",
+      "latency_us": 0
+    },
+    {
+      "seq": 58,
+      "phase": "burst",
+      "type": "send",
+      "account_id": "acct_x7q2",
+      "api_key_id": "key_5d0c",
+      "decision_id": "01M50XQ41Q37ZF9TT63RDKKSTV",
+      "action": "allow",
+      "latency_us": 0
+    },
+    {
+      "seq": 59,
+      "phase": "burst",
+      "type": "send",
+      "account_id": "acct_x7q2",
+      "api_key_id": "key_5d0c",
+      "decision_id": "01M50XQ41Q37ZF9TT63RDKKSTX",
+      "action": "allow",
+      "latency_us": 0
+    },
+    {
+      "seq": 60,
+      "phase": "burst",
+      "type": "send",
+      "account_id": "acct_x7q2",
+      "api_key_id": "key_5d0c",
+      "decision_id": "01M50XQ41Q37ZF9TT63RDKKSTZ",
+      "action": "allow",
+      "latency_us": 0
+    },
+    {
+      "seq": 61,
+      "phase": "burst",
+      "type": "send",
+      "account_id": "acct_x7q2",
+      "api_key_id": "key_5d0c",
+      "decision_id": "01M50XQ41Q37ZF9TT63RDKKSV1",
+      "action": "allow",
+      "latency_us": 0
+    },
+    {
+      "seq": 62,
+      "phase": "burst",
+      "type": "send",
+      "account_id": "acct_x7q2",
+      "api_key_id": "key_5d0c",
+      "decision_id": "01M50XQ41Q37ZF9TT63RDKKSV3",
+      "action": "allow",
+      "latency_us": 0
+    },
+    {
+      "seq": 63,
+      "phase": "burst",
+      "type": "send",
+      "account_id": "acct_x7q2",
+      "api_key_id": "key_5d0c",
+      "decision_id": "01M50XQ41Q37ZF9TT63RDKKSV5",
+      "action": "allow",
+      "latency_us": 500
+    },
+    {
+      "seq": 64,
+      "phase": "burst",
+      "type": "send",
+      "account_id": "acct_x7q2",
+      "api_key_id": "key_5d0c",
+      "decision_id": "01M50XQ41RS4NJCC3XWRGMKCRR",
+      "action": "allow",
+      "latency_us": 0
+    },
+    {
+      "seq": 65,
+      "phase": "burst",
+      "type": "send",
+      "account_id": "acct_x7q2",
+      "api_key_id": "key_5d0c",
+      "decision_id": "01M50XQ41RS4NJCC3XWRGMKCRT",
+      "action": "allow",
+      "latency_us": 0
+    },
+    {
+      "seq": 66,
+      "phase": "burst",
+      "type": "send",
+      "account_id": "acct_x7q2",
+      "api_key_id": "key_5d0c",
+      "decision_id": "01M50XQ41RS4NJCC3XWRGMKCRW",
+      "action": "allow",
+      "latency_us": 0
+    },
+    {
+      "seq": 67,
+      "phase": "burst",
+      "type": "send",
+      "account_id": "acct_x7q2",
+      "api_key_id": "key_5d0c",
+      "decision_id": "01M50XQ41RS4NJCC3XWRGMKCRY",
+      "action": "allow",
+      "latency_us": 499
+    },
+    {
+      "seq": 68,
+      "phase": "burst",
+      "type": "send",
+      "account_id": "acct_x7q2",
+      "api_key_id": "key_5d0c",
+      "decision_id": "01M50XQ41RS4NJCC3XWRGMKCS0",
+      "action": "allow",
+      "latency_us": 0
+    },
+    {
+      "seq": 69,
+      "phase": "burst",
+      "type": "send",
+      "account_id": "acct_x7q2",
+      "api_key_id": "key_5d0c",
+      "decision_id": "01M50XQ41RS4NJCC3XWRGMKCS2",
+      "action": "allow",
+      "latency_us": 0
+    },
+    {
+      "seq": 70,
+      "phase": "burst",
+      "type": "send",
+      "account_id": "acct_x7q2",
+      "api_key_id": "key_5d0c",
+      "decision_id": "01M50XQ41RS4NJCC3XWRGMKCS4",
+      "action": "allow",
+      "latency_us": 0
+    },
+    {
+      "seq": 71,
+      "phase": "burst",
+      "type": "send",
+      "account_id": "acct_x7q2",
+      "api_key_id": "key_5d0c",
+      "decision_id": "01M50XQ41RS4NJCC3XWRGMKCS6",
+      "action": "allow",
+      "latency_us": 501
+    },
+    {
+      "seq": 72,
+      "phase": "burst",
+      "type": "send",
+      "account_id": "acct_x7q2",
+      "api_key_id": "key_5d0c",
+      "decision_id": "01M50XQ41S4MB5HFKFV90CESS2",
+      "action": "allow",
+      "latency_us": 0
+    },
+    {
+      "seq": 73,
+      "phase": "burst",
+      "type": "send",
+      "account_id": "acct_x7q2",
+      "api_key_id": "key_5d0c",
+      "decision_id": "01M50XQ41S4MB5HFKFV90CESS4",
+      "action": "allow",
+      "latency_us": 0
+    },
+    {
+      "seq": 74,
+      "phase": "burst",
+      "type": "send",
+      "account_id": "acct_x7q2",
+      "api_key_id": "key_5d0c",
+      "decision_id": "01M50XQ41S4MB5HFKFV90CESS6",
+      "action": "allow",
+      "latency_us": 499
+    },
+    {
+      "seq": 75,
+      "phase": "burst",
+      "type": "send",
+      "account_id": "acct_x7q2",
+      "api_key_id": "key_5d0c",
+      "decision_id": "01M50XQ41S4MB5HFKFV90CESS8",
+      "action": "allow",
+      "latency_us": 0
+    },
+    {
+      "seq": 76,
+      "phase": "burst",
+      "type": "send",
+      "account_id": "acct_x7q2",
+      "api_key_id": "key_5d0c",
+      "decision_id": "01M50XQ41S4MB5HFKFV90CESSA",
+      "action": "allow",
+      "latency_us": 0
+    },
+    {
+      "seq": 77,
+      "phase": "burst",
+      "type": "send",
+      "account_id": "acct_x7q2",
+      "api_key_id": "key_5d0c",
+      "decision_id": "01M50XQ41S4MB5HFKFV90CESSC",
+      "action": "allow",
+      "latency_us": 0
+    },
+    {
+      "seq": 78,
+      "phase": "burst",
+      "type": "send",
+      "account_id": "acct_x7q2",
+      "api_key_id": "key_5d0c",
+      "decision_id": "01M50XQ41TWG4R3ZK18NS05YQT",
+      "action": "allow",
+      "latency_us": 0
+    },
+    {
+      "seq": 79,
+      "phase": "burst",
+      "type": "send",
+      "account_id": "acct_x7q2",
+      "api_key_id": "key_5d0c",
+      "decision_id": "01M50XQ41TWG4R3ZK18NS05YQW",
+      "action": "allow",
+      "latency_us": 0
+    },
+    {
+      "seq": 80,
+      "phase": "burst",
+      "type": "send",
+      "account_id": "acct_x7q2",
+      "api_key_id": "key_5d0c",
+      "decision_id": "01M50XQ41TWG4R3ZK18NS05YQY",
+      "action": "allow",
+      "latency_us": 0
+    },
+    {
+      "seq": 81,
+      "phase": "burst",
+      "type": "send",
+      "account_id": "acct_x7q2",
+      "api_key_id": "key_5d0c",
+      "decision_id": "01M50XQ41TWG4R3ZK18NS05YR0",
+      "action": "allow",
+      "latency_us": 0
+    },
+    {
+      "seq": 82,
+      "phase": "burst",
+      "type": "send",
+      "account_id": "acct_x7q2",
+      "api_key_id": "key_5d0c",
+      "decision_id": "01M50XQ41TWG4R3ZK18NS05YR2",
+      "action": "allow",
+      "latency_us": 0
+    },
+    {
+      "seq": 83,
+      "phase": "burst",
+      "type": "send",
+      "account_id": "acct_x7q2",
+      "api_key_id": "key_5d0c",
+      "decision_id": "01M50XQ41TWG4R3ZK18NS05YR4",
+      "action": "allow",
+      "latency_us": 0
+    },
+    {
+      "seq": 84,
+      "phase": "burst",
+      "type": "send",
+      "account_id": "acct_x7q2",
+      "api_key_id": "key_5d0c",
+      "decision_id": "01M50XQ41TWG4R3ZK18NS05YR6",
+      "action": "allow",
+      "latency_us": 0
+    },
+    {
+      "seq": 85,
+      "phase": "burst",
+      "type": "send",
+      "account_id": "acct_x7q2",
+      "api_key_id": "key_5d0c",
+      "decision_id": "01M50XQ41VCE04NPSTD08K02KE",
+      "action": "allow",
+      "latency_us": 0
+    },
+    {
+      "seq": 86,
+      "phase": "burst",
+      "type": "send",
+      "account_id": "acct_x7q2",
+      "api_key_id": "key_5d0c",
+      "decision_id": "01M50XQ41VCE04NPSTD08K02KG",
+      "action": "allow",
+      "latency_us": 0
+    },
+    {
+      "seq": 87,
+      "phase": "burst",
+      "type": "send",
+      "account_id": "acct_x7q2",
+      "api_key_id": "key_5d0c",
+      "decision_id": "01M50XQ41VCE04NPSTD08K02KJ",
+      "action": "allow",
+      "latency_us": 0
+    },
+    {
+      "seq": 88,
+      "phase": "burst",
+      "type": "send",
+      "account_id": "acct_x7q2",
+      "api_key_id": "key_5d0c",
+      "decision_id": "01M50XQ41VCE04NPSTD08K02KM",
+      "action": "allow",
+      "latency_us": 0
+    },
+    {
+      "seq": 89,
+      "phase": "burst",
+      "type": "send",
+      "account_id": "acct_x7q2",
+      "api_key_id": "key_5d0c",
+      "decision_id": "01M50XQ41VCE04NPSTD08K02KP",
+      "action": "allow",
+      "latency_us": 0
+    },
+    {
+      "seq": 90,
+      "phase": "burst",
+      "type": "send",
+      "account_id": "acct_x7q2",
+      "api_key_id": "key_5d0c",
+      "decision_id": "01M50XQ41WCVC9M2CHXWM8VFXW",
+      "action": "allow",
+      "latency_us": 0
+    },
+    {
+      "seq": 91,
+      "phase": "burst",
+      "type": "send",
+      "account_id": "acct_x7q2",
+      "api_key_id": "key_5d0c",
+      "decision_id": "01M50XQ41WCVC9M2CHXWM8VFXY",
+      "action": "allow",
+      "latency_us": 0
+    },
+    {
+      "seq": 92,
+      "phase": "burst",
+      "type": "send",
+      "account_id": "acct_x7q2",
+      "api_key_id": "key_5d0c",
+      "decision_id": "01M50XQ41WCVC9M2CHXWM8VFY0",
+      "action": "allow",
+      "latency_us": 0
+    },
+    {
+      "seq": 93,
+      "phase": "burst",
+      "type": "send",
+      "account_id": "acct_x7q2",
+      "api_key_id": "key_5d0c",
+      "decision_id": "01M50XQ41WCVC9M2CHXWM8VFY2",
+      "action": "allow",
+      "latency_us": 0
+    },
+    {
+      "seq": 94,
+      "phase": "burst",
+      "type": "send",
+      "account_id": "acct_x7q2",
+      "api_key_id": "key_5d0c",
+      "decision_id": "01M50XQ41WCVC9M2CHXWM8VFY4",
+      "action": "allow",
+      "latency_us": 0
+    },
+    {
+      "seq": 95,
+      "phase": "burst",
+      "type": "send",
+      "account_id": "acct_x7q2",
+      "api_key_id": "key_5d0c",
+      "decision_id": "01M50XQ41XTPNS89G29S2YK95K",
+      "action": "allow",
+      "latency_us": 0
+    },
+    {
+      "seq": 96,
+      "phase": "burst",
+      "type": "send",
+      "account_id": "acct_x7q2",
+      "api_key_id": "key_5d0c",
+      "decision_id": "01M50XQ41XTPNS89G29S2YK95N",
+      "action": "allow",
+      "latency_us": 0
+    },
+    {
+      "seq": 97,
+      "phase": "burst",
+      "type": "send",
+      "account_id": "acct_x7q2",
+      "api_key_id": "key_5d0c",
+      "decision_id": "01M50XQ41XTPNS89G29S2YK95Q",
+      "action": "allow",
+      "latency_us": 0
+    },
+    {
+      "seq": 98,
+      "phase": "burst",
+      "type": "send",
+      "account_id": "acct_x7q2",
+      "api_key_id": "key_5d0c",
+      "decision_id": "01M50XQ41XTPNS89G29S2YK95S",
+      "action": "allow",
+      "latency_us": 0
+    },
+    {
+      "seq": 99,
+      "phase": "burst",
+      "type": "send",
+      "account_id": "acct_x7q2",
+      "api_key_id": "key_5d0c",
+      "decision_id": "01M50XQ41XTPNS89G29S2YK95V",
+      "action": "allow",
+      "latency_us": 0
+    },
+    {
+      "seq": 100,
+      "phase": "burst",
+      "type": "send",
+      "account_id": "acct_x7q2",
+      "api_key_id": "key_5d0c",
+      "decision_id": "01M50XQ41XTPNS89G29S2YK95X",
+      "action": "allow",
+      "latency_us": 0
+    },
+    {
+      "seq": 101,
+      "phase": "burst",
+      "type": "send",
+      "account_id": "acct_x7q2",
+      "api_key_id": "key_5d0c",
+      "decision_id": "01M50XQ41Y6AH039M7ZVTWT056",
+      "action": "allow",
+      "latency_us": 0
+    },
+    {
+      "seq": 102,
+      "phase": "burst",
+      "type": "send",
+      "account_id": "acct_x7q2",
+      "api_key_id": "key_5d0c",
+      "decision_id": "01M50XQ41Y6AH039M7ZVTWT058",
+      "action": "allow",
+      "latency_us": 0
+    },
+    {
+      "seq": 103,
+      "phase": "burst",
+      "type": "send",
+      "account_id": "acct_x7q2",
+      "api_key_id": "key_5d0c",
+      "decision_id": "01M50XQ41Y6AH039M7ZVTWT05A",
+      "action": "allow",
+      "latency_us": 0
+    },
+    {
+      "seq": 104,
+      "phase": "burst",
+      "type": "send",
+      "account_id": "acct_x7q2",
+      "api_key_id": "key_5d0c",
+      "decision_id": "01M50XQ41Y6AH039M7ZVTWT05C",
+      "action": "allow",
+      "latency_us": 0
+    },
+    {
+      "seq": 105,
+      "phase": "burst",
+      "type": "send",
+      "account_id": "acct_x7q2",
+      "api_key_id": "key_5d0c",
+      "decision_id": "01M50XQ41Y6AH039M7ZVTWT05E",
+      "action": "allow",
+      "latency_us": 0
+    },
+    {
+      "seq": 106,
+      "phase": "burst",
+      "type": "send",
+      "account_id": "acct_x7q2",
+      "api_key_id": "key_5d0c",
+      "decision_id": "01M50XQ41Y6AH039M7ZVTWT05G",
+      "action": "allow",
+      "latency_us": 0
+    },
+    {
+      "seq": 107,
+      "phase": "burst",
+      "type": "send",
+      "account_id": "acct_x7q2",
+      "api_key_id": "key_5d0c",
+      "decision_id": "01M50XQ41Z2F9BSXR2HDTNJAEP",
+      "action": "allow",
+      "latency_us": 0
+    },
+    {
+      "seq": 108,
+      "phase": "burst",
+      "type": "send",
+      "account_id": "acct_x7q2",
+      "api_key_id": "key_5d0c",
+      "decision_id": "01M50XQ41Z2F9BSXR2HDTNJAER",
+      "action": "allow",
+      "latency_us": 0
+    },
+    {
+      "seq": 109,
+      "phase": "burst",
+      "type": "send",
+      "account_id": "acct_x7q2",
+      "api_key_id": "key_5d0c",
+      "decision_id": "01M50XQ41Z2F9BSXR2HDTNJAET",
+      "action": "allow",
+      "latency_us": 0
+    },
+    {
+      "seq": 110,
+      "phase": "burst",
+      "type": "send",
+      "account_id": "acct_x7q2",
+      "api_key_id": "key_5d0c",
+      "decision_id": "01M50XQ41Z2F9BSXR2HDTNJAEW",
+      "action": "allow",
+      "latency_us": 0
+    },
+    {
+      "seq": 111,
+      "phase": "burst",
+      "type": "send",
+      "account_id": "acct_x7q2",
+      "api_key_id": "key_5d0c",
+      "decision_id": "01M50XQ41Z2F9BSXR2HDTNJAEY",
+      "action": "allow",
+      "latency_us": 0
+    },
+    {
+      "seq": 112,
+      "phase": "burst",
+      "type": "send",
+      "account_id": "acct_x7q2",
+      "api_key_id": "key_5d0c",
+      "decision_id": "01M50XQ41Z2F9BSXR2HDTNJAF0",
+      "action": "allow",
+      "latency_us": 0
+    },
+    {
+      "seq": 113,
+      "phase": "burst",
+      "type": "send",
+      "account_id": "acct_x7q2",
+      "api_key_id": "key_5d0c",
+      "decision_id": "01M50XQ41Z2F9BSXR2HDTNJAF2",
+      "action": "allow",
+      "latency_us": 0
+    },
+    {
+      "seq": 114,
+      "phase": "burst",
+      "type": "send",
+      "account_id": "acct_x7q2",
+      "api_key_id": "key_5d0c",
+      "decision_id": "01M50XQ41Z2F9BSXR2HDTNJAF4",
+      "action": "throttle",
+      "retry_after": 60,
+      "rules": [
+        "new-account-burst"
+      ],
+      "latency_us": 0
+    },
+    {
+      "seq": 115,
+      "phase": "burst",
+      "type": "send",
+      "account_id": "acct_x7q2",
+      "api_key_id": "key_5d0c",
+      "decision_id": "01M50XQ4204MAYGSWSJ1PXKNHQ",
+      "action": "throttle",
+      "retry_after": 60,
+      "rules": [
+        "new-account-burst"
+      ],
+      "latency_us": 0
+    },
+    {
+      "seq": 116,
+      "phase": "burst",
+      "type": "send",
+      "account_id": "acct_x7q2",
+      "api_key_id": "key_5d0c",
+      "decision_id": "01M50XQ4204MAYGSWSJ1PXKNHS",
+      "action": "throttle",
+      "retry_after": 60,
+      "rules": [
+        "new-account-burst"
+      ],
+      "latency_us": 0
+    },
+    {
+      "seq": 117,
+      "phase": "burst",
+      "type": "send",
+      "account_id": "acct_x7q2",
+      "api_key_id": "key_5d0c",
+      "decision_id": "01M50XQ4204MAYGSWSJ1PXKNHV",
+      "action": "throttle",
+      "retry_after": 60,
+      "rules": [
+        "new-account-burst"
+      ],
+      "latency_us": 0
+    },
+    {
+      "seq": 118,
+      "phase": "burst",
+      "type": "send",
+      "account_id": "acct_x7q2",
+      "api_key_id": "key_5d0c",
+      "decision_id": "01M50XQ4204MAYGSWSJ1PXKNHX",
+      "action": "throttle",
+      "retry_after": 60,
+      "rules": [
+        "new-account-burst"
+      ],
+      "latency_us": 0
+    },
+    {
+      "seq": 119,
+      "phase": "burst",
+      "type": "send",
+      "account_id": "acct_x7q2",
+      "api_key_id": "key_5d0c",
+      "decision_id": "01M50XQ4204MAYGSWSJ1PXKNHZ",
+      "action": "throttle",
+      "retry_after": 60,
+      "rules": [
+        "new-account-burst"
+      ],
+      "latency_us": 0
+    },
+    {
+      "seq": 120,
+      "phase": "burst",
+      "type": "send",
+      "account_id": "acct_x7q2",
+      "api_key_id": "key_5d0c",
+      "decision_id": "01M50XQ4204MAYGSWSJ1PXKNJ1",
+      "action": "throttle",
+      "retry_after": 60,
+      "rules": [
+        "new-account-burst"
+      ],
+      "latency_us": 0
+    },
+    {
+      "seq": 121,
+      "phase": "burst",
+      "type": "send",
+      "account_id": "acct_x7q2",
+      "api_key_id": "key_5d0c",
+      "decision_id": "01M50XQ4204MAYGSWSJ1PXKNJ3",
+      "action": "throttle",
+      "retry_after": 60,
+      "rules": [
+        "new-account-burst"
+      ],
+      "latency_us": 0
+    },
+    {
+      "seq": 122,
+      "phase": "burst",
+      "type": "send",
+      "account_id": "acct_x7q2",
+      "api_key_id": "key_5d0c",
+      "decision_id": "01M50XQ421KB7F1DW58S4GB2ZJ",
+      "action": "throttle",
+      "retry_after": 60,
+      "rules": [
+        "new-account-burst"
+      ],
+      "latency_us": 0
+    },
+    {
+      "seq": 123,
+      "phase": "burst",
+      "type": "send",
+      "account_id": "acct_x7q2",
+      "api_key_id": "key_5d0c",
+      "decision_id": "01M50XQ421KB7F1DW58S4GB2ZM",
+      "action": "throttle",
+      "retry_after": 60,
+      "rules": [
+        "new-account-burst"
+      ],
+      "latency_us": 0
+    },
+    {
+      "seq": 124,
+      "phase": "burst",
+      "type": "send",
+      "account_id": "acct_x7q2",
+      "api_key_id": "key_5d0c",
+      "decision_id": "01M50XQ421KB7F1DW58S4GB2ZP",
+      "action": "throttle",
+      "retry_after": 60,
+      "rules": [
+        "new-account-burst"
+      ],
+      "latency_us": 0
+    },
+    {
+      "seq": 125,
+      "phase": "burst",
+      "type": "send",
+      "account_id": "acct_x7q2",
+      "api_key_id": "key_5d0c",
+      "decision_id": "01M50XQ421KB7F1DW58S4GB2ZR",
+      "action": "throttle",
+      "retry_after": 60,
+      "rules": [
+        "new-account-burst"
+      ],
+      "latency_us": 0
+    },
+    {
+      "seq": 126,
+      "phase": "burst",
+      "type": "send",
+      "account_id": "acct_x7q2",
+      "api_key_id": "key_5d0c",
+      "decision_id": "01M50XQ421KB7F1DW58S4GB2ZT",
+      "action": "throttle",
+      "retry_after": 60,
+      "rules": [
+        "new-account-burst"
+      ],
+      "latency_us": 0
+    },
+    {
+      "seq": 127,
+      "phase": "burst",
+      "type": "send",
+      "account_id": "acct_x7q2",
+      "api_key_id": "key_5d0c",
+      "decision_id": "01M50XQ421KB7F1DW58S4GB2ZW",
+      "action": "throttle",
+      "retry_after": 60,
+      "rules": [
+        "new-account-burst"
+      ],
+      "latency_us": 498
+    },
+    {
+      "seq": 128,
+      "phase": "burst",
+      "type": "send",
+      "account_id": "acct_x7q2",
+      "api_key_id": "key_5d0c",
+      "decision_id": "01M50XQ422TG3WT9RT330DM0VQ",
+      "action": "throttle",
+      "retry_after": 60,
+      "rules": [
+        "new-account-burst"
+      ],
+      "latency_us": 0
+    },
+    {
+      "seq": 129,
+      "phase": "burst",
+      "type": "send",
+      "account_id": "acct_x7q2",
+      "api_key_id": "key_5d0c",
+      "decision_id": "01M50XQ422TG3WT9RT330DM0VS",
+      "action": "throttle",
+      "retry_after": 60,
+      "rules": [
+        "new-account-burst"
+      ],
+      "latency_us": 0
+    },
+    {
+      "seq": 130,
+      "phase": "burst",
+      "type": "send",
+      "account_id": "acct_x7q2",
+      "api_key_id": "key_5d0c",
+      "decision_id": "01M50XQ422TG3WT9RT330DM0VV",
+      "action": "throttle",
+      "retry_after": 60,
+      "rules": [
+        "new-account-burst"
+      ],
+      "latency_us": 0
+    },
+    {
+      "seq": 131,
+      "phase": "burst",
+      "type": "send",
+      "account_id": "acct_x7q2",
+      "api_key_id": "key_5d0c",
+      "decision_id": "01M50XQ422TG3WT9RT330DM0VX",
+      "action": "throttle",
+      "retry_after": 60,
+      "rules": [
+        "new-account-burst"
+      ],
+      "latency_us": 0
+    },
+    {
+      "seq": 132,
+      "phase": "burst",
+      "type": "send",
+      "account_id": "acct_x7q2",
+      "api_key_id": "key_5d0c",
+      "decision_id": "01M50XQ422TG3WT9RT330DM0VZ",
+      "action": "throttle",
+      "retry_after": 60,
+      "rules": [
+        "new-account-burst"
+      ],
+      "latency_us": 0
+    },
+    {
+      "seq": 133,
+      "phase": "burst",
+      "type": "send",
+      "account_id": "acct_x7q2",
+      "api_key_id": "key_5d0c",
+      "decision_id": "01M50XQ422TG3WT9RT330DM0W1",
+      "action": "throttle",
+      "retry_after": 60,
+      "rules": [
+        "new-account-burst"
+      ],
+      "latency_us": 0
+    },
+    {
+      "seq": 134,
+      "phase": "burst",
+      "type": "send",
+      "account_id": "acct_x7q2",
+      "api_key_id": "key_5d0c",
+      "decision_id": "01M50XQ423GQ0BANVR3VSY23YB",
+      "action": "throttle",
+      "retry_after": 60,
+      "rules": [
+        "new-account-burst"
+      ],
+      "latency_us": 0
+    },
+    {
+      "seq": 135,
+      "phase": "burst",
+      "type": "send",
+      "account_id": "acct_x7q2",
+      "api_key_id": "key_5d0c",
+      "decision_id": "01M50XQ423GQ0BANVR3VSY23YD",
+      "action": "throttle",
+      "retry_after": 60,
+      "rules": [
+        "new-account-burst"
+      ],
+      "latency_us": 0
+    },
+    {
+      "seq": 136,
+      "phase": "burst",
+      "type": "send",
+      "account_id": "acct_x7q2",
+      "api_key_id": "key_5d0c",
+      "decision_id": "01M50XQ423GQ0BANVR3VSY23YF",
+      "action": "throttle",
+      "retry_after": 60,
+      "rules": [
+        "new-account-burst"
+      ],
+      "latency_us": 0
+    },
+    {
+      "seq": 137,
+      "phase": "burst",
+      "type": "send",
+      "account_id": "acct_x7q2",
+      "api_key_id": "key_5d0c",
+      "decision_id": "01M50XQ423GQ0BANVR3VSY23YH",
+      "action": "throttle",
+      "retry_after": 60,
+      "rules": [
+        "new-account-burst"
+      ],
+      "latency_us": 0
+    },
+    {
+      "seq": 138,
+      "phase": "burst",
+      "type": "send",
+      "account_id": "acct_x7q2",
+      "api_key_id": "key_5d0c",
+      "decision_id": "01M50XQ423GQ0BANVR3VSY23YK",
+      "action": "throttle",
+      "retry_after": 60,
+      "rules": [
+        "new-account-burst"
+      ],
+      "latency_us": 0
+    },
+    {
+      "seq": 139,
+      "phase": "burst",
+      "type": "send",
+      "account_id": "acct_x7q2",
+      "api_key_id": "key_5d0c",
+      "decision_id": "01M50XQ423GQ0BANVR3VSY23YN",
+      "action": "throttle",
+      "retry_after": 60,
+      "rules": [
+        "new-account-burst"
+      ],
+      "latency_us": 0
+    },
+    {
+      "seq": 140,
+      "phase": "burst",
+      "type": "send",
+      "account_id": "acct_x7q2",
+      "api_key_id": "key_5d0c",
+      "decision_id": "01M50XQ424TJ7P9WYC5ZQJQX4P",
+      "action": "throttle",
+      "retry_after": 60,
+      "rules": [
+        "new-account-burst"
+      ],
+      "latency_us": 0
+    },
+    {
+      "seq": 141,
+      "phase": "burst",
+      "type": "send",
+      "account_id": "acct_x7q2",
+      "api_key_id": "key_5d0c",
+      "decision_id": "01M50XQ424TJ7P9WYC5ZQJQX4R",
+      "action": "throttle",
+      "retry_after": 60,
+      "rules": [
+        "new-account-burst"
+      ],
+      "latency_us": 0
+    },
+    {
+      "seq": 142,
+      "phase": "burst",
+      "type": "send",
+      "account_id": "acct_x7q2",
+      "api_key_id": "key_5d0c",
+      "decision_id": "01M50XQ424TJ7P9WYC5ZQJQX4T",
+      "action": "throttle",
+      "retry_after": 60,
+      "rules": [
+        "new-account-burst"
+      ],
+      "latency_us": 0
+    },
+    {
+      "seq": 143,
+      "phase": "burst",
+      "type": "send",
+      "account_id": "acct_x7q2",
+      "api_key_id": "key_5d0c",
+      "decision_id": "01M50XQ424TJ7P9WYC5ZQJQX4W",
+      "action": "throttle",
+      "retry_after": 60,
+      "rules": [
+        "new-account-burst"
+      ],
+      "latency_us": 0
+    },
+    {
+      "seq": 144,
+      "phase": "burst",
+      "type": "send",
+      "account_id": "acct_x7q2",
+      "api_key_id": "key_5d0c",
+      "decision_id": "01M50XQ424TJ7P9WYC5ZQJQX4Y",
+      "action": "throttle",
+      "retry_after": 60,
+      "rules": [
+        "new-account-burst"
+      ],
+      "latency_us": 0
+    },
+    {
+      "seq": 145,
+      "phase": "burst",
+      "type": "send",
+      "account_id": "acct_x7q2",
+      "api_key_id": "key_5d0c",
+      "decision_id": "01M50XQ424TJ7P9WYC5ZQJQX50",
+      "action": "throttle",
+      "retry_after": 60,
+      "rules": [
+        "new-account-burst"
+      ],
+      "latency_us": 0
+    },
+    {
+      "seq": 146,
+      "phase": "burst",
+      "type": "send",
+      "account_id": "acct_x7q2",
+      "api_key_id": "key_5d0c",
+      "decision_id": "01M50XQ424TJ7P9WYC5ZQJQX52",
+      "action": "throttle",
+      "retry_after": 60,
+      "rules": [
+        "new-account-burst"
+      ],
+      "latency_us": 499
+    },
+    {
+      "seq": 147,
+      "phase": "burst",
+      "type": "send",
+      "account_id": "acct_x7q2",
+      "api_key_id": "key_5d0c",
+      "decision_id": "01M50XQ4257DQSC0J0Z42BRRBE",
+      "action": "throttle",
+      "retry_after": 60,
+      "rules": [
+        "new-account-burst"
+      ],
+      "latency_us": 0
+    },
+    {
+      "seq": 148,
+      "phase": "burst",
+      "type": "send",
+      "account_id": "acct_x7q2",
+      "api_key_id": "key_5d0c",
+      "decision_id": "01M50XQ4257DQSC0J0Z42BRRBG",
+      "action": "throttle",
+      "retry_after": 60,
+      "rules": [
+        "new-account-burst"
+      ],
+      "latency_us": 0
+    },
+    {
+      "seq": 149,
+      "phase": "burst",
+      "type": "send",
+      "account_id": "acct_x7q2",
+      "api_key_id": "key_5d0c",
+      "decision_id": "01M50XQ4257DQSC0J0Z42BRRBJ",
+      "action": "throttle",
+      "retry_after": 60,
+      "rules": [
+        "new-account-burst"
+      ],
+      "latency_us": 0
+    },
+    {
+      "seq": 150,
+      "phase": "burst",
+      "type": "send",
+      "account_id": "acct_x7q2",
+      "api_key_id": "key_5d0c",
+      "decision_id": "01M50XQ4257DQSC0J0Z42BRRBM",
+      "action": "throttle",
+      "retry_after": 60,
+      "rules": [
+        "new-account-burst"
+      ],
+      "latency_us": 0
+    },
+    {
+      "seq": 151,
+      "phase": "burst",
+      "type": "send",
+      "account_id": "acct_x7q2",
+      "api_key_id": "key_5d0c",
+      "decision_id": "01M50XQ4267FNZSEHMC6P81WBT",
+      "action": "throttle",
+      "retry_after": 60,
+      "rules": [
+        "new-account-burst"
+      ],
+      "latency_us": 0
+    },
+    {
+      "seq": 152,
+      "phase": "burst",
+      "type": "send",
+      "account_id": "acct_x7q2",
+      "api_key_id": "key_5d0c",
+      "decision_id": "01M50XQ4267FNZSEHMC6P81WBW",
+      "action": "throttle",
+      "retry_after": 60,
+      "rules": [
+        "new-account-burst"
+      ],
+      "latency_us": 0
+    },
+    {
+      "seq": 153,
+      "phase": "burst",
+      "type": "send",
+      "account_id": "acct_x7q2",
+      "api_key_id": "key_5d0c",
+      "decision_id": "01M50XQ4267FNZSEHMC6P81WBY",
+      "action": "throttle",
+      "retry_after": 60,
+      "rules": [
+        "new-account-burst"
+      ],
+      "latency_us": 0
+    },
+    {
+      "seq": 154,
+      "phase": "burst",
+      "type": "send",
+      "account_id": "acct_lumen",
+      "api_key_id": "key_4f1a",
+      "decision_id": "01M50XQ4267FNZSEHMC6P81WC0",
+      "action": "allow",
+      "latency_us": 0
+    },
+    {
+      "seq": 155,
+      "phase": "burst",
+      "type": "send",
+      "account_id": "acct_okapi",
+      "api_key_id": "key_2e8b",
+      "decision_id": "01M50XQ4267FNZSEHMC6P81WC2",
+      "action": "allow",
+      "latency_us": 0
+    },
+    {
+      "seq": 156,
+      "phase": "burst",
+      "type": "send",
+      "account_id": "acct_tidal",
+      "api_key_id": "key_9c2e",
+      "decision_id": "01M50XQ427VF3CMXSKKPNYQRBH",
+      "action": "allow",
+      "latency_us": 0
+    },
+    {
+      "seq": 157,
+      "phase": "complaints",
+      "type": "feedback",
+      "account_id": "acct_fernway",
+      "decision_id": "01M50XQ427VF3CMXSKKPNYQRBK",
+      "action": "allow",
+      "latency_us": 0
+    },
+    {
+      "seq": 158,
+      "phase": "complaints",
+      "type": "send",
+      "account_id": "acct_tidal",
+      "api_key_id": "key_9c2e",
+      "decision_id": "01M50XQ427VF3CMXSKKPNYQRBN",
+      "action": "allow",
+      "latency_us": 0
+    },
+    {
+      "seq": 159,
+      "phase": "complaints",
+      "type": "send",
+      "account_id": "acct_fernway",
+      "api_key_id": "key_7b3d",
+      "decision_id": "01M50XQ427VF3CMXSKKPNYQRBQ",
+      "action": "allow",
+      "latency_us": 0
+    },
+    {
+      "seq": 160,
+      "phase": "complaints",
+      "type": "send",
+      "account_id": "acct_okapi",
+      "api_key_id": "key_2e8b",
+      "decision_id": "01M50XQ4287BCGYQPYHAM2FYDA",
+      "action": "allow",
+      "latency_us": 0
+    },
+    {
+      "seq": 161,
+      "phase": "complaints",
+      "type": "feedback",
+      "account_id": "acct_fernway",
+      "decision_id": "01M50XQ4287BCGYQPYHAM2FYDC",
+      "action": "allow",
+      "latency_us": 0
+    },
+    {
+      "seq": 162,
+      "phase": "complaints",
+      "type": "send",
+      "account_id": "acct_lumen",
+      "api_key_id": "key_4f1a",
+      "decision_id": "01M50XQ4287BCGYQPYHAM2FYDE",
+      "action": "allow",
+      "latency_us": 500
+    },
+    {
+      "seq": 163,
+      "phase": "complaints",
+      "type": "send",
+      "account_id": "acct_fernway",
+      "api_key_id": "key_7b3d",
+      "decision_id": "01M50XQ4287BCGYQPYHAM2FYDG",
+      "action": "allow",
+      "latency_us": 0
+    },
+    {
+      "seq": 164,
+      "phase": "complaints",
+      "type": "send",
+      "account_id": "acct_okapi",
+      "api_key_id": "key_2e8b",
+      "decision_id": "01M50XQ4287BCGYQPYHAM2FYDJ",
+      "action": "allow",
+      "latency_us": 0
+    },
+    {
+      "seq": 165,
+      "phase": "complaints",
+      "type": "feedback",
+      "account_id": "acct_fernway",
+      "decision_id": "01M50XQ4298MVGK67P06FDKZWF",
+      "action": "allow",
+      "latency_us": 0
+    },
+    {
+      "seq": 166,
+      "phase": "complaints",
+      "type": "send",
+      "account_id": "acct_tidal",
+      "api_key_id": "key_9c2e",
+      "decision_id": "01M50XQ4298MVGK67P06FDKZWH",
+      "action": "allow",
+      "latency_us": 0
+    },
+    {
+      "seq": 167,
+      "phase": "complaints",
+      "type": "send",
+      "account_id": "acct_fernway",
+      "api_key_id": "key_7b3d",
+      "decision_id": "01M50XQ4298MVGK67P06FDKZWK",
+      "action": "allow",
+      "latency_us": 499
+    },
+    {
+      "seq": 168,
+      "phase": "complaints",
+      "type": "send",
+      "account_id": "acct_okapi",
+      "api_key_id": "key_2e8b",
+      "decision_id": "01M50XQ4298MVGK67P06FDKZWN",
+      "action": "allow",
+      "latency_us": 0
+    },
+    {
+      "seq": 169,
+      "phase": "complaints",
+      "type": "feedback",
+      "account_id": "acct_fernway",
+      "decision_id": "01M50XQ4298MVGK67P06FDKZWQ",
+      "action": "allow",
+      "latency_us": 0
+    },
+    {
+      "seq": 170,
+      "phase": "complaints",
+      "type": "send",
+      "account_id": "acct_lumen",
+      "api_key_id": "key_4f1a",
+      "decision_id": "01M50XQ4298MVGK67P06FDKZWS",
+      "action": "allow",
+      "latency_us": 499
+    },
+    {
+      "seq": 171,
+      "phase": "complaints",
+      "type": "send",
+      "account_id": "acct_fernway",
+      "api_key_id": "key_7b3d",
+      "decision_id": "01M50XQ42A6P0G3NCWWGZGBJMV",
+      "action": "hold",
+      "rules": [
+        "complaint-rate-high"
+      ],
+      "latency_us": 0
+    },
+    {
+      "seq": 172,
+      "phase": "complaints",
+      "type": "send",
+      "account_id": "acct_okapi",
+      "api_key_id": "key_2e8b",
+      "decision_id": "01M50XQ42A6P0G3NCWWGZGBJMX",
+      "action": "allow",
+      "latency_us": 0
+    },
+    {
+      "seq": 173,
+      "phase": "complaints",
+      "type": "send",
+      "account_id": "acct_lumen",
+      "api_key_id": "key_4f1a",
+      "decision_id": "01M50XQ42A6P0G3NCWWGZGBJMZ",
+      "action": "allow",
+      "latency_us": 0
+    },
+    {
+      "seq": 174,
+      "phase": "complaints",
+      "type": "send",
+      "account_id": "acct_tidal",
+      "api_key_id": "key_9c2e",
+      "decision_id": "01M50XQ42A6P0G3NCWWGZGBJN1",
+      "action": "allow",
+      "latency_us": 0
+    },
+    {
+      "seq": 175,
+      "phase": "leak",
+      "type": "key_leak",
+      "account_id": "acct_tidal",
+      "api_key_id": "key_9c2e",
+      "decision_id": "01M50XQ42A6P0G3NCWWGZGBJN3",
+      "action": "allow",
+      "latency_us": 0
+    },
+    {
+      "seq": 176,
+      "phase": "leak",
+      "type": "send",
+      "account_id": "acct_lumen",
+      "api_key_id": "key_4f1a",
+      "decision_id": "01M50XQ42BJ24XKRC39N0Y72GJ",
+      "action": "allow",
+      "latency_us": 0
+    },
+    {
+      "seq": 177,
+      "phase": "leak",
+      "type": "send",
+      "account_id": "acct_okapi",
+      "api_key_id": "key_2e8b",
+      "decision_id": "01M50XQ42BJ24XKRC39N0Y72GM",
+      "action": "allow",
+      "latency_us": 0
+    },
+    {
+      "seq": 178,
+      "phase": "leak",
+      "type": "send",
+      "account_id": "acct_lumen",
+      "api_key_id": "key_4f1a",
+      "decision_id": "01M50XQ42BJ24XKRC39N0Y72GP",
+      "action": "allow",
+      "latency_us": 500
+    },
+    {
+      "seq": 179,
+      "phase": "leak",
+      "type": "send",
+      "account_id": "acct_tidal",
+      "api_key_id": "key_9c2e",
+      "decision_id": "01M50XQ42BJ24XKRC39N0Y72GR",
+      "action": "block",
+      "rules": [
+        "leaked-key-send"
+      ],
+      "latency_us": 0
+    },
+    {
+      "seq": 180,
+      "phase": "leak",
+      "type": "send",
+      "account_id": "acct_okapi",
+      "api_key_id": "key_2e8b",
+      "decision_id": "01M50XQ42CMT0EYNJ4FZ2D4V5J",
+      "action": "allow",
+      "latency_us": 0
+    },
+    {
+      "seq": 181,
+      "phase": "leak",
+      "type": "send",
+      "account_id": "acct_lumen",
+      "api_key_id": "key_4f1a",
+      "decision_id": "01M50XQ42CMT0EYNJ4FZ2D4V5M",
+      "action": "allow",
+      "latency_us": 0
+    },
+    {
+      "seq": 182,
+      "phase": "leak",
+      "type": "send",
+      "account_id": "acct_okapi",
+      "api_key_id": "key_2e8b",
+      "decision_id": "01M50XQ42CMT0EYNJ4FZ2D4V5P",
+      "action": "allow",
+      "latency_us": 0
+    },
+    {
+      "seq": 183,
+      "phase": "leak",
+      "type": "account",
+      "account_id": "acct_tidal",
+      "api_key_id": "key_b61e",
+      "decision_id": "01M50XQ435ZE7HW4HXHJ4XWPWG",
+      "action": "allow",
+      "latency_us": 0
+    },
+    {
+      "seq": 184,
+      "phase": "leak",
+      "type": "send",
+      "account_id": "acct_tidal",
+      "api_key_id": "key_b61e",
+      "decision_id": "01M50XQ435ZE7HW4HXHJ4XWPWJ",
+      "action": "allow",
+      "latency_us": 0
+    },
+    {
+      "seq": 185,
+      "phase": "leak",
+      "type": "send",
+      "account_id": "acct_okapi",
+      "api_key_id": "key_2e8b",
+      "decision_id": "01M50XQ435ZE7HW4HXHJ4XWPWM",
+      "action": "allow",
+      "latency_us": 500
+    },
+    {
+      "seq": 186,
+      "phase": "leak",
+      "type": "send",
+      "account_id": "acct_lumen",
+      "api_key_id": "key_4f1a",
+      "decision_id": "01M50XQ436TSEJVC6XB5VWD20G",
+      "action": "allow",
+      "latency_us": 0
+    },
+    {
+      "seq": 187,
+      "phase": "shadow",
+      "type": "account",
+      "account_id": "acct_f62",
+      "decision_id": "01M50XQ436TSEJVC6XB5VWD20J",
+      "action": "allow",
+      "shadow": [
+        {
+          "rule_id": "signup-farm-ip",
+          "action": "flag"
+        }
+      ],
+      "latency_us": 0
+    },
+    {
+      "seq": 188,
+      "phase": "shadow",
+      "type": "send",
+      "account_id": "acct_okapi",
+      "api_key_id": "key_2e8b",
+      "decision_id": "01M50XQ436TSEJVC6XB5VWD20M",
+      "action": "allow",
+      "latency_us": 0
+    },
+    {
+      "seq": 189,
+      "phase": "shadow",
+      "type": "send",
+      "account_id": "acct_lumen",
+      "api_key_id": "key_4f1a",
+      "decision_id": "01M50XQ436TSEJVC6XB5VWD20P",
+      "action": "allow",
+      "latency_us": 498
+    },
+    {
+      "seq": 190,
+      "phase": "shadow",
+      "type": "account",
+      "account_id": "acct_f63",
+      "decision_id": "01M50XQ4373DFMCM4XWGYYS4NA",
+      "action": "allow",
+      "shadow": [
+        {
+          "rule_id": "signup-farm-ip",
+          "action": "flag"
+        }
+      ],
+      "latency_us": 0
+    },
+    {
+      "seq": 191,
+      "phase": "shadow",
+      "type": "send",
+      "account_id": "acct_lumen",
+      "api_key_id": "key_4f1a",
+      "decision_id": "01M50XQ4373DFMCM4XWGYYS4NC",
+      "action": "allow",
+      "latency_us": 0
+    },
+    {
+      "seq": 192,
+      "phase": "shadow",
+      "type": "send",
+      "account_id": "acct_tidal",
+      "api_key_id": "key_b61e",
+      "decision_id": "01M50XQ4373DFMCM4XWGYYS4NE",
+      "action": "allow",
+      "latency_us": 0
+    },
+    {
+      "seq": 193,
+      "phase": "shadow",
+      "type": "account",
+      "account_id": "acct_f64",
+      "decision_id": "01M50XQ4373DFMCM4XWGYYS4NG",
+      "action": "allow",
+      "shadow": [
+        {
+          "rule_id": "signup-farm-ip",
+          "action": "flag"
+        }
+      ],
+      "latency_us": 0
+    },
+    {
+      "seq": 194,
+      "phase": "shadow",
+      "type": "send",
+      "account_id": "acct_tidal",
+      "api_key_id": "key_b61e",
+      "decision_id": "01M50XQ4373DFMCM4XWGYYS4NJ",
+      "action": "allow",
+      "latency_us": 0
+    },
+    {
+      "seq": 195,
+      "phase": "shadow",
+      "type": "send",
+      "account_id": "acct_okapi",
+      "api_key_id": "key_2e8b",
+      "decision_id": "01M50XQ4388S6CA8ASA1XKMJ12",
+      "action": "allow",
+      "latency_us": 0
+    },
+    {
+      "seq": 196,
+      "phase": "shadow",
+      "type": "send",
+      "account_id": "acct_lumen",
+      "api_key_id": "key_4f1a",
+      "decision_id": "01M50XQ4388S6CA8ASA1XKMJ14",
+      "action": "allow",
+      "latency_us": 0
+    },
+    {
+      "seq": 197,
+      "phase": "shadow",
+      "type": "send",
+      "account_id": "acct_tidal",
+      "api_key_id": "key_b61e",
+      "decision_id": "01M50XQ4388S6CA8ASA1XKMJ16",
+      "action": "allow",
+      "latency_us": 500
+    },
+    {
+      "seq": 198,
+      "phase": "shadow",
+      "type": "send",
+      "account_id": "acct_okapi",
+      "api_key_id": "key_2e8b",
+      "decision_id": "01M50XQ4388S6CA8ASA1XKMJ18",
+      "action": "allow",
+      "latency_us": 0
+    },
+    {
+      "seq": 199,
+      "phase": "shadow",
+      "type": "send",
+      "account_id": "acct_lumen",
+      "api_key_id": "key_4f1a",
+      "decision_id": "01M50XQ4388S6CA8ASA1XKMJ1A",
+      "action": "allow",
+      "latency_us": 0
+    },
+    {
+      "seq": 200,
+      "phase": "shadow",
+      "type": "send",
+      "account_id": "acct_tidal",
+      "api_key_id": "key_b61e",
+      "decision_id": "01M50XQ4396NAZ6DMHY41GXKZS",
+      "action": "allow",
+      "latency_us": 0
+    }
+  ]
+}
