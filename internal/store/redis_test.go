@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/alicebob/miniredis/v2"
+	"github.com/alicebob/miniredis/v2/server"
 	"github.com/redis/go-redis/v9"
 
 	"github.com/guilhermebsantiago/catraca/internal/store/storetest"
@@ -138,6 +139,41 @@ func TestRedisBatchIsOneRoundTrip(t *testing.T) {
 	})
 	if p, c := hook.pipelines.Load(), hook.commands.Load(); p != 1 || c != 0 {
 		t.Errorf("Do sent %d pipelines and %d single commands, want 1 and 0", p, c)
+	}
+}
+
+// TestRedisReturnsAtTheDeadline checks that Do gives up when its context
+// does, while Redis is slow to answer, and that the round trip it abandoned
+// still completes on its connection.
+func TestRedisReturnsAtTheDeadline(t *testing.T) {
+	s, mr, _ := newTestRedis(t, "")
+	run(t, s, func(b *Batch) { b.Get("warm-up") })
+
+	var slow atomic.Bool
+	mr.Server().SetPreHook(func(c *server.Peer, cmd string, args ...string) bool {
+		if slow.CompareAndSwap(true, false) {
+			time.Sleep(300 * time.Millisecond)
+		}
+		return false
+	})
+	slow.Store(true)
+	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Millisecond)
+	defer cancel()
+	var b Batch
+	b.Incr("k", time.Hour, t0, 1)
+	start := time.Now()
+	err := s.Do(ctx, &b)
+	if !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("Do = %v, want a deadline error", err)
+	}
+	if took := time.Since(start); took > 200*time.Millisecond {
+		t.Errorf("Do took %v, want about the 20ms deadline", took)
+	}
+	for count(t, s, "k", time.Hour, t0) != 1 {
+		if time.Since(start) > 5*time.Second {
+			t.Fatal("the abandoned write never applied")
+		}
+		time.Sleep(10 * time.Millisecond)
 	}
 }
 

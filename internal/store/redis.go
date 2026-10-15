@@ -88,6 +88,15 @@ func (r *Redis) Close() error {
 // API keys and IPs. The price is that a batch is not atomic, which counters
 // tolerate; commands still run in order, so a read sees the writes queued
 // before it.
+//
+// Do returns when ctx is done, whether or not Redis has answered. go-redis
+// honors a context while it waits for a free connection but, unless the
+// client sets ContextTimeoutEnabled, not on the connection itself; with that
+// option a deadline closes the connection mid-reply, and under load the
+// redials that follow exhaust ephemeral ports and degrade every decision. So
+// a round trip that outlives ctx finishes in the background on its own
+// connection, which then goes back to the pool, and the pool size bounds how
+// many do. Its writes still apply.
 func (r *Redis) Do(ctx context.Context, b *Batch) error {
 	if err := b.Err(); err != nil {
 		return err
@@ -95,6 +104,24 @@ func (r *Redis) Do(ctx context.Context, b *Batch) error {
 	if len(b.ops) == 0 {
 		return nil
 	}
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	if ctx.Done() == nil {
+		return r.run(ctx, b)
+	}
+	done := make(chan error, 1)
+	go func() { done <- r.run(ctx, b) }()
+	select {
+	case err := <-done:
+		return err
+	case <-ctx.Done():
+		return r.wrap(ctx.Err())
+	}
+}
+
+// run sends the batch as one pipeline and fills its results.
+func (r *Redis) run(ctx context.Context, b *Batch) error {
 	pipe := r.client.Pipeline()
 	reads := make([]redis.Cmder, len(b.ops))
 	for i := range b.ops {
