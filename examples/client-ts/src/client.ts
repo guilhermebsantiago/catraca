@@ -213,7 +213,7 @@ export function retryAfterSeconds(decision: Decision): number | undefined {
   if (decision.action !== "throttle") {
     return undefined;
   }
-  return Math.max(1, Math.ceil((decision.retry_after ?? 0) / 1e9));
+  return Math.max(1, Math.ceil(decision.retry_after ?? 0));
 }
 
 /** The reasons of the enforced rules behind a decision, without duplicates. */

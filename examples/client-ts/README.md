@@ -8,8 +8,8 @@ directory), not a published package.
 
 The types in [`src/types.ts`](src/types.ts) mirror the JSON of Catraca's Go
 types field for field: a field that is `omitempty` in Go is optional here.
-Times are RFC 3339 strings, and `retry_after` is a Go duration, so it is in
-nanoseconds; `retryAfterSeconds` converts it for a `Retry-After` header.
+Times are RFC 3339 strings, and `retry_after` is in whole seconds;
+`retryAfterSeconds` returns it (at least 1) for a `Retry-After` header.
 
 ```ts
 import { Catraca, reasons, retryAfterSeconds } from "./catraca/index.ts";

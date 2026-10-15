@@ -27,14 +27,14 @@ const allow: Decision = {
 const throttle: Decision = {
   ...allow,
   action: "throttle",
-  retry_after: 60_000_000_000,
+  retry_after: 60,
   matches: [
     {
       rule_id: "new-account-burst",
       reason: "New account sending at burst volume",
       action: "throttle",
       mode: "enforce",
-      retry_after: 60_000_000_000,
+      retry_after: 60,
     },
   ],
 };
@@ -208,7 +208,7 @@ describe("Catraca client without a server", () => {
 describe("helpers", () => {
   it("turns retry_after into Retry-After seconds", () => {
     assert.equal(retryAfterSeconds(throttle), 60);
-    assert.equal(retryAfterSeconds({ ...throttle, retry_after: 1_500_000_000 }), 2);
+    assert.equal(retryAfterSeconds({ ...throttle, retry_after: 2 }), 2);
     const { retry_after: _, ...noDelay } = throttle;
     assert.equal(retryAfterSeconds(noDelay), 1);
     assert.equal(retryAfterSeconds(allow), undefined);

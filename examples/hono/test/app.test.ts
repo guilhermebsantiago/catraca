@@ -108,8 +108,8 @@ describe("POST /emails", () => {
   });
 
   it("answers 429 with Retry-After on throttle", async () => {
-    const d = decision("throttle", [match("new-account-burst", "throttle", "Slow down", { retry_after: 60e9 })]);
-    answer({ ...d, retry_after: 60e9 });
+    const d = decision("throttle", [match("new-account-burst", "throttle", "Slow down", { retry_after: 60 })]);
+    answer({ ...d, retry_after: 60 });
     const res = await post(email);
     assert.equal(res.status, 429);
     assert.equal(res.headers.get("Retry-After"), "60");

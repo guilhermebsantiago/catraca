@@ -3,6 +3,7 @@
 package decision
 
 import (
+	"encoding/json"
 	"fmt"
 	"time"
 )
@@ -82,12 +83,14 @@ const (
 
 // Match is one rule that matched the event.
 type Match struct {
-	RuleID     string        `json:"rule_id"`
-	Reason     string        `json:"reason"`
-	Action     Action        `json:"action"`
-	Mode       Mode          `json:"mode"`
-	Effects    []string      `json:"effects,omitempty"`
-	RetryAfter time.Duration `json:"retry_after,omitempty"`
+	RuleID  string   `json:"rule_id"`
+	Reason  string   `json:"reason"`
+	Action  Action   `json:"action"`
+	Mode    Mode     `json:"mode"`
+	Effects []string `json:"effects,omitempty"`
+	// RetryAfter is encoded in JSON as whole seconds, like the HTTP
+	// Retry-After header.
+	RetryAfter time.Duration `json:"-"`
 	// Errored is true when the rule could not be evaluated and matched only
 	// because it fails closed. Its action applies, its effects do not.
 	Errored bool `json:"errored,omitempty"`
@@ -100,8 +103,9 @@ type Decision struct {
 	EventID string    `json:"event_id,omitempty"`
 	Time    time.Time `json:"time"`
 	Action  Action    `json:"action"`
-	// RetryAfter is set when Action is Throttle.
-	RetryAfter time.Duration `json:"retry_after,omitempty"`
+	// RetryAfter is set when Action is Throttle. It is encoded in JSON as
+	// whole seconds, rounded up, like the HTTP Retry-After header.
+	RetryAfter time.Duration `json:"-"`
 	// Matches are the enforced rules that matched.
 	Matches []Match `json:"matches,omitempty"`
 	// Shadow are the shadow rules that matched: what would have happened.
@@ -141,4 +145,60 @@ func (d Decision) Effects() []string {
 		}
 	}
 	return out
+}
+
+// RetrySeconds rounds d up to whole seconds, the unit of retry_after in JSON
+// and of the HTTP Retry-After header. Zero stays zero; any positive duration
+// is at least one second, so a throttle never reads as "retry now".
+func RetrySeconds(d time.Duration) int64 {
+	if d <= 0 {
+		return 0
+	}
+	return int64((d + time.Second - 1) / time.Second)
+}
+
+// MarshalJSON encodes RetryAfter as whole seconds.
+func (m Match) MarshalJSON() ([]byte, error) {
+	type plain Match
+	return json.Marshal(struct {
+		plain
+		RetryAfter int64 `json:"retry_after,omitempty"`
+	}{plain(m), RetrySeconds(m.RetryAfter)})
+}
+
+// UnmarshalJSON reads retry_after as whole seconds.
+func (m *Match) UnmarshalJSON(data []byte) error {
+	type plain Match
+	aux := struct {
+		*plain
+		RetryAfter int64 `json:"retry_after,omitempty"`
+	}{plain: (*plain)(m)}
+	if err := json.Unmarshal(data, &aux); err != nil {
+		return err
+	}
+	m.RetryAfter = time.Duration(aux.RetryAfter) * time.Second
+	return nil
+}
+
+// MarshalJSON encodes RetryAfter as whole seconds.
+func (d Decision) MarshalJSON() ([]byte, error) {
+	type plain Decision
+	return json.Marshal(struct {
+		plain
+		RetryAfter int64 `json:"retry_after,omitempty"`
+	}{plain(d), RetrySeconds(d.RetryAfter)})
+}
+
+// UnmarshalJSON reads retry_after as whole seconds.
+func (d *Decision) UnmarshalJSON(data []byte) error {
+	type plain Decision
+	aux := struct {
+		*plain
+		RetryAfter int64 `json:"retry_after,omitempty"`
+	}{plain: (*plain)(d)}
+	if err := json.Unmarshal(data, &aux); err != nil {
+		return err
+	}
+	d.RetryAfter = time.Duration(aux.RetryAfter) * time.Second
+	return nil
 }

@@ -54,8 +54,7 @@ func (s *Server) decide(status int) http.HandlerFunc {
 // retryAfterSeconds rounds up to whole seconds, at least 1, the unit of the
 // Retry-After header.
 func retryAfterSeconds(d time.Duration) string {
-	secs := int64((d + time.Second - 1) / time.Second)
-	return strconv.FormatInt(max(secs, 1), 10)
+	return strconv.FormatInt(max(decision.RetrySeconds(d), 1), 10)
 }
 
 func (s *Server) getDecision(w http.ResponseWriter, r *http.Request) {

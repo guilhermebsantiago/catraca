@@ -2,8 +2,8 @@
 // JSON tags of the Go types they mirror (internal/event, internal/decision,
 // internal/audit): a field that is `omitempty` in Go is optional here.
 //
-// Times are RFC 3339 strings. Durations (retry_after) are Go time.Duration
-// values, which encode as integer nanoseconds.
+// Times are RFC 3339 strings. retry_after is whole seconds, like the HTTP
+// Retry-After header.
 
 /** The kind of event. Mirrors event.Type. */
 export type EventType = "send" | "feedback" | "account" | "key_leak";
@@ -97,7 +97,7 @@ export interface Match {
   action: Action;
   mode: Mode;
   effects?: string[];
-  /** Nanoseconds. */
+  /** Whole seconds. */
   retry_after?: number;
   /** The rule could not be evaluated and matched only because it fails closed. */
   errored?: boolean;
@@ -115,7 +115,7 @@ export interface Decision {
   event_id?: string;
   time: string;
   action: Action;
-  /** Nanoseconds; set when action is "throttle". */
+  /** Whole seconds; set when action is "throttle". */
   retry_after?: number;
   /** The enforced rules that matched. */
   matches?: Match[];

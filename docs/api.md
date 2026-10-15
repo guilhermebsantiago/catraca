@@ -160,7 +160,7 @@ Content-Type: application/json
 Retry-After: 60
 X-Request-Id: 55687d9a883498bc98d265346364514f
 
-{"decision":{"id":"01M50QGQK25X1NM2J4XR59GJW8","event_id":"01M50QGQK25X1NM2J4XR59GJW7","time":"2026-10-15T21:29:29.9547537Z","action":"throttle","retry_after":60000000000,"matches":[{"rule_id":"new-account-burst","reason":"New account sending at burst volume; slow down and retry later","action":"throttle","mode":"enforce","retry_after":60000000000}],"ruleset_version":"098086f42c27","latency_us":211}}
+{"decision":{"id":"01M50QGQK25X1NM2J4XR59GJW8","event_id":"01M50QGQK25X1NM2J4XR59GJW7","time":"2026-10-15T21:29:29.9547537Z","action":"throttle","retry_after":60,"matches":[{"rule_id":"new-account-burst","reason":"New account sending at burst volume; slow down and retry later","action":"throttle","mode":"enforce","retry_after":60}],"ruleset_version":"098086f42c27","latency_us":211}}
 ```
 
 A block names the rule and, for effects such as revoking a key, what
