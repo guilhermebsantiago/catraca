@@ -44,8 +44,8 @@ func TestDefaultRulesetStartsInShadow(t *testing.T) {
 			t.Errorf("rule %s has no description", r.ID)
 		}
 		if r.ID == "leaked-key-send" {
-			if r.Mode != "enforce" || r.OnError != "closed" || !slices.Equal(r.Effects, []string{"revoke_key"}) || r.Override == nil {
-				t.Errorf("leaked-key-send = %+v, want enforce, on_error closed, effect revoke_key and an override", r)
+			if r.Mode != "enforce" || r.OnError != "open" || !slices.Equal(r.Effects, []string{"revoke_key"}) || r.Override == nil {
+				t.Errorf("leaked-key-send = %+v, want enforce, on_error open, effect revoke_key and an override", r)
 			}
 			continue
 		}

@@ -190,8 +190,8 @@ func parseSignalMap(e *errs, n *yaml.Node, where, mapName string, base map[strin
 			delete(m, name)
 			return
 		}
-		kind, known := knownSignals[mapName][name]
-		if !known {
+		kind := knownSignals[mapName][name]
+		if kind == 0 {
 			kind = guessKind(v)
 		}
 		val, err := signalValue(v, kind)

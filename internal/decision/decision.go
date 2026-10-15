@@ -89,7 +89,7 @@ type Match struct {
 	Effects    []string      `json:"effects,omitempty"`
 	RetryAfter time.Duration `json:"retry_after,omitempty"`
 	// Errored is true when the rule could not be evaluated and matched only
-	// because it fails closed.
+	// because it fails closed. Its action applies, its effects do not.
 	Errored bool `json:"errored,omitempty"`
 }
 
@@ -122,10 +122,17 @@ type RuleError struct {
 }
 
 // Effects returns the effects of the enforced matches, without duplicates.
+// A match that is Errored contributes none: it stands for a rule that could
+// not be evaluated, and running effects such as revoking a key on that
+// alone would, during a store outage, run them for every event the rule
+// covers.
 func (d Decision) Effects() []string {
 	seen := map[string]bool{}
 	var out []string
 	for _, m := range d.Matches {
+		if m.Errored {
+			continue
+		}
 		for _, e := range m.Effects {
 			if !seen[e] {
 				seen[e] = true

@@ -18,6 +18,7 @@ import (
 	"github.com/guilhermebsantiago/catraca/internal/audit"
 	"github.com/guilhermebsantiago/catraca/internal/decision"
 	"github.com/guilhermebsantiago/catraca/internal/event"
+	"github.com/guilhermebsantiago/catraca/signature"
 )
 
 const secret = "whsec_test_0123456789"
@@ -173,7 +174,7 @@ func TestDeliverSuccess(t *testing.T) {
 	rcv := newReceiver(t, http.StatusNoContent)
 	d, clk := newTestDispatcher(t, db, Config{Hooks: []Hook{
 		{Name: "revoke_key", URL: rcv.srv.URL + "/revoke", Secret: secret, Headers: map[string]string{
-			"Authorization": "Bearer platform-token", SignatureHeader: "forged"}},
+			"Authorization": "Bearer platform-token", signature.Header: "forged"}},
 		{Name: "suspend_account", URL: rcv.srv.URL + "/suspend", Secret: secret},
 	}})
 
@@ -186,8 +187,8 @@ func TestDeliverSuccess(t *testing.T) {
 		t.Fatalf("receiver got %d requests, want 1", len(reqs))
 	}
 	req := reqs[0]
-	if err := verify(secret, req.header.Get(SignatureHeader), req.body, time.Minute, clk.Now()); err != nil {
-		t.Errorf("signature does not verify: %v (header %q)", err, req.header.Get(SignatureHeader))
+	if got, want := req.header.Get(signature.Header), signature.Sign(secret, clk.Now(), req.body); got != want {
+		t.Errorf("signature header = %q, want %q", got, want)
 	}
 	for k, want := range map[string]string{
 		IdempotencyKeyHeader: "d1:revoke_key",
@@ -420,6 +421,29 @@ func TestDispatchWithoutEffectsWritesNothing(t *testing.T) {
 	}
 }
 
+func TestDispatchSkipsErroredMatches(t *testing.T) {
+	db := openOutbox(t)
+	d, _ := newTestDispatcher(t, db, Config{Hooks: []Hook{
+		{Name: "revoke_key", URL: "https://hooks.example/revoke", Secret: secret},
+		{Name: "notify", URL: "https://hooks.example/notify", Secret: secret},
+	}})
+	dec := leakDecision("d1")
+	dec.Matches[0].Errored = true // leaked-key-send failed closed: no effects
+	d.Dispatch(context.Background(), sendEvent(), dec)
+
+	all := deliveries(t, db, "d1")
+	if len(all) != 1 {
+		t.Fatalf("outbox = %+v, want only revoke_key from key-many-ips", all)
+	}
+	var p Payload
+	if err := json.Unmarshal(all["revoke_key"].Payload, &p); err != nil {
+		t.Fatal(err)
+	}
+	if len(p.RuleIDs) != 1 || p.RuleIDs[0] != "key-many-ips" {
+		t.Errorf("rule_ids = %v, want [key-many-ips]", p.RuleIDs)
+	}
+}
+
 func TestDispatchSurvivesCanceledContext(t *testing.T) {
 	db := openOutbox(t)
 	d, _ := newTestDispatcher(t, db, Config{Hooks: []Hook{{Name: "revoke_key", URL: "https://hooks.example/", Secret: secret}}})
@@ -492,7 +516,7 @@ func TestRunDeliversAndStops(t *testing.T) {
 	got := make(chan string, 1)
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		body, _ := io.ReadAll(r.Body)
-		if err := Verify(secret, r.Header.Get(SignatureHeader), body, 0); err != nil {
+		if err := signature.Verify(secret, r.Header.Get(signature.Header), body, 0); err != nil {
 			t.Errorf("Verify: %v", err)
 		}
 		got <- r.Header.Get(IdempotencyKeyHeader)

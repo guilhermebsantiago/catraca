@@ -41,13 +41,17 @@ rules:
     description: >-
       Blocks every send made with an API key that was reported leaked, for
       example by GitHub secret scanning, and asks the platform to revoke the
-      key. It fails closed: while the store cannot say whether a key leaked,
-      sends with an API key are blocked, because a key known to be public
-      must not keep sending while detection is down.
+      key. Keys known to be leaked stay blocked while the store is down.
     when: event.type == "send" && event.api_key_id != "" && key.leaked
     action: block
     mode: enforce
-    on_error: closed
+    # Fails open, like every other rule here: a store outage must never block
+    # every send that carries an API key. Each Catraca process remembers the
+    # leaked keys it marked or read from the store and keeps key.leaked true
+    # for them while the store is down, so those keys stay blocked. The
+    # trade-off: a key reported to another replica during the outage is not
+    # seen by this one until the store recovers.
+    on_error: open
     effects: [revoke_key]
     reason: This API key was found in public and must be rotated before it can send again
     tags: [credentials]
