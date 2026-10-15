@@ -89,8 +89,6 @@ const (
 	decideTimeout = 15 * time.Second
 )
 
-var errTooLarge = errors.New("feedback: body too large")
-
 // base holds what every handler shares.
 type base struct {
 	decider   Decider
