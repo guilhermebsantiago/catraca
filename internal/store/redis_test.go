@@ -1,0 +1,225 @@
+package store
+
+import (
+	"context"
+	"errors"
+	"slices"
+	"strconv"
+	"strings"
+	"sync/atomic"
+	"testing"
+	"time"
+
+	"github.com/alicebob/miniredis/v2"
+	"github.com/redis/go-redis/v9"
+
+	"github.com/guilhermebsantiago/catraca/internal/store/storetest"
+)
+
+func newTestRedis(t *testing.T, prefix string) (*Redis, *miniredis.Miniredis, *redis.Client) {
+	t.Helper()
+	mr := storetest.Miniredis(t)
+	client := redis.NewClient(&redis.Options{Addr: mr.Addr()})
+	t.Cleanup(func() { client.Close() })
+	return NewRedis(client, RedisOptions{Prefix: prefix}), mr, client
+}
+
+func TestRedisKeysAndTTLs(t *testing.T) {
+	s, mr, _ := newTestRedis(t, "app:")
+	run(t, s, func(b *Batch) {
+		b.Incr("acct", time.Hour, t0, 1)
+		b.AddDistinct("acct", "x", 24*time.Hour, t0)
+		b.MarkSeen("acct", "1.2.3.4", t0, 30*24*time.Hour)
+		b.FirstSeen("acct", t0, 365*24*time.Hour)
+		b.FirstSeen("forever", t0, 0)
+		b.Set("acct", "v", time.Minute)
+		b.Set("forever", "v", 0)
+	})
+	hourBucket := t0.Unix() / 60
+	dayBucket := t0.Unix() / (24 * 60)
+	want := map[string]time.Duration{
+		"app:c:{acct}:1h0m0s:" + itoa(hourBucket): time.Hour + time.Minute,
+		"app:d:{acct}:24h0m0s:" + itoa(dayBucket): 24*time.Hour + 24*time.Minute,
+		"app:s:acct":    30 * 24 * time.Hour,
+		"app:f:acct":    365 * 24 * time.Hour,
+		"app:f:forever": 0,
+		"app:v:acct":    time.Minute,
+		"app:v:forever": 0,
+	}
+	keys := mr.Keys()
+	for k, ttl := range want {
+		if !slices.Contains(keys, k) {
+			t.Errorf("missing key %s; have %v", k, keys)
+			continue
+		}
+		if got := mr.TTL(k); got != ttl {
+			t.Errorf("TTL(%s) = %v, want %v", k, got, ttl)
+		}
+	}
+	if len(keys) != len(want) {
+		t.Errorf("keys = %v, want %d of them", keys, len(want))
+	}
+}
+
+func TestRedisDefaultPrefix(t *testing.T) {
+	s, mr, _ := newTestRedis(t, "")
+	run(t, s, func(b *Batch) { b.Set("k", "v", 0) })
+	if keys := mr.Keys(); len(keys) != 1 || keys[0] != DefaultPrefix+"v:k" {
+		t.Errorf("keys = %v, want [%sv:k]", keys, DefaultPrefix)
+	}
+}
+
+func TestRedisWindowKeysShareAHashTag(t *testing.T) {
+	r := NewRedis(nil, RedisOptions{})
+	for _, key := range []string{"plain", "with}brace", "with{brace", "{tagged}"} {
+		keys := r.windowKeys("c:", key, time.Hour, t0.UnixNano())
+		tag := hashTag(keys[0])
+		for _, k := range keys {
+			if hashTag(k) != tag {
+				t.Errorf("%q: %s and %s are in different slots", key, keys[0], k)
+				break
+			}
+		}
+	}
+}
+
+// hashTag returns the part of a key Redis Cluster hashes.
+func hashTag(key string) string {
+	open := strings.IndexByte(key, '{')
+	if open < 0 {
+		return key
+	}
+	end := strings.IndexByte(key[open+1:], '}')
+	if end <= 0 {
+		return key
+	}
+	return key[open+1 : open+1+end]
+}
+
+type countingHook struct{ commands, pipelines atomic.Int32 }
+
+func (h *countingHook) DialHook(next redis.DialHook) redis.DialHook { return next }
+
+func (h *countingHook) ProcessHook(next redis.ProcessHook) redis.ProcessHook {
+	return func(ctx context.Context, cmd redis.Cmder) error {
+		h.commands.Add(1)
+		return next(ctx, cmd)
+	}
+}
+
+func (h *countingHook) ProcessPipelineHook(next redis.ProcessPipelineHook) redis.ProcessPipelineHook {
+	return func(ctx context.Context, cmds []redis.Cmder) error {
+		h.pipelines.Add(1)
+		return next(ctx, cmds)
+	}
+}
+
+func TestRedisBatchIsOneRoundTrip(t *testing.T) {
+	s, _, client := newTestRedis(t, "")
+	hook := new(countingHook)
+	client.AddHook(hook)
+	// The first use of a connection sends its handshake through the hooks.
+	run(t, s, func(b *Batch) { b.Get("warm-up") })
+	hook.commands.Store(0)
+	hook.pipelines.Store(0)
+	run(t, s, func(b *Batch) {
+		for _, w := range []time.Duration{time.Minute, time.Hour, 24 * time.Hour, week} {
+			b.Incr("k", w, t0, 1)
+			b.Count("k", w, t0)
+			b.AddDistinct("k", "m", w, t0)
+			b.Distinct("k", w, t0)
+		}
+		b.SeenWithin("k", "m", time.Hour, t0)
+		b.MarkSeen("k", "m", t0, time.Hour)
+		b.FirstSeen("k", t0, time.Hour)
+		b.Set("k", "v", 0)
+		b.Get("k")
+		b.Get("missing")
+	})
+	if p, c := hook.pipelines.Load(), hook.commands.Load(); p != 1 || c != 0 {
+		t.Errorf("Do sent %d pipelines and %d single commands, want 1 and 0", p, c)
+	}
+}
+
+func TestOpenRedis(t *testing.T) {
+	mr := storetest.Miniredis(t)
+	s, err := OpenRedis("redis://"+mr.Addr()+"/0", RedisOptions{Prefix: "x:"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := s.Ping(context.Background()); err != nil {
+		t.Fatalf("Ping: %v", err)
+	}
+	run(t, s, func(b *Batch) { b.Set("k", "v", 0) })
+	if v, _ := mr.Get("x:v:k"); v != "v" {
+		t.Errorf("value = %q, want v", v)
+	}
+	if err := s.Close(); err != nil {
+		t.Fatal(err)
+	}
+	var b Batch
+	b.Get("k")
+	if err := s.Do(context.Background(), &b); !errors.Is(err, ErrClosed) {
+		t.Errorf("Do after Close = %v, want ErrClosed", err)
+	}
+
+	if _, err := OpenRedis("http://localhost", RedisOptions{}); err == nil {
+		t.Error("OpenRedis accepted an http url")
+	}
+}
+
+func TestNewRedisLeavesTheClientOpen(t *testing.T) {
+	s, _, client := newTestRedis(t, "")
+	if err := s.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if err := client.Ping(context.Background()).Err(); err != nil {
+		t.Errorf("client closed by the store: %v", err)
+	}
+}
+
+func TestRedisErrors(t *testing.T) {
+	t.Run("server error", func(t *testing.T) {
+		s, mr, _ := newTestRedis(t, "")
+		mr.SetError("LOADING Redis is loading the dataset in memory")
+		var b Batch
+		b.Count("k", time.Hour, t0)
+		if err := s.Do(context.Background(), &b); err == nil || !strings.Contains(err.Error(), "LOADING") {
+			t.Errorf("Do = %v, want the server's error", err)
+		}
+	})
+	t.Run("not a counter", func(t *testing.T) {
+		s, mr, _ := newTestRedis(t, "")
+		mr.Set("catraca:c:{k}:1h0m0s:"+itoa(t0.Unix()/60), "abc")
+		var b Batch
+		b.Count("k", time.Hour, t0)
+		if err := s.Do(context.Background(), &b); err == nil || !strings.Contains(err.Error(), `"abc"`) {
+			t.Errorf("Do = %v, want an error about the bad value", err)
+		}
+	})
+	t.Run("wrong type", func(t *testing.T) {
+		s, mr, _ := newTestRedis(t, "")
+		mr.Set("catraca:s:k", "a string")
+		var b Batch
+		b.MarkSeen("k", "m", t0, time.Hour)
+		if err := s.Do(context.Background(), &b); err == nil || !strings.Contains(err.Error(), "WRONGTYPE") {
+			t.Errorf("Do = %v, want WRONGTYPE", err)
+		}
+	})
+	t.Run("unreachable", func(t *testing.T) {
+		mr := storetest.Miniredis(t)
+		client := redis.NewClient(&redis.Options{Addr: mr.Addr(), MaxRetries: -1, DialerRetries: 1})
+		defer client.Close()
+		s := NewRedis(client, RedisOptions{})
+		mr.Close()
+		ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+		defer cancel()
+		var b Batch
+		b.Incr("k", time.Hour, t0, 1)
+		if err := s.Do(ctx, &b); err == nil {
+			t.Error("Do succeeded with the server down")
+		}
+	})
+}
+
+func itoa(n int64) string { return strconv.FormatInt(n, 10) }
