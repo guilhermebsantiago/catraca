@@ -1,7 +1,7 @@
 {
   "note": "Recorded by examples/demo against a real catraca serve with examples/demo/rules.yaml. Ids, times and latencies change on every run.",
-  "generated_at": "2026-10-15T23:17:50Z",
-  "catraca_version": "catraca dev (a60afdadbe77) go1.27.2 windows/amd64",
+  "generated_at": "2026-10-15T23:24:22Z",
+  "catraca_version": "catraca dev (7dff2787030e) go1.27.2 windows/amd64",
   "ruleset_version": "3ed1ef48775c",
   "history": {
     "farm": 61,
@@ -30,16 +30,16 @@
       "status_text": "OK",
       "response_headers": {
         "Content-Type": "application/json",
-        "X-Request-Id": "8cd8ef708ae98ef40d99e797cdd8fc9d"
+        "X-Request-Id": "e671c06f353f73ee8f2b46c1b0383f7f"
       },
       "response": {
         "decision": {
-          "id": "01M50XQ41EMFWEFEADWDS8W07D",
-          "event_id": "01M50XQ41EMFWEFEADWDS8W07C",
-          "time": "2026-10-15T20:17:50.7665861-03:00",
+          "id": "01M50Y33HBCAFA8NQNE3KVW9JD",
+          "event_id": "01M50Y33HBCAFA8NQNE3KVW9JC",
+          "time": "2026-10-15T23:24:23.4679784Z",
           "action": "allow",
           "ruleset_version": "3ed1ef48775c",
-          "latency_us": 0
+          "latency_us": 140
         }
       }
     },
@@ -61,13 +61,13 @@
       "status_text": "OK",
       "response_headers": {
         "Content-Type": "application/json",
-        "X-Request-Id": "eca1c111247231fce9ebb3d1dcfb8141"
+        "X-Request-Id": "65bf90cbc74baa7ea512b9c524dba375"
       },
       "response": {
         "decision": {
-          "id": "01M50XQ42BJ24XKRC39N0Y72GR",
-          "event_id": "01M50XQ42BJ24XKRC39N0Y72GQ",
-          "time": "2026-10-15T20:17:50.795586-03:00",
+          "id": "01M50Y33JMPZ4MYNAJMWSCZMV0",
+          "event_id": "01M50Y33JMPZ4MYNAJMWSCZMTZ",
+          "time": "2026-10-15T23:24:23.5084785Z",
           "action": "block",
           "matches": [
             {
@@ -81,7 +81,7 @@
             }
           ],
           "ruleset_version": "3ed1ef48775c",
-          "latency_us": 0
+          "latency_us": 109
         }
       }
     },
@@ -103,16 +103,16 @@
       "status_text": "OK",
       "response_headers": {
         "Content-Type": "application/json",
-        "X-Request-Id": "ad343213b7103dbf2809ce1e43fd23c6"
+        "X-Request-Id": "252209c481dea1a7f69edd38e1a4a073"
       },
       "response": {
         "decision": {
-          "id": "01M50XQ41Z2F9BSXR2HDTNJAF2",
-          "event_id": "01M50XQ41Z2F9BSXR2HDTNJAF1",
-          "time": "2026-10-15T20:17:50.7835863-03:00",
+          "id": "01M50Y33J2WSAKJPJ95KYGJB57",
+          "event_id": "01M50Y33J2WSAKJPJ95KYGJB56",
+          "time": "2026-10-15T23:24:23.4904785Z",
           "action": "allow",
           "ruleset_version": "3ed1ef48775c",
-          "latency_us": 0
+          "latency_us": 380
         }
       }
     },
@@ -134,16 +134,16 @@
       "status_text": "OK",
       "response_headers": {
         "Content-Type": "application/json",
-        "X-Request-Id": "87e92e21c703fef628435d849020169d"
+        "X-Request-Id": "9a7bb854d879769512607a9e32f9cb16"
       },
       "response": {
         "decision": {
-          "id": "01M50XQ41GCA3WZ3HBJ30MWENT",
-          "event_id": "01M50XQ41GCA3WZ3HBJ30MWENS",
-          "time": "2026-10-15T20:17:50.7685853-03:00",
+          "id": "01M50Y33HE3Z6RMC8V9VH3WC2R",
+          "event_id": "01M50Y33HE3Z6RMC8V9VH3WC2Q",
+          "time": "2026-10-15T23:24:23.470979Z",
           "action": "allow",
           "ruleset_version": "3ed1ef48775c",
-          "latency_us": 0
+          "latency_us": 40
         }
       }
     },
@@ -156,23 +156,23 @@
         "ip": "198.51.100.23",
         "account": {
           "action": "signup",
-          "created_at": "2026-10-15T23:17:50Z"
+          "created_at": "2026-10-15T23:24:23Z"
         }
       },
       "status": 202,
       "status_text": "Accepted",
       "response_headers": {
         "Content-Type": "application/json",
-        "X-Request-Id": "f7a24cd19ceab0bbeca8b9f1869b046c"
+        "X-Request-Id": "2e4ec6a33700079b7fdcc64f96521178"
       },
       "response": {
         "decision": {
-          "id": "01M50XQ41GCA3WZ3HBJ30MWENR",
-          "event_id": "01M50XQ41GCA3WZ3HBJ30MWENQ",
-          "time": "2026-10-15T20:17:50.7680857-03:00",
+          "id": "01M50Y33HE3Z6RMC8V9VH3WC2P",
+          "event_id": "01M50Y33HE3Z6RMC8V9VH3WC2N",
+          "time": "2026-10-15T23:24:23.470979Z",
           "action": "allow",
           "ruleset_version": "3ed1ef48775c",
-          "latency_us": 499
+          "latency_us": 26
         }
       }
     },
@@ -180,7 +180,7 @@
       "method": "POST",
       "path": "/v1/feedback",
       "request_headers": {
-        "Catraca-Signature": "t=1792106270,v1=0f1c0810df30fc88f0287b3ebf02d0eaa04f7bd87801172c37c13e864f609d31"
+        "Catraca-Signature": "t=1792106663,v1=f33e652589aa3366b6a7b5c38716926790c68dd7528e036481560c9565e703ed"
       },
       "request": {
         "account_id": "acct_fernway",
@@ -195,16 +195,16 @@
       "status_text": "Accepted",
       "response_headers": {
         "Content-Type": "application/json",
-        "X-Request-Id": "e1e940fcc474ae52579997be60f084c9"
+        "X-Request-Id": "8756168985cdb13f60aac78415baff7c"
       },
       "response": {
         "decision": {
-          "id": "01M50XQ427VF3CMXSKKPNYQRBK",
-          "event_id": "01M50XQ427VF3CMXSKKPNYQRBJ",
-          "time": "2026-10-15T20:17:50.7910879-03:00",
+          "id": "01M50Y33JCAQ75C7S61S4TD9PH",
+          "event_id": "01M50Y33JCAQ75C7S61S4TD9PG",
+          "time": "2026-10-15T23:24:23.5009785Z",
           "action": "allow",
           "ruleset_version": "3ed1ef48775c",
-          "latency_us": 0
+          "latency_us": 123
         }
       }
     },
@@ -212,7 +212,7 @@
       "method": "POST",
       "path": "/v1/feedback",
       "request_headers": {
-        "Catraca-Signature": "t=1792106270,v1=043dc12df64bb0d9274a3125fdf298a76b900fe1166f3be8bd70fa6a0353db28"
+        "Catraca-Signature": "t=1792106663,v1=229cf6da81bebe0c630c068643ef0de1f8a3f64e08becb4d381fd831ce3aa0f0"
       },
       "request": {
         "account_id": "acct_fernway",
@@ -227,16 +227,16 @@
       "status_text": "Accepted",
       "response_headers": {
         "Content-Type": "application/json",
-        "X-Request-Id": "7b974d57630821cd2414e6991ccce0d2"
+        "X-Request-Id": "2b2109cfeb1371092cb67f33004775a4"
       },
       "response": {
         "decision": {
-          "id": "01M50XQ4287BCGYQPYHAM2FYDC",
-          "event_id": "01M50XQ4287BCGYQPYHAM2FYDB",
-          "time": "2026-10-15T20:17:50.7920862-03:00",
+          "id": "01M50Y33JE67PFD9BDTAARMWFP",
+          "event_id": "01M50Y33JE67PFD9BDTAARMWFN",
+          "time": "2026-10-15T23:24:23.5024797Z",
           "action": "allow",
           "ruleset_version": "3ed1ef48775c",
-          "latency_us": 0
+          "latency_us": 85
         }
       }
     },
@@ -244,7 +244,7 @@
       "method": "POST",
       "path": "/v1/feedback",
       "request_headers": {
-        "Catraca-Signature": "t=1792106270,v1=98ab8e22e420ddc44c64b4c2dc698f5541edf034b651795c819664ad040c64b7"
+        "Catraca-Signature": "t=1792106663,v1=9184a84ca7c001888f2a7706fa4f944282eaf2d0eb080e9272b461e7f22714aa"
       },
       "request": {
         "account_id": "acct_fernway",
@@ -259,16 +259,16 @@
       "status_text": "Accepted",
       "response_headers": {
         "Content-Type": "application/json",
-        "X-Request-Id": "d2603d5533f4bfa29c91e5dd5d724ef7"
+        "X-Request-Id": "055264827de54872b3a754be11a10016"
       },
       "response": {
         "decision": {
-          "id": "01M50XQ4298MVGK67P06FDKZWF",
-          "event_id": "01M50XQ4298MVGK67P06FDKZWE",
-          "time": "2026-10-15T20:17:50.7930863-03:00",
+          "id": "01M50Y33JFF5RSX66YJK0BM83M",
+          "event_id": "01M50Y33JFF5RSX66YJK0BM83K",
+          "time": "2026-10-15T23:24:23.5034792Z",
           "action": "allow",
           "ruleset_version": "3ed1ef48775c",
-          "latency_us": 0
+          "latency_us": 138
         }
       }
     },
@@ -276,7 +276,7 @@
       "method": "POST",
       "path": "/v1/feedback",
       "request_headers": {
-        "Catraca-Signature": "t=1792106270,v1=01a9a064ae3181cfa13ebfb8941fe14770d6848805fbf6142e218ab357619c3e"
+        "Catraca-Signature": "t=1792106663,v1=a1f9c6409f8d83a64dadf55bedfbc30f5f225fe19f6ca7c759873df5aa0674ec"
       },
       "request": {
         "account_id": "acct_fernway",
@@ -291,16 +291,16 @@
       "status_text": "Accepted",
       "response_headers": {
         "Content-Type": "application/json",
-        "X-Request-Id": "13cf2945b257875c7e459042dad07069"
+        "X-Request-Id": "06872c88bdb33375b51ed7dd9c902e02"
       },
       "response": {
         "decision": {
-          "id": "01M50XQ4298MVGK67P06FDKZWQ",
-          "event_id": "01M50XQ4298MVGK67P06FDKZWP",
-          "time": "2026-10-15T20:17:50.7935861-03:00",
+          "id": "01M50Y33JH2AJ3NV6280S39AVR",
+          "event_id": "01M50Y33JH2AJ3NV6280S39AVQ",
+          "time": "2026-10-15T23:24:23.5054791Z",
           "action": "allow",
           "ruleset_version": "3ed1ef48775c",
-          "latency_us": 0
+          "latency_us": 72
         }
       }
     },
@@ -322,16 +322,16 @@
       "status_text": "OK",
       "response_headers": {
         "Content-Type": "application/json",
-        "X-Request-Id": "6b02aea4f1509166cac87672d3c986da"
+        "X-Request-Id": "2fdbfad169c7741d9394e3f338099460"
       },
       "response": {
         "decision": {
-          "id": "01M50XQ427VF3CMXSKKPNYQRBQ",
-          "event_id": "01M50XQ427VF3CMXSKKPNYQRBP",
-          "time": "2026-10-15T20:17:50.7915872-03:00",
+          "id": "01M50Y33JDDZ8C94YSX7ZR9YHR",
+          "event_id": "01M50Y33JDDZ8C94YSX7ZR9YHQ",
+          "time": "2026-10-15T23:24:23.5019786Z",
           "action": "allow",
           "ruleset_version": "3ed1ef48775c",
-          "latency_us": 0
+          "latency_us": 179
         }
       }
     },
@@ -353,16 +353,16 @@
       "status_text": "OK",
       "response_headers": {
         "Content-Type": "application/json",
-        "X-Request-Id": "3765e8d5bf07048c0d240b71f067e6d4"
+        "X-Request-Id": "e5e615f4931c6b110eddc09f9f939543"
       },
       "response": {
         "decision": {
-          "id": "01M50XQ4287BCGYQPYHAM2FYDG",
-          "event_id": "01M50XQ4287BCGYQPYHAM2FYDF",
-          "time": "2026-10-15T20:17:50.7925865-03:00",
+          "id": "01M50Y33JE67PFD9BDTAARMWFT",
+          "event_id": "01M50Y33JE67PFD9BDTAARMWFS",
+          "time": "2026-10-15T23:24:23.5029796Z",
           "action": "allow",
           "ruleset_version": "3ed1ef48775c",
-          "latency_us": 0
+          "latency_us": 110
         }
       }
     },
@@ -384,16 +384,16 @@
       "status_text": "OK",
       "response_headers": {
         "Content-Type": "application/json",
-        "X-Request-Id": "ca3bdc2abdc31fe594014a0f5ddb9a09"
+        "X-Request-Id": "515004c0911ace9cc7b3b15793bb23e1"
       },
       "response": {
         "decision": {
-          "id": "01M50XQ4298MVGK67P06FDKZWK",
-          "event_id": "01M50XQ4298MVGK67P06FDKZWJ",
-          "time": "2026-10-15T20:17:50.7930863-03:00",
+          "id": "01M50Y33JGD428TPR878GCS4XP",
+          "event_id": "01M50Y33JGD428TPR878GCS4XN",
+          "time": "2026-10-15T23:24:23.5044797Z",
           "action": "allow",
           "ruleset_version": "3ed1ef48775c",
-          "latency_us": 499
+          "latency_us": 130
         }
       }
     },
@@ -415,13 +415,13 @@
       "status_text": "OK",
       "response_headers": {
         "Content-Type": "application/json",
-        "X-Request-Id": "8e83bed8bfd555b93cb17745a1ba68de"
+        "X-Request-Id": "5a93a10424337eafe3888bae7de75d14"
       },
       "response": {
         "decision": {
-          "id": "01M50XQ42A6P0G3NCWWGZGBJMV",
-          "event_id": "01M50XQ42A6P0G3NCWWGZGBJMT",
-          "time": "2026-10-15T20:17:50.7940855-03:00",
+          "id": "01M50Y33JH2AJ3NV6280S39AVW",
+          "event_id": "01M50Y33JH2AJ3NV6280S39AVV",
+          "time": "2026-10-15T23:24:23.5059791Z",
           "action": "hold",
           "matches": [
             {
@@ -432,7 +432,7 @@
             }
           ],
           "ruleset_version": "3ed1ef48775c",
-          "latency_us": 0
+          "latency_us": 110
         }
       }
     },
@@ -457,13 +457,13 @@
       "status_text": "OK",
       "response_headers": {
         "Content-Type": "application/json",
-        "X-Request-Id": "64223ce28a963e30951117a7b35690f0"
+        "X-Request-Id": "697a71eb5e9fdff28e36fc5e457548a4"
       },
       "response": {
         "decision": {
-          "id": "01M50XQ41FEZG7N5WDVFWEVEHQ",
-          "event_id": "01M50XQ41FEZG7N5WDVFWEVEHP",
-          "time": "2026-10-15T20:17:50.7670858-03:00",
+          "id": "01M50Y33HCXZWRCD5ET8TX7WH9",
+          "event_id": "01M50Y33HCXZWRCD5ET8TX7WH8",
+          "time": "2026-10-15T23:24:23.4689792Z",
           "action": "flag",
           "matches": [
             {
@@ -474,7 +474,7 @@
             }
           ],
           "ruleset_version": "3ed1ef48775c",
-          "latency_us": 0
+          "latency_us": 46
         }
       }
     },
@@ -496,13 +496,13 @@
       "status_text": "OK",
       "response_headers": {
         "Content-Type": "application/json",
-        "X-Request-Id": "8e83bed8bfd555b93cb17745a1ba68de"
+        "X-Request-Id": "5a93a10424337eafe3888bae7de75d14"
       },
       "response": {
         "decision": {
-          "id": "01M50XQ42A6P0G3NCWWGZGBJMV",
-          "event_id": "01M50XQ42A6P0G3NCWWGZGBJMT",
-          "time": "2026-10-15T20:17:50.7940855-03:00",
+          "id": "01M50Y33JH2AJ3NV6280S39AVW",
+          "event_id": "01M50Y33JH2AJ3NV6280S39AVV",
+          "time": "2026-10-15T23:24:23.5059791Z",
           "action": "hold",
           "matches": [
             {
@@ -513,7 +513,7 @@
             }
           ],
           "ruleset_version": "3ed1ef48775c",
-          "latency_us": 0
+          "latency_us": 110
         }
       }
     },
@@ -533,16 +533,16 @@
       "status_text": "Accepted",
       "response_headers": {
         "Content-Type": "application/json",
-        "X-Request-Id": "34f87c104b46a5497ad06a16fac702e8"
+        "X-Request-Id": "217f45ee9dbc812d140e40651dc4bf17"
       },
       "response": {
         "decision": {
-          "id": "01M50XQ42A6P0G3NCWWGZGBJN3",
-          "event_id": "01M50XQ42A6P0G3NCWWGZGBJN2",
-          "time": "2026-10-15T20:17:50.7945851-03:00",
+          "id": "01M50Y33JJ95SMJK8SQMPEBJCZ",
+          "event_id": "01M50Y33JJ95SMJK8SQMPEBJCY",
+          "time": "2026-10-15T23:24:23.506979Z",
           "action": "allow",
           "ruleset_version": "3ed1ef48775c",
-          "latency_us": 0
+          "latency_us": 61
         }
       }
     },
@@ -562,16 +562,16 @@
       "status_text": "Accepted",
       "response_headers": {
         "Content-Type": "application/json",
-        "X-Request-Id": "7789e7e7664b138b3f985ea22ad67424"
+        "X-Request-Id": "79db830a2573f392e867e47ffc6af11a"
       },
       "response": {
         "decision": {
-          "id": "01M50XQ435ZE7HW4HXHJ4XWPWG",
-          "event_id": "01M50XQ435ZE7HW4HXHJ4XWPWF",
-          "time": "2026-10-15T20:17:50.821124-03:00",
+          "id": "01M50Y33KF6E0NAY0C0K5D623P",
+          "event_id": "01M50Y33KF6E0NAY0C0K5D623N",
+          "time": "2026-10-15T23:24:23.5355075Z",
           "action": "allow",
           "ruleset_version": "3ed1ef48775c",
-          "latency_us": 0
+          "latency_us": 164
         }
       }
     },
@@ -584,20 +584,20 @@
         "ip": "198.51.100.77",
         "account": {
           "action": "signup",
-          "created_at": "2026-10-15T23:17:50Z"
+          "created_at": "2026-10-15T23:24:23Z"
         }
       },
       "status": 202,
       "status_text": "Accepted",
       "response_headers": {
         "Content-Type": "application/json",
-        "X-Request-Id": "79fc244c43932e19cc88bf510481f511"
+        "X-Request-Id": "cd60a7c0df918fe18933140cda3ec3ab"
       },
       "response": {
         "decision": {
-          "id": "01M50XQ4373DFMCM4XWGYYS4NG",
-          "event_id": "01M50XQ4373DFMCM4XWGYYS4NF",
-          "time": "2026-10-15T20:17:50.8236274-03:00",
+          "id": "01M50Y33KKG0AQ5QTA9AFE1RGX",
+          "event_id": "01M50Y33KKG0AQ5QTA9AFE1RGW",
+          "time": "2026-10-15T23:24:23.5390117Z",
           "action": "allow",
           "shadow": [
             {
@@ -608,7 +608,7 @@
             }
           ],
           "ruleset_version": "3ed1ef48775c",
-          "latency_us": 0
+          "latency_us": 28
         }
       }
     },
@@ -621,20 +621,20 @@
         "ip": "198.51.100.77",
         "account": {
           "action": "signup",
-          "created_at": "2026-10-15T23:17:50Z"
+          "created_at": "2026-10-15T23:24:23Z"
         }
       },
       "status": 202,
       "status_text": "Accepted",
       "response_headers": {
         "Content-Type": "application/json",
-        "X-Request-Id": "074161798262ee1ece0c8d7661ce0c30"
+        "X-Request-Id": "de86d7fa96253ee9de0e2c7d0a74f076"
       },
       "response": {
         "decision": {
-          "id": "01M50XQ436TSEJVC6XB5VWD20J",
-          "event_id": "01M50XQ436TSEJVC6XB5VWD20H",
-          "time": "2026-10-15T20:17:50.822629-03:00",
+          "id": "01M50Y33KHCG2C6K8Z49FKB9R6",
+          "event_id": "01M50Y33KHCG2C6K8Z49FKB9R5",
+          "time": "2026-10-15T23:24:23.5375114Z",
           "action": "allow",
           "shadow": [
             {
@@ -645,7 +645,7 @@
             }
           ],
           "ruleset_version": "3ed1ef48775c",
-          "latency_us": 0
+          "latency_us": 23
         }
       }
     },
@@ -668,13 +668,13 @@
       "response_headers": {
         "Content-Type": "application/json",
         "Retry-After": "60",
-        "X-Request-Id": "f8b8cd0872703b756bf6785aecef8e00"
+        "X-Request-Id": "3ff03f984b3f1bb86142dacfa04ab366"
       },
       "response": {
         "decision": {
-          "id": "01M50XQ41Z2F9BSXR2HDTNJAF4",
-          "event_id": "01M50XQ41Z2F9BSXR2HDTNJAF3",
-          "time": "2026-10-15T20:17:50.7835863-03:00",
+          "id": "01M50Y33J3V00DN3VYZ173GMHY",
+          "event_id": "01M50Y33J3V00DN3VYZ173GMHX",
+          "time": "2026-10-15T23:24:23.4914792Z",
           "action": "throttle",
           "matches": [
             {
@@ -686,7 +686,7 @@
             }
           ],
           "ruleset_version": "3ed1ef48775c",
-          "latency_us": 0,
+          "latency_us": 33,
           "retry_after": 60
         }
       }
@@ -701,22 +701,22 @@
     {
       "complaints": 1,
       "next_send_action": "allow",
-      "next_send_decision_id": "01M50XQ427VF3CMXSKKPNYQRBQ"
+      "next_send_decision_id": "01M50Y33JDDZ8C94YSX7ZR9YHR"
     },
     {
       "complaints": 2,
       "next_send_action": "allow",
-      "next_send_decision_id": "01M50XQ4287BCGYQPYHAM2FYDG"
+      "next_send_decision_id": "01M50Y33JE67PFD9BDTAARMWFT"
     },
     {
       "complaints": 3,
       "next_send_action": "allow",
-      "next_send_decision_id": "01M50XQ4298MVGK67P06FDKZWK"
+      "next_send_decision_id": "01M50Y33JGD428TPR878GCS4XP"
     },
     {
       "complaints": 4,
       "next_send_action": "hold",
-      "next_send_decision_id": "01M50XQ42A6P0G3NCWWGZGBJMV"
+      "next_send_decision_id": "01M50Y33JH2AJ3NV6280S39AVW"
     }
   ],
   "hook": {
@@ -724,15 +724,15 @@
     "path": "/hooks/revoke-key",
     "headers": {
       "Catraca-Attempt": "1",
-      "Catraca-Idempotency-Key": "01M50XQ42BJ24XKRC39N0Y72GR:revoke_key",
-      "Catraca-Signature": "t=1792106270,v1=5da3629d3c82e917949d6a30dc2cf83af6d49c36ef064d0ab83f8147b7ad4fa1",
+      "Catraca-Idempotency-Key": "01M50Y33JMPZ4MYNAJMWSCZMV0:revoke_key",
+      "Catraca-Signature": "t=1792106663,v1=1880d37eb4601a1fb931ebee57e386bddb947da7b059e5eb2a96db63f06cc9f4",
       "Content-Type": "application/json",
       "User-Agent": "Catraca-Hooks/1"
     },
     "body": {
       "effect": "revoke_key",
-      "decision_id": "01M50XQ42BJ24XKRC39N0Y72GR",
-      "event_id": "01M50XQ42BJ24XKRC39N0Y72GQ",
+      "decision_id": "01M50Y33JMPZ4MYNAJMWSCZMV0",
+      "event_id": "01M50Y33JMPZ4MYNAJMWSCZMTZ",
       "event_type": "send",
       "account_id": "acct_tidal",
       "api_key_id": "key_9c2e",
@@ -743,11 +743,11 @@
       "reasons": [
         "This API key was found in public and must be rotated before it can send again"
       ],
-      "time": "2026-10-15T20:17:50.795586-03:00"
+      "time": "2026-10-15T23:24:23.5084785Z"
     },
     "verified": "ok",
     "status": 204,
-    "received_at": "2026-10-15T23:17:50.7965861Z"
+    "received_at": "2026-10-15T23:24:23.5099792Z"
   },
   "labels": {
     "false_positive": 7,
@@ -758,7 +758,7 @@
       "args": [
         "catraca",
         "label",
-        "01M50XQ3YQWKFJMWSR2N9KDQSW",
+        "01M50Y33D93DE729ZNHPSMJGYJ",
         "--verdict",
         "false_positive",
         "--by",
@@ -768,14 +768,14 @@
         "--reason",
         "real customer behind the same office NAT"
       ],
-      "stdout": "labeled decision 01M50XQ3YQWKFJMWSR2N9KDQSW false_positive for rule signup-farm-ip; it has 1 label(s)\n",
+      "stdout": "labeled decision 01M50Y33D93DE729ZNHPSMJGYJ false_positive for rule signup-farm-ip; it has 1 label(s)\n",
       "exit": 0
     },
     "label_tp": {
       "args": [
         "catraca",
         "label",
-        "01M50XQ4373DFMCM4XWGYYS4NG",
+        "01M50Y33KKG0AQ5QTA9AFE1RGX",
         "--verdict",
         "true_positive",
         "--by",
@@ -783,7 +783,7 @@
         "--rule",
         "signup-farm-ip"
       ],
-      "stdout": "labeled decision 01M50XQ4373DFMCM4XWGYYS4NG true_positive for rule signup-farm-ip; it has 1 label(s)\n",
+      "stdout": "labeled decision 01M50Y33KKG0AQ5QTA9AFE1RGX true_positive for rule signup-farm-ip; it has 1 label(s)\n",
       "exit": 0
     },
     "report": {
@@ -795,7 +795,7 @@
         "--audit",
         "sqlite:audit.db"
       ],
-      "stdout": "Ruleset 3ed1ef48775c, matches since 2026-09-15T23:17:51Z\nGate: at least 30 labeled matches and a precision lower bound of 0.90 (Wilson 95%)\n\nRULE                         MODE     MATCHES  LABELED  TP  FP  PRECISION  95% CI          STATUS\nleaked-key-send              enforce  1        1        1   0   1.000      [0.207, 1.000]  insufficient_labels (override)\nnew-account-burst            enforce  40       40       40  0   1.000      [0.912, 1.000]  passes\ncomplaint-rate-high          enforce  1        1        1   0   1.000      [0.207, 1.000]  insufficient_labels\nhard-bounce-rate-high        shadow   0        0        0   0   -          -               insufficient_labels\nkey-many-ips                 shadow   0        0        0   0   -          -               insufficient_labels\naccount-takeover-volume      shadow   0        0        0   0   -          -               insufficient_labels\nshortener-links-new-account  enforce  10       10       4   6   0.400      [0.168, 0.687]  below_precision\nsignup-farm-ip               shadow   60       60       59  1   0.983      [0.911, 0.997]  passes\nrecipient-domain-spray       shadow   0        0        0   0   -          -               insufficient_labels\n\nPromote candidates (shadow rules that pass the gate):\n  signup-farm-ip: precision 0.983 [0.911, 0.997] on 60 labeled matches\n\nRetire candidates (enforced rules below the gate):\n  shortener-links-new-account: precision 0.400 [0.168, 0.687] on 10 labeled matches\n",
+      "stdout": "Ruleset 3ed1ef48775c, matches since 2026-09-15T23:24:24Z\nGate: at least 30 labeled matches and a precision lower bound of 0.90 (Wilson 95%)\n\nRULE                         MODE     MATCHES  LABELED  TP  FP  PRECISION  95% CI          STATUS\nleaked-key-send              enforce  1        1        1   0   1.000      [0.207, 1.000]  insufficient_labels (override)\nnew-account-burst            enforce  40       40       40  0   1.000      [0.912, 1.000]  passes\ncomplaint-rate-high          enforce  1        1        1   0   1.000      [0.207, 1.000]  insufficient_labels\nhard-bounce-rate-high        shadow   0        0        0   0   -          -               insufficient_labels\nkey-many-ips                 shadow   0        0        0   0   -          -               insufficient_labels\naccount-takeover-volume      shadow   0        0        0   0   -          -               insufficient_labels\nshortener-links-new-account  enforce  10       10       4   6   0.400      [0.168, 0.687]  below_precision\nsignup-farm-ip               shadow   60       60       59  1   0.983      [0.911, 0.997]  passes\nrecipient-domain-spray       shadow   0        0        0   0   -          -               insufficient_labels\n\nPromote candidates (shadow rules that pass the gate):\n  signup-farm-ip: precision 0.983 [0.911, 0.997] on 60 labeled matches\n\nRetire candidates (enforced rules below the gate):\n  shortener-links-new-account: precision 0.400 [0.168, 0.687] on 10 labeled matches\n",
       "exit": 0
     },
     "report_json": {
@@ -808,7 +808,7 @@
         "sqlite:audit.db",
         "--json"
       ],
-      "stdout": "{\n  \"since\": \"2026-09-15T23:17:51.9770474Z\",\n  \"ruleset_version\": \"3ed1ef48775c\",\n  \"gate\": {\n    \"min_labeled\": 30,\n    \"min_precision\": 0.9\n  },\n  \"rules\": [\n    {\n      \"rule_id\": \"leaked-key-send\",\n      \"mode\": \"enforce\",\n      \"matches\": 1,\n      \"errored\": 0,\n      \"labeled\": 1,\n      \"true_positives\": 1,\n      \"false_positives\": 0,\n      \"precision\": 1,\n      \"precision_lower\": 0.20654931437723742,\n      \"precision_upper\": 1,\n      \"status\": \"insufficient_labels\",\n      \"override\": true\n    },\n    {\n      \"rule_id\": \"new-account-burst\",\n      \"mode\": \"enforce\",\n      \"matches\": 40,\n      \"errored\": 0,\n      \"labeled\": 40,\n      \"true_positives\": 40,\n      \"false_positives\": 0,\n      \"precision\": 1,\n      \"precision_lower\": 0.9123783988027134,\n      \"precision_upper\": 1,\n      \"status\": \"passes\"\n    },\n    {\n      \"rule_id\": \"complaint-rate-high\",\n      \"mode\": \"enforce\",\n      \"matches\": 1,\n      \"errored\": 0,\n      \"labeled\": 1,\n      \"true_positives\": 1,\n      \"false_positives\": 0,\n      \"precision\": 1,\n      \"precision_lower\": 0.20654931437723742,\n      \"precision_upper\": 1,\n      \"status\": \"insufficient_labels\"\n    },\n    {\n      \"rule_id\": \"hard-bounce-rate-high\",\n      \"mode\": \"shadow\",\n      \"matches\": 0,\n      \"errored\": 0,\n      \"labeled\": 0,\n      \"true_positives\": 0,\n      \"false_positives\": 0,\n      \"precision\": 0,\n      \"precision_lower\": 0,\n      \"precision_upper\": 1,\n      \"status\": \"insufficient_labels\"\n    },\n    {\n      \"rule_id\": \"key-many-ips\",\n      \"mode\": \"shadow\",\n      \"matches\": 0,\n      \"errored\": 0,\n      \"labeled\": 0,\n      \"true_positives\": 0,\n      \"false_positives\": 0,\n      \"precision\": 0,\n      \"precision_lower\": 0,\n      \"precision_upper\": 1,\n      \"status\": \"insufficient_labels\"\n    },\n    {\n      \"rule_id\": \"account-takeover-volume\",\n      \"mode\": \"shadow\",\n      \"matches\": 0,\n      \"errored\": 0,\n      \"labeled\": 0,\n      \"true_positives\": 0,\n      \"false_positives\": 0,\n      \"precision\": 0,\n      \"precision_lower\": 0,\n      \"precision_upper\": 1,\n      \"status\": \"insufficient_labels\"\n    },\n    {\n      \"rule_id\": \"shortener-links-new-account\",\n      \"mode\": \"enforce\",\n      \"matches\": 10,\n      \"errored\": 0,\n      \"labeled\": 10,\n      \"true_positives\": 4,\n      \"false_positives\": 6,\n      \"precision\": 0.4,\n      \"precision_lower\": 0.1681803297062362,\n      \"precision_upper\": 0.6873262302663418,\n      \"status\": \"below_precision\"\n    },\n    {\n      \"rule_id\": \"signup-farm-ip\",\n      \"mode\": \"shadow\",\n      \"matches\": 60,\n      \"errored\": 0,\n      \"labeled\": 60,\n      \"true_positives\": 59,\n      \"false_positives\": 1,\n      \"precision\": 0.9833333333333333,\n      \"precision_lower\": 0.9114487027240993,\n      \"precision_upper\": 0.9970518402052138,\n      \"status\": \"passes\"\n    },\n    {\n      \"rule_id\": \"recipient-domain-spray\",\n      \"mode\": \"shadow\",\n      \"matches\": 0,\n      \"errored\": 0,\n      \"labeled\": 0,\n      \"true_positives\": 0,\n      \"false_positives\": 0,\n      \"precision\": 0,\n      \"precision_lower\": 0,\n      \"precision_upper\": 1,\n      \"status\": \"insufficient_labels\"\n    }\n  ],\n  \"promote\": [\n    {\n      \"rule_id\": \"signup-farm-ip\",\n      \"mode\": \"shadow\",\n      \"matches\": 60,\n      \"errored\": 0,\n      \"labeled\": 60,\n      \"true_positives\": 59,\n      \"false_positives\": 1,\n      \"precision\": 0.9833333333333333,\n      \"precision_lower\": 0.9114487027240993,\n      \"precision_upper\": 0.9970518402052138,\n      \"status\": \"passes\"\n    }\n  ],\n  \"retire\": [\n    {\n      \"rule_id\": \"shortener-links-new-account\",\n      \"mode\": \"enforce\",\n      \"matches\": 10,\n      \"errored\": 0,\n      \"labeled\": 10,\n      \"true_positives\": 4,\n      \"false_positives\": 6,\n      \"precision\": 0.4,\n      \"precision_lower\": 0.1681803297062362,\n      \"precision_upper\": 0.6873262302663418,\n      \"status\": \"below_precision\"\n    }\n  ]\n}\n",
+      "stdout": "{\n  \"since\": \"2026-09-15T23:24:24.7464824Z\",\n  \"ruleset_version\": \"3ed1ef48775c\",\n  \"gate\": {\n    \"min_labeled\": 30,\n    \"min_precision\": 0.9\n  },\n  \"rules\": [\n    {\n      \"rule_id\": \"leaked-key-send\",\n      \"mode\": \"enforce\",\n      \"matches\": 1,\n      \"errored\": 0,\n      \"labeled\": 1,\n      \"true_positives\": 1,\n      \"false_positives\": 0,\n      \"precision\": 1,\n      \"precision_lower\": 0.20654931437723742,\n      \"precision_upper\": 1,\n      \"status\": \"insufficient_labels\",\n      \"override\": true\n    },\n    {\n      \"rule_id\": \"new-account-burst\",\n      \"mode\": \"enforce\",\n      \"matches\": 40,\n      \"errored\": 0,\n      \"labeled\": 40,\n      \"true_positives\": 40,\n      \"false_positives\": 0,\n      \"precision\": 1,\n      \"precision_lower\": 0.9123783988027134,\n      \"precision_upper\": 1,\n      \"status\": \"passes\"\n    },\n    {\n      \"rule_id\": \"complaint-rate-high\",\n      \"mode\": \"enforce\",\n      \"matches\": 1,\n      \"errored\": 0,\n      \"labeled\": 1,\n      \"true_positives\": 1,\n      \"false_positives\": 0,\n      \"precision\": 1,\n      \"precision_lower\": 0.20654931437723742,\n      \"precision_upper\": 1,\n      \"status\": \"insufficient_labels\"\n    },\n    {\n      \"rule_id\": \"hard-bounce-rate-high\",\n      \"mode\": \"shadow\",\n      \"matches\": 0,\n      \"errored\": 0,\n      \"labeled\": 0,\n      \"true_positives\": 0,\n      \"false_positives\": 0,\n      \"precision\": 0,\n      \"precision_lower\": 0,\n      \"precision_upper\": 1,\n      \"status\": \"insufficient_labels\"\n    },\n    {\n      \"rule_id\": \"key-many-ips\",\n      \"mode\": \"shadow\",\n      \"matches\": 0,\n      \"errored\": 0,\n      \"labeled\": 0,\n      \"true_positives\": 0,\n      \"false_positives\": 0,\n      \"precision\": 0,\n      \"precision_lower\": 0,\n      \"precision_upper\": 1,\n      \"status\": \"insufficient_labels\"\n    },\n    {\n      \"rule_id\": \"account-takeover-volume\",\n      \"mode\": \"shadow\",\n      \"matches\": 0,\n      \"errored\": 0,\n      \"labeled\": 0,\n      \"true_positives\": 0,\n      \"false_positives\": 0,\n      \"precision\": 0,\n      \"precision_lower\": 0,\n      \"precision_upper\": 1,\n      \"status\": \"insufficient_labels\"\n    },\n    {\n      \"rule_id\": \"shortener-links-new-account\",\n      \"mode\": \"enforce\",\n      \"matches\": 10,\n      \"errored\": 0,\n      \"labeled\": 10,\n      \"true_positives\": 4,\n      \"false_positives\": 6,\n      \"precision\": 0.4,\n      \"precision_lower\": 0.1681803297062362,\n      \"precision_upper\": 0.6873262302663418,\n      \"status\": \"below_precision\"\n    },\n    {\n      \"rule_id\": \"signup-farm-ip\",\n      \"mode\": \"shadow\",\n      \"matches\": 60,\n      \"errored\": 0,\n      \"labeled\": 60,\n      \"true_positives\": 59,\n      \"false_positives\": 1,\n      \"precision\": 0.9833333333333333,\n      \"precision_lower\": 0.9114487027240993,\n      \"precision_upper\": 0.9970518402052138,\n      \"status\": \"passes\"\n    },\n    {\n      \"rule_id\": \"recipient-domain-spray\",\n      \"mode\": \"shadow\",\n      \"matches\": 0,\n      \"errored\": 0,\n      \"labeled\": 0,\n      \"true_positives\": 0,\n      \"false_positives\": 0,\n      \"precision\": 0,\n      \"precision_lower\": 0,\n      \"precision_upper\": 1,\n      \"status\": \"insufficient_labels\"\n    }\n  ],\n  \"promote\": [\n    {\n      \"rule_id\": \"signup-farm-ip\",\n      \"mode\": \"shadow\",\n      \"matches\": 60,\n      \"errored\": 0,\n      \"labeled\": 60,\n      \"true_positives\": 59,\n      \"false_positives\": 1,\n      \"precision\": 0.9833333333333333,\n      \"precision_lower\": 0.9114487027240993,\n      \"precision_upper\": 0.9970518402052138,\n      \"status\": \"passes\"\n    }\n  ],\n  \"retire\": [\n    {\n      \"rule_id\": \"shortener-links-new-account\",\n      \"mode\": \"enforce\",\n      \"matches\": 10,\n      \"errored\": 0,\n      \"labeled\": 10,\n      \"true_positives\": 4,\n      \"false_positives\": 6,\n      \"precision\": 0.4,\n      \"precision_lower\": 0.1681803297062362,\n      \"precision_upper\": 0.6873262302663418,\n      \"status\": \"below_precision\"\n    }\n  ]\n}\n",
       "exit": 0
     }
   },
@@ -819,9 +819,9 @@
       "type": "send",
       "account_id": "acct_lumen",
       "api_key_id": "key_4f1a",
-      "decision_id": "01M50XQ41EMFWEFEADWDS8W075",
+      "decision_id": "01M50Y33HABBQEJ0DG37P8X4ZA",
       "action": "allow",
-      "latency_us": 0
+      "latency_us": 109
     },
     {
       "seq": 2,
@@ -829,9 +829,9 @@
       "type": "send",
       "account_id": "acct_okapi",
       "api_key_id": "key_2e8b",
-      "decision_id": "01M50XQ41EMFWEFEADWDS8W077",
+      "decision_id": "01M50Y33HABBQEJ0DG37P8X4ZC",
       "action": "allow",
-      "latency_us": 0
+      "latency_us": 111
     },
     {
       "seq": 3,
@@ -839,9 +839,9 @@
       "type": "send",
       "account_id": "acct_fernway",
       "api_key_id": "key_7b3d",
-      "decision_id": "01M50XQ41EMFWEFEADWDS8W079",
+      "decision_id": "01M50Y33HBCAFA8NQNE3KVW9J9",
       "action": "allow",
-      "latency_us": 0
+      "latency_us": 74
     },
     {
       "seq": 4,
@@ -849,9 +849,9 @@
       "type": "send",
       "account_id": "acct_tidal",
       "api_key_id": "key_9c2e",
-      "decision_id": "01M50XQ41EMFWEFEADWDS8W07B",
+      "decision_id": "01M50Y33HBCAFA8NQNE3KVW9JB",
       "action": "allow",
-      "latency_us": 0
+      "latency_us": 94
     },
     {
       "seq": 5,
@@ -859,9 +859,9 @@
       "type": "send",
       "account_id": "acct_lumen",
       "api_key_id": "key_4f1a",
-      "decision_id": "01M50XQ41EMFWEFEADWDS8W07D",
+      "decision_id": "01M50Y33HBCAFA8NQNE3KVW9JD",
       "action": "allow",
-      "latency_us": 0
+      "latency_us": 140
     },
     {
       "seq": 6,
@@ -869,9 +869,9 @@
       "type": "send",
       "account_id": "acct_okapi",
       "api_key_id": "key_2e8b",
-      "decision_id": "01M50XQ41FEZG7N5WDVFWEVEHN",
+      "decision_id": "01M50Y33HBCAFA8NQNE3KVW9JF",
       "action": "allow",
-      "latency_us": 0
+      "latency_us": 111
     },
     {
       "seq": 7,
@@ -879,12 +879,12 @@
       "type": "send",
       "account_id": "acct_n10",
       "api_key_id": "key_n10",
-      "decision_id": "01M50XQ41FEZG7N5WDVFWEVEHQ",
+      "decision_id": "01M50Y33HCXZWRCD5ET8TX7WH9",
       "action": "flag",
       "rules": [
         "shortener-links-new-account"
       ],
-      "latency_us": 0
+      "latency_us": 46
     },
     {
       "seq": 8,
@@ -892,9 +892,9 @@
       "type": "send",
       "account_id": "acct_lumen",
       "api_key_id": "key_4f1a",
-      "decision_id": "01M50XQ41FEZG7N5WDVFWEVEHS",
+      "decision_id": "01M50Y33HCXZWRCD5ET8TX7WHB",
       "action": "allow",
-      "latency_us": 500
+      "latency_us": 87
     },
     {
       "seq": 9,
@@ -902,9 +902,9 @@
       "type": "send",
       "account_id": "acct_tidal",
       "api_key_id": "key_9c2e",
-      "decision_id": "01M50XQ41FEZG7N5WDVFWEVEHV",
+      "decision_id": "01M50Y33HCXZWRCD5ET8TX7WHD",
       "action": "allow",
-      "latency_us": 0
+      "latency_us": 152
     },
     {
       "seq": 10,
@@ -912,9 +912,9 @@
       "type": "send",
       "account_id": "acct_fernway",
       "api_key_id": "key_7b3d",
-      "decision_id": "01M50XQ41FEZG7N5WDVFWEVEHX",
+      "decision_id": "01M50Y33HDBHW84H4JYSKG0BF5",
       "action": "allow",
-      "latency_us": 0
+      "latency_us": 81
     },
     {
       "seq": 11,
@@ -922,9 +922,9 @@
       "type": "send",
       "account_id": "acct_okapi",
       "api_key_id": "key_2e8b",
-      "decision_id": "01M50XQ41GCA3WZ3HBJ30MWENM",
+      "decision_id": "01M50Y33HDBHW84H4JYSKG0BF7",
       "action": "allow",
-      "latency_us": 0
+      "latency_us": 108
     },
     {
       "seq": 12,
@@ -932,18 +932,18 @@
       "type": "send",
       "account_id": "acct_lumen",
       "api_key_id": "key_4f1a",
-      "decision_id": "01M50XQ41GCA3WZ3HBJ30MWENP",
+      "decision_id": "01M50Y33HDBHW84H4JYSKG0BF9",
       "action": "allow",
-      "latency_us": 0
+      "latency_us": 394
     },
     {
       "seq": 13,
       "phase": "burst",
       "type": "account",
       "account_id": "acct_x7q2",
-      "decision_id": "01M50XQ41GCA3WZ3HBJ30MWENR",
+      "decision_id": "01M50Y33HE3Z6RMC8V9VH3WC2P",
       "action": "allow",
-      "latency_us": 499
+      "latency_us": 26
     },
     {
       "seq": 14,
@@ -951,9 +951,9 @@
       "type": "send",
       "account_id": "acct_x7q2",
       "api_key_id": "key_5d0c",
-      "decision_id": "01M50XQ41GCA3WZ3HBJ30MWENT",
+      "decision_id": "01M50Y33HE3Z6RMC8V9VH3WC2R",
       "action": "allow",
-      "latency_us": 0
+      "latency_us": 40
     },
     {
       "seq": 15,
@@ -961,9 +961,9 @@
       "type": "send",
       "account_id": "acct_x7q2",
       "api_key_id": "key_5d0c",
-      "decision_id": "01M50XQ41GCA3WZ3HBJ30MWENW",
+      "decision_id": "01M50Y33HE3Z6RMC8V9VH3WC2T",
       "action": "allow",
-      "latency_us": 0
+      "latency_us": 31
     },
     {
       "seq": 16,
@@ -971,9 +971,9 @@
       "type": "send",
       "account_id": "acct_x7q2",
       "api_key_id": "key_5d0c",
-      "decision_id": "01M50XQ41GCA3WZ3HBJ30MWENY",
+      "decision_id": "01M50Y33HF7QZK1EJ1BSENH32Y",
       "action": "allow",
-      "latency_us": 0
+      "latency_us": 34
     },
     {
       "seq": 17,
@@ -981,9 +981,9 @@
       "type": "send",
       "account_id": "acct_x7q2",
       "api_key_id": "key_5d0c",
-      "decision_id": "01M50XQ41HE78SQB3727V1HSC4",
+      "decision_id": "01M50Y33HF7QZK1EJ1BSENH330",
       "action": "allow",
-      "latency_us": 0
+      "latency_us": 29
     },
     {
       "seq": 18,
@@ -991,9 +991,9 @@
       "type": "send",
       "account_id": "acct_x7q2",
       "api_key_id": "key_5d0c",
-      "decision_id": "01M50XQ41HE78SQB3727V1HSC6",
+      "decision_id": "01M50Y33HF7QZK1EJ1BSENH332",
       "action": "allow",
-      "latency_us": 0
+      "latency_us": 34
     },
     {
       "seq": 19,
@@ -1001,9 +1001,9 @@
       "type": "send",
       "account_id": "acct_x7q2",
       "api_key_id": "key_5d0c",
-      "decision_id": "01M50XQ41HE78SQB3727V1HSC8",
+      "decision_id": "01M50Y33HF7QZK1EJ1BSENH334",
       "action": "allow",
-      "latency_us": 0
+      "latency_us": 35
     },
     {
       "seq": 20,
@@ -1011,9 +1011,9 @@
       "type": "send",
       "account_id": "acct_x7q2",
       "api_key_id": "key_5d0c",
-      "decision_id": "01M50XQ41HE78SQB3727V1HSCA",
+      "decision_id": "01M50Y33HF7QZK1EJ1BSENH336",
       "action": "allow",
-      "latency_us": 0
+      "latency_us": 26
     },
     {
       "seq": 21,
@@ -1021,9 +1021,9 @@
       "type": "send",
       "account_id": "acct_x7q2",
       "api_key_id": "key_5d0c",
-      "decision_id": "01M50XQ41HE78SQB3727V1HSCC",
+      "decision_id": "01M50Y33HG9YGK2HZ1RVKPAS0B",
       "action": "allow",
-      "latency_us": 0
+      "latency_us": 29
     },
     {
       "seq": 22,
@@ -1031,9 +1031,9 @@
       "type": "send",
       "account_id": "acct_x7q2",
       "api_key_id": "key_5d0c",
-      "decision_id": "01M50XQ41HE78SQB3727V1HSCE",
+      "decision_id": "01M50Y33HG9YGK2HZ1RVKPAS0D",
       "action": "allow",
-      "latency_us": 0
+      "latency_us": 27
     },
     {
       "seq": 23,
@@ -1041,9 +1041,9 @@
       "type": "send",
       "account_id": "acct_x7q2",
       "api_key_id": "key_5d0c",
-      "decision_id": "01M50XQ41HE78SQB3727V1HSCG",
+      "decision_id": "01M50Y33HG9YGK2HZ1RVKPAS0F",
       "action": "allow",
-      "latency_us": 0
+      "latency_us": 49
     },
     {
       "seq": 24,
@@ -1051,9 +1051,9 @@
       "type": "send",
       "account_id": "acct_x7q2",
       "api_key_id": "key_5d0c",
-      "decision_id": "01M50XQ41J2KG9EY6ZGVQAXZVS",
+      "decision_id": "01M50Y33HG9YGK2HZ1RVKPAS0H",
       "action": "allow",
-      "latency_us": 0
+      "latency_us": 28
     },
     {
       "seq": 25,
@@ -1061,9 +1061,9 @@
       "type": "send",
       "account_id": "acct_x7q2",
       "api_key_id": "key_5d0c",
-      "decision_id": "01M50XQ41J2KG9EY6ZGVQAXZVV",
+      "decision_id": "01M50Y33HG9YGK2HZ1RVKPAS0K",
       "action": "allow",
-      "latency_us": 0
+      "latency_us": 25
     },
     {
       "seq": 26,
@@ -1071,9 +1071,9 @@
       "type": "send",
       "account_id": "acct_x7q2",
       "api_key_id": "key_5d0c",
-      "decision_id": "01M50XQ41J2KG9EY6ZGVQAXZVX",
+      "decision_id": "01M50Y33HH43WFTCBNB3DJ1R0D",
       "action": "allow",
-      "latency_us": 0
+      "latency_us": 81
     },
     {
       "seq": 27,
@@ -1081,9 +1081,9 @@
       "type": "send",
       "account_id": "acct_x7q2",
       "api_key_id": "key_5d0c",
-      "decision_id": "01M50XQ41J2KG9EY6ZGVQAXZVZ",
+      "decision_id": "01M50Y33HH43WFTCBNB3DJ1R0F",
       "action": "allow",
-      "latency_us": 499
+      "latency_us": 32
     },
     {
       "seq": 28,
@@ -1091,9 +1091,9 @@
       "type": "send",
       "account_id": "acct_x7q2",
       "api_key_id": "key_5d0c",
-      "decision_id": "01M50XQ41J2KG9EY6ZGVQAXZW1",
+      "decision_id": "01M50Y33HH43WFTCBNB3DJ1R0H",
       "action": "allow",
-      "latency_us": 0
+      "latency_us": 39
     },
     {
       "seq": 29,
@@ -1101,9 +1101,9 @@
       "type": "send",
       "account_id": "acct_x7q2",
       "api_key_id": "key_5d0c",
-      "decision_id": "01M50XQ41J2KG9EY6ZGVQAXZW3",
+      "decision_id": "01M50Y33HH43WFTCBNB3DJ1R0K",
       "action": "allow",
-      "latency_us": 0
+      "latency_us": 34
     },
     {
       "seq": 30,
@@ -1111,9 +1111,9 @@
       "type": "send",
       "account_id": "acct_x7q2",
       "api_key_id": "key_5d0c",
-      "decision_id": "01M50XQ41J2KG9EY6ZGVQAXZW5",
+      "decision_id": "01M50Y33HH43WFTCBNB3DJ1R0N",
       "action": "allow",
-      "latency_us": 0
+      "latency_us": 28
     },
     {
       "seq": 31,
@@ -1121,9 +1121,9 @@
       "type": "send",
       "account_id": "acct_x7q2",
       "api_key_id": "key_5d0c",
-      "decision_id": "01M50XQ41K4487RZ0M4VKW8TPH",
+      "decision_id": "01M50Y33HJSXVPRTACXBDX66QX",
       "action": "allow",
-      "latency_us": 0
+      "latency_us": 41
     },
     {
       "seq": 32,
@@ -1131,9 +1131,9 @@
       "type": "send",
       "account_id": "acct_x7q2",
       "api_key_id": "key_5d0c",
-      "decision_id": "01M50XQ41K4487RZ0M4VKW8TPK",
+      "decision_id": "01M50Y33HJSXVPRTACXBDX66QZ",
       "action": "allow",
-      "latency_us": 0
+      "latency_us": 31
     },
     {
       "seq": 33,
@@ -1141,9 +1141,9 @@
       "type": "send",
       "account_id": "acct_x7q2",
       "api_key_id": "key_5d0c",
-      "decision_id": "01M50XQ41K4487RZ0M4VKW8TPN",
+      "decision_id": "01M50Y33HJSXVPRTACXBDX66R1",
       "action": "allow",
-      "latency_us": 0
+      "latency_us": 29
     },
     {
       "seq": 34,
@@ -1151,9 +1151,9 @@
       "type": "send",
       "account_id": "acct_x7q2",
       "api_key_id": "key_5d0c",
-      "decision_id": "01M50XQ41K4487RZ0M4VKW8TPQ",
+      "decision_id": "01M50Y33HJSXVPRTACXBDX66R3",
       "action": "allow",
-      "latency_us": 0
+      "latency_us": 28
     },
     {
       "seq": 35,
@@ -1161,9 +1161,9 @@
       "type": "send",
       "account_id": "acct_x7q2",
       "api_key_id": "key_5d0c",
-      "decision_id": "01M50XQ41K4487RZ0M4VKW8TPS",
+      "decision_id": "01M50Y33HJSXVPRTACXBDX66R5",
       "action": "allow",
-      "latency_us": 0
+      "latency_us": 53
     },
     {
       "seq": 36,
@@ -1171,9 +1171,9 @@
       "type": "send",
       "account_id": "acct_x7q2",
       "api_key_id": "key_5d0c",
-      "decision_id": "01M50XQ41MBRBC43YBE8P4VF3P",
+      "decision_id": "01M50Y33HKYAY0RZ6W18HK2135",
       "action": "allow",
-      "latency_us": 0
+      "latency_us": 33
     },
     {
       "seq": 37,
@@ -1181,9 +1181,9 @@
       "type": "send",
       "account_id": "acct_x7q2",
       "api_key_id": "key_5d0c",
-      "decision_id": "01M50XQ41MBRBC43YBE8P4VF3R",
+      "decision_id": "01M50Y33HKYAY0RZ6W18HK2137",
       "action": "allow",
-      "latency_us": 0
+      "latency_us": 32
     },
     {
       "seq": 38,
@@ -1191,9 +1191,9 @@
       "type": "send",
       "account_id": "acct_x7q2",
       "api_key_id": "key_5d0c",
-      "decision_id": "01M50XQ41MBRBC43YBE8P4VF3T",
+      "decision_id": "01M50Y33HKYAY0RZ6W18HK2139",
       "action": "allow",
-      "latency_us": 0
+      "latency_us": 39
     },
     {
       "seq": 39,
@@ -1201,9 +1201,9 @@
       "type": "send",
       "account_id": "acct_x7q2",
       "api_key_id": "key_5d0c",
-      "decision_id": "01M50XQ41MBRBC43YBE8P4VF3W",
+      "decision_id": "01M50Y33HKYAY0RZ6W18HK213B",
       "action": "allow",
-      "latency_us": 499
+      "latency_us": 31
     },
     {
       "seq": 40,
@@ -1211,9 +1211,9 @@
       "type": "send",
       "account_id": "acct_x7q2",
       "api_key_id": "key_5d0c",
-      "decision_id": "01M50XQ41MBRBC43YBE8P4VF3Y",
+      "decision_id": "01M50Y33HKYAY0RZ6W18HK213D",
       "action": "allow",
-      "latency_us": 0
+      "latency_us": 28
     },
     {
       "seq": 41,
@@ -1221,9 +1221,9 @@
       "type": "send",
       "account_id": "acct_x7q2",
       "api_key_id": "key_5d0c",
-      "decision_id": "01M50XQ41MBRBC43YBE8P4VF40",
+      "decision_id": "01M50Y33HM22TW10EQANH1MA1P",
       "action": "allow",
-      "latency_us": 0
+      "latency_us": 34
     },
     {
       "seq": 42,
@@ -1231,9 +1231,9 @@
       "type": "send",
       "account_id": "acct_x7q2",
       "api_key_id": "key_5d0c",
-      "decision_id": "01M50XQ41MBRBC43YBE8P4VF42",
+      "decision_id": "01M50Y33HM22TW10EQANH1MA1R",
       "action": "allow",
-      "latency_us": 0
+      "latency_us": 36
     },
     {
       "seq": 43,
@@ -1241,9 +1241,9 @@
       "type": "send",
       "account_id": "acct_x7q2",
       "api_key_id": "key_5d0c",
-      "decision_id": "01M50XQ41NKQP8THXC1HRZK83R",
+      "decision_id": "01M50Y33HM22TW10EQANH1MA1T",
       "action": "allow",
-      "latency_us": 0
+      "latency_us": 63
     },
     {
       "seq": 44,
@@ -1251,9 +1251,9 @@
       "type": "send",
       "account_id": "acct_x7q2",
       "api_key_id": "key_5d0c",
-      "decision_id": "01M50XQ41NKQP8THXC1HRZK83T",
+      "decision_id": "01M50Y33HM22TW10EQANH1MA1W",
       "action": "allow",
-      "latency_us": 0
+      "latency_us": 27
     },
     {
       "seq": 45,
@@ -1261,9 +1261,9 @@
       "type": "send",
       "account_id": "acct_x7q2",
       "api_key_id": "key_5d0c",
-      "decision_id": "01M50XQ41NKQP8THXC1HRZK83W",
+      "decision_id": "01M50Y33HM22TW10EQANH1MA1Y",
       "action": "allow",
-      "latency_us": 0
+      "latency_us": 24
     },
     {
       "seq": 46,
@@ -1271,9 +1271,9 @@
       "type": "send",
       "account_id": "acct_x7q2",
       "api_key_id": "key_5d0c",
-      "decision_id": "01M50XQ41NKQP8THXC1HRZK83Y",
+      "decision_id": "01M50Y33HNA1A6J1NCWJTY0P1Z",
       "action": "allow",
-      "latency_us": 0
+      "latency_us": 49
     },
     {
       "seq": 47,
@@ -1281,9 +1281,9 @@
       "type": "send",
       "account_id": "acct_x7q2",
       "api_key_id": "key_5d0c",
-      "decision_id": "01M50XQ41NKQP8THXC1HRZK840",
+      "decision_id": "01M50Y33HNA1A6J1NCWJTY0P21",
       "action": "allow",
-      "latency_us": 0
+      "latency_us": 34
     },
     {
       "seq": 48,
@@ -1291,9 +1291,9 @@
       "type": "send",
       "account_id": "acct_x7q2",
       "api_key_id": "key_5d0c",
-      "decision_id": "01M50XQ41NKQP8THXC1HRZK842",
+      "decision_id": "01M50Y33HNA1A6J1NCWJTY0P23",
       "action": "allow",
-      "latency_us": 0
+      "latency_us": 30
     },
     {
       "seq": 49,
@@ -1301,9 +1301,9 @@
       "type": "send",
       "account_id": "acct_x7q2",
       "api_key_id": "key_5d0c",
-      "decision_id": "01M50XQ41NKQP8THXC1HRZK844",
+      "decision_id": "01M50Y33HNA1A6J1NCWJTY0P25",
       "action": "allow",
-      "latency_us": 499
+      "latency_us": 35
     },
     {
       "seq": 50,
@@ -1311,9 +1311,9 @@
       "type": "send",
       "account_id": "acct_x7q2",
       "api_key_id": "key_5d0c",
-      "decision_id": "01M50XQ41PZ6X5F9EY9W817ZS1",
+      "decision_id": "01M50Y33HPYYHDRD19DX1VJT4W",
       "action": "allow",
-      "latency_us": 0
+      "latency_us": 34
     },
     {
       "seq": 51,
@@ -1321,9 +1321,9 @@
       "type": "send",
       "account_id": "acct_x7q2",
       "api_key_id": "key_5d0c",
-      "decision_id": "01M50XQ41PZ6X5F9EY9W817ZS3",
+      "decision_id": "01M50Y33HPYYHDRD19DX1VJT4Y",
       "action": "allow",
-      "latency_us": 0
+      "latency_us": 32
     },
     {
       "seq": 52,
@@ -1331,9 +1331,9 @@
       "type": "send",
       "account_id": "acct_x7q2",
       "api_key_id": "key_5d0c",
-      "decision_id": "01M50XQ41PZ6X5F9EY9W817ZS5",
+      "decision_id": "01M50Y33HPYYHDRD19DX1VJT50",
       "action": "allow",
-      "latency_us": 0
+      "latency_us": 30
     },
     {
       "seq": 53,
@@ -1341,9 +1341,9 @@
       "type": "send",
       "account_id": "acct_x7q2",
       "api_key_id": "key_5d0c",
-      "decision_id": "01M50XQ41PZ6X5F9EY9W817ZS7",
+      "decision_id": "01M50Y33HPYYHDRD19DX1VJT52",
       "action": "allow",
-      "latency_us": 0
+      "latency_us": 33
     },
     {
       "seq": 54,
@@ -1351,9 +1351,9 @@
       "type": "send",
       "account_id": "acct_x7q2",
       "api_key_id": "key_5d0c",
-      "decision_id": "01M50XQ41PZ6X5F9EY9W817ZS9",
+      "decision_id": "01M50Y33HPYYHDRD19DX1VJT54",
       "action": "allow",
-      "latency_us": 0
+      "latency_us": 26
     },
     {
       "seq": 55,
@@ -1361,9 +1361,9 @@
       "type": "send",
       "account_id": "acct_x7q2",
       "api_key_id": "key_5d0c",
-      "decision_id": "01M50XQ41PZ6X5F9EY9W817ZSB",
+      "decision_id": "01M50Y33HPYYHDRD19DX1VJT56",
       "action": "allow",
-      "latency_us": 0
+      "latency_us": 29
     },
     {
       "seq": 56,
@@ -1371,9 +1371,9 @@
       "type": "send",
       "account_id": "acct_x7q2",
       "api_key_id": "key_5d0c",
-      "decision_id": "01M50XQ41PZ6X5F9EY9W817ZSD",
+      "decision_id": "01M50Y33HQP28K7HE1BN66GQ9P",
       "action": "allow",
-      "latency_us": 499
+      "latency_us": 34
     },
     {
       "seq": 57,
@@ -1381,9 +1381,9 @@
       "type": "send",
       "account_id": "acct_x7q2",
       "api_key_id": "key_5d0c",
-      "decision_id": "01M50XQ41Q37ZF9TT63RDKKSTS",
+      "decision_id": "01M50Y33HQP28K7HE1BN66GQ9R",
       "action": "allow",
-      "latency_us": 0
+      "latency_us": 27
     },
     {
       "seq": 58,
@@ -1391,9 +1391,9 @@
       "type": "send",
       "account_id": "acct_x7q2",
       "api_key_id": "key_5d0c",
-      "decision_id": "01M50XQ41Q37ZF9TT63RDKKSTV",
+      "decision_id": "01M50Y33HQP28K7HE1BN66GQ9T",
       "action": "allow",
-      "latency_us": 0
+      "latency_us": 89
     },
     {
       "seq": 59,
@@ -1401,9 +1401,9 @@
       "type": "send",
       "account_id": "acct_x7q2",
       "api_key_id": "key_5d0c",
-      "decision_id": "01M50XQ41Q37ZF9TT63RDKKSTX",
+      "decision_id": "01M50Y33HQP28K7HE1BN66GQ9W",
       "action": "allow",
-      "latency_us": 0
+      "latency_us": 33
     },
     {
       "seq": 60,
@@ -1411,9 +1411,9 @@
       "type": "send",
       "account_id": "acct_x7q2",
       "api_key_id": "key_5d0c",
-      "decision_id": "01M50XQ41Q37ZF9TT63RDKKSTZ",
+      "decision_id": "01M50Y33HQP28K7HE1BN66GQ9Y",
       "action": "allow",
-      "latency_us": 0
+      "latency_us": 32
     },
     {
       "seq": 61,
@@ -1421,9 +1421,9 @@
       "type": "send",
       "account_id": "acct_x7q2",
       "api_key_id": "key_5d0c",
-      "decision_id": "01M50XQ41Q37ZF9TT63RDKKSV1",
+      "decision_id": "01M50Y33HR6XJ257YJTV0M6E4G",
       "action": "allow",
-      "latency_us": 0
+      "latency_us": 37
     },
     {
       "seq": 62,
@@ -1431,9 +1431,9 @@
       "type": "send",
       "account_id": "acct_x7q2",
       "api_key_id": "key_5d0c",
-      "decision_id": "01M50XQ41Q37ZF9TT63RDKKSV3",
+      "decision_id": "01M50Y33HR6XJ257YJTV0M6E4J",
       "action": "allow",
-      "latency_us": 0
+      "latency_us": 25
     },
     {
       "seq": 63,
@@ -1441,9 +1441,9 @@
       "type": "send",
       "account_id": "acct_x7q2",
       "api_key_id": "key_5d0c",
-      "decision_id": "01M50XQ41Q37ZF9TT63RDKKSV5",
+      "decision_id": "01M50Y33HSEZBFCK3PWCKD31KZ",
       "action": "allow",
-      "latency_us": 500
+      "latency_us": 30
     },
     {
       "seq": 64,
@@ -1451,9 +1451,9 @@
       "type": "send",
       "account_id": "acct_x7q2",
       "api_key_id": "key_5d0c",
-      "decision_id": "01M50XQ41RS4NJCC3XWRGMKCRR",
+      "decision_id": "01M50Y33HSEZBFCK3PWCKD31M1",
       "action": "allow",
-      "latency_us": 0
+      "latency_us": 30
     },
     {
       "seq": 65,
@@ -1461,9 +1461,9 @@
       "type": "send",
       "account_id": "acct_x7q2",
       "api_key_id": "key_5d0c",
-      "decision_id": "01M50XQ41RS4NJCC3XWRGMKCRT",
+      "decision_id": "01M50Y33HSEZBFCK3PWCKD31M3",
       "action": "allow",
-      "latency_us": 0
+      "latency_us": 30
     },
     {
       "seq": 66,
@@ -1471,9 +1471,9 @@
       "type": "send",
       "account_id": "acct_x7q2",
       "api_key_id": "key_5d0c",
-      "decision_id": "01M50XQ41RS4NJCC3XWRGMKCRW",
+      "decision_id": "01M50Y33HSEZBFCK3PWCKD31M5",
       "action": "allow",
-      "latency_us": 0
+      "latency_us": 38
     },
     {
       "seq": 67,
@@ -1481,9 +1481,9 @@
       "type": "send",
       "account_id": "acct_x7q2",
       "api_key_id": "key_5d0c",
-      "decision_id": "01M50XQ41RS4NJCC3XWRGMKCRY",
+      "decision_id": "01M50Y33HSEZBFCK3PWCKD31M7",
       "action": "allow",
-      "latency_us": 499
+      "latency_us": 34
     },
     {
       "seq": 68,
@@ -1491,9 +1491,9 @@
       "type": "send",
       "account_id": "acct_x7q2",
       "api_key_id": "key_5d0c",
-      "decision_id": "01M50XQ41RS4NJCC3XWRGMKCS0",
+      "decision_id": "01M50Y33HSEZBFCK3PWCKD31M9",
       "action": "allow",
-      "latency_us": 0
+      "latency_us": 25
     },
     {
       "seq": 69,
@@ -1501,9 +1501,9 @@
       "type": "send",
       "account_id": "acct_x7q2",
       "api_key_id": "key_5d0c",
-      "decision_id": "01M50XQ41RS4NJCC3XWRGMKCS2",
+      "decision_id": "01M50Y33HTT74GKKQRP293KDG1",
       "action": "allow",
-      "latency_us": 0
+      "latency_us": 31
     },
     {
       "seq": 70,
@@ -1511,9 +1511,9 @@
       "type": "send",
       "account_id": "acct_x7q2",
       "api_key_id": "key_5d0c",
-      "decision_id": "01M50XQ41RS4NJCC3XWRGMKCS4",
+      "decision_id": "01M50Y33HTT74GKKQRP293KDG3",
       "action": "allow",
-      "latency_us": 0
+      "latency_us": 26
     },
     {
       "seq": 71,
@@ -1521,9 +1521,9 @@
       "type": "send",
       "account_id": "acct_x7q2",
       "api_key_id": "key_5d0c",
-      "decision_id": "01M50XQ41RS4NJCC3XWRGMKCS6",
+      "decision_id": "01M50Y33HTT74GKKQRP293KDG5",
       "action": "allow",
-      "latency_us": 501
+      "latency_us": 61
     },
     {
       "seq": 72,
@@ -1531,9 +1531,9 @@
       "type": "send",
       "account_id": "acct_x7q2",
       "api_key_id": "key_5d0c",
-      "decision_id": "01M50XQ41S4MB5HFKFV90CESS2",
+      "decision_id": "01M50Y33HTT74GKKQRP293KDG7",
       "action": "allow",
-      "latency_us": 0
+      "latency_us": 36
     },
     {
       "seq": 73,
@@ -1541,9 +1541,9 @@
       "type": "send",
       "account_id": "acct_x7q2",
       "api_key_id": "key_5d0c",
-      "decision_id": "01M50XQ41S4MB5HFKFV90CESS4",
+      "decision_id": "01M50Y33HV2XH80S6V8MJAV203",
       "action": "allow",
-      "latency_us": 0
+      "latency_us": 29
     },
     {
       "seq": 74,
@@ -1551,9 +1551,9 @@
       "type": "send",
       "account_id": "acct_x7q2",
       "api_key_id": "key_5d0c",
-      "decision_id": "01M50XQ41S4MB5HFKFV90CESS6",
+      "decision_id": "01M50Y33HV2XH80S6V8MJAV205",
       "action": "allow",
-      "latency_us": 499
+      "latency_us": 26
     },
     {
       "seq": 75,
@@ -1561,9 +1561,9 @@
       "type": "send",
       "account_id": "acct_x7q2",
       "api_key_id": "key_5d0c",
-      "decision_id": "01M50XQ41S4MB5HFKFV90CESS8",
+      "decision_id": "01M50Y33HV2XH80S6V8MJAV207",
       "action": "allow",
-      "latency_us": 0
+      "latency_us": 31
     },
     {
       "seq": 76,
@@ -1571,9 +1571,9 @@
       "type": "send",
       "account_id": "acct_x7q2",
       "api_key_id": "key_5d0c",
-      "decision_id": "01M50XQ41S4MB5HFKFV90CESSA",
+      "decision_id": "01M50Y33HV2XH80S6V8MJAV209",
       "action": "allow",
-      "latency_us": 0
+      "latency_us": 28
     },
     {
       "seq": 77,
@@ -1581,9 +1581,9 @@
       "type": "send",
       "account_id": "acct_x7q2",
       "api_key_id": "key_5d0c",
-      "decision_id": "01M50XQ41S4MB5HFKFV90CESSC",
+      "decision_id": "01M50Y33HV2XH80S6V8MJAV20B",
       "action": "allow",
-      "latency_us": 0
+      "latency_us": 90
     },
     {
       "seq": 78,
@@ -1591,9 +1591,9 @@
       "type": "send",
       "account_id": "acct_x7q2",
       "api_key_id": "key_5d0c",
-      "decision_id": "01M50XQ41TWG4R3ZK18NS05YQT",
+      "decision_id": "01M50Y33HW9N6XVYBFVC8BZ00F",
       "action": "allow",
-      "latency_us": 0
+      "latency_us": 29
     },
     {
       "seq": 79,
@@ -1601,9 +1601,9 @@
       "type": "send",
       "account_id": "acct_x7q2",
       "api_key_id": "key_5d0c",
-      "decision_id": "01M50XQ41TWG4R3ZK18NS05YQW",
+      "decision_id": "01M50Y33HW9N6XVYBFVC8BZ00H",
       "action": "allow",
-      "latency_us": 0
+      "latency_us": 26
     },
     {
       "seq": 80,
@@ -1611,9 +1611,9 @@
       "type": "send",
       "account_id": "acct_x7q2",
       "api_key_id": "key_5d0c",
-      "decision_id": "01M50XQ41TWG4R3ZK18NS05YQY",
+      "decision_id": "01M50Y33HW9N6XVYBFVC8BZ00K",
       "action": "allow",
-      "latency_us": 0
+      "latency_us": 35
     },
     {
       "seq": 81,
@@ -1621,9 +1621,9 @@
       "type": "send",
       "account_id": "acct_x7q2",
       "api_key_id": "key_5d0c",
-      "decision_id": "01M50XQ41TWG4R3ZK18NS05YR0",
+      "decision_id": "01M50Y33HW9N6XVYBFVC8BZ00N",
       "action": "allow",
-      "latency_us": 0
+      "latency_us": 32
     },
     {
       "seq": 82,
@@ -1631,9 +1631,9 @@
       "type": "send",
       "account_id": "acct_x7q2",
       "api_key_id": "key_5d0c",
-      "decision_id": "01M50XQ41TWG4R3ZK18NS05YR2",
+      "decision_id": "01M50Y33HW9N6XVYBFVC8BZ00Q",
       "action": "allow",
-      "latency_us": 0
+      "latency_us": 22
     },
     {
       "seq": 83,
@@ -1641,9 +1641,9 @@
       "type": "send",
       "account_id": "acct_x7q2",
       "api_key_id": "key_5d0c",
-      "decision_id": "01M50XQ41TWG4R3ZK18NS05YR4",
+      "decision_id": "01M50Y33HW9N6XVYBFVC8BZ00S",
       "action": "allow",
-      "latency_us": 0
+      "latency_us": 25
     },
     {
       "seq": 84,
@@ -1651,9 +1651,9 @@
       "type": "send",
       "account_id": "acct_x7q2",
       "api_key_id": "key_5d0c",
-      "decision_id": "01M50XQ41TWG4R3ZK18NS05YR6",
+      "decision_id": "01M50Y33HXJCPBZH63BAJV0N16",
       "action": "allow",
-      "latency_us": 0
+      "latency_us": 24
     },
     {
       "seq": 85,
@@ -1661,9 +1661,9 @@
       "type": "send",
       "account_id": "acct_x7q2",
       "api_key_id": "key_5d0c",
-      "decision_id": "01M50XQ41VCE04NPSTD08K02KE",
+      "decision_id": "01M50Y33HXJCPBZH63BAJV0N18",
       "action": "allow",
-      "latency_us": 0
+      "latency_us": 24
     },
     {
       "seq": 86,
@@ -1671,9 +1671,9 @@
       "type": "send",
       "account_id": "acct_x7q2",
       "api_key_id": "key_5d0c",
-      "decision_id": "01M50XQ41VCE04NPSTD08K02KG",
+      "decision_id": "01M50Y33HXJCPBZH63BAJV0N1A",
       "action": "allow",
-      "latency_us": 0
+      "latency_us": 23
     },
     {
       "seq": 87,
@@ -1681,9 +1681,9 @@
       "type": "send",
       "account_id": "acct_x7q2",
       "api_key_id": "key_5d0c",
-      "decision_id": "01M50XQ41VCE04NPSTD08K02KJ",
+      "decision_id": "01M50Y33HXJCPBZH63BAJV0N1C",
       "action": "allow",
-      "latency_us": 0
+      "latency_us": 26
     },
     {
       "seq": 88,
@@ -1691,9 +1691,9 @@
       "type": "send",
       "account_id": "acct_x7q2",
       "api_key_id": "key_5d0c",
-      "decision_id": "01M50XQ41VCE04NPSTD08K02KM",
+      "decision_id": "01M50Y33HXJCPBZH63BAJV0N1E",
       "action": "allow",
-      "latency_us": 0
+      "latency_us": 26
     },
     {
       "seq": 89,
@@ -1701,9 +1701,9 @@
       "type": "send",
       "account_id": "acct_x7q2",
       "api_key_id": "key_5d0c",
-      "decision_id": "01M50XQ41VCE04NPSTD08K02KP",
+      "decision_id": "01M50Y33HXJCPBZH63BAJV0N1G",
       "action": "allow",
-      "latency_us": 0
+      "latency_us": 22
     },
     {
       "seq": 90,
@@ -1711,9 +1711,9 @@
       "type": "send",
       "account_id": "acct_x7q2",
       "api_key_id": "key_5d0c",
-      "decision_id": "01M50XQ41WCVC9M2CHXWM8VFXW",
+      "decision_id": "01M50Y33HYQF4SMT4P0WC3J38X",
       "action": "allow",
-      "latency_us": 0
+      "latency_us": 24
     },
     {
       "seq": 91,
@@ -1721,9 +1721,9 @@
       "type": "send",
       "account_id": "acct_x7q2",
       "api_key_id": "key_5d0c",
-      "decision_id": "01M50XQ41WCVC9M2CHXWM8VFXY",
+      "decision_id": "01M50Y33HYQF4SMT4P0WC3J38Z",
       "action": "allow",
-      "latency_us": 0
+      "latency_us": 25
     },
     {
       "seq": 92,
@@ -1731,9 +1731,9 @@
       "type": "send",
       "account_id": "acct_x7q2",
       "api_key_id": "key_5d0c",
-      "decision_id": "01M50XQ41WCVC9M2CHXWM8VFY0",
+      "decision_id": "01M50Y33HYQF4SMT4P0WC3J391",
       "action": "allow",
-      "latency_us": 0
+      "latency_us": 24
     },
     {
       "seq": 93,
@@ -1741,9 +1741,9 @@
       "type": "send",
       "account_id": "acct_x7q2",
       "api_key_id": "key_5d0c",
-      "decision_id": "01M50XQ41WCVC9M2CHXWM8VFY2",
+      "decision_id": "01M50Y33HYQF4SMT4P0WC3J393",
       "action": "allow",
-      "latency_us": 0
+      "latency_us": 29
     },
     {
       "seq": 94,
@@ -1751,9 +1751,9 @@
       "type": "send",
       "account_id": "acct_x7q2",
       "api_key_id": "key_5d0c",
-      "decision_id": "01M50XQ41WCVC9M2CHXWM8VFY4",
+      "decision_id": "01M50Y33HYQF4SMT4P0WC3J395",
       "action": "allow",
-      "latency_us": 0
+      "latency_us": 28
     },
     {
       "seq": 95,
@@ -1761,9 +1761,9 @@
       "type": "send",
       "account_id": "acct_x7q2",
       "api_key_id": "key_5d0c",
-      "decision_id": "01M50XQ41XTPNS89G29S2YK95K",
+      "decision_id": "01M50Y33HYQF4SMT4P0WC3J397",
       "action": "allow",
-      "latency_us": 0
+      "latency_us": 26
     },
     {
       "seq": 96,
@@ -1771,9 +1771,9 @@
       "type": "send",
       "account_id": "acct_x7q2",
       "api_key_id": "key_5d0c",
-      "decision_id": "01M50XQ41XTPNS89G29S2YK95N",
+      "decision_id": "01M50Y33HZRZEJSHF7JZRH5JBN",
       "action": "allow",
-      "latency_us": 0
+      "latency_us": 27
     },
     {
       "seq": 97,
@@ -1781,9 +1781,9 @@
       "type": "send",
       "account_id": "acct_x7q2",
       "api_key_id": "key_5d0c",
-      "decision_id": "01M50XQ41XTPNS89G29S2YK95Q",
+      "decision_id": "01M50Y33HZRZEJSHF7JZRH5JBQ",
       "action": "allow",
-      "latency_us": 0
+      "latency_us": 31
     },
     {
       "seq": 98,
@@ -1791,9 +1791,9 @@
       "type": "send",
       "account_id": "acct_x7q2",
       "api_key_id": "key_5d0c",
-      "decision_id": "01M50XQ41XTPNS89G29S2YK95S",
+      "decision_id": "01M50Y33HZRZEJSHF7JZRH5JBS",
       "action": "allow",
-      "latency_us": 0
+      "latency_us": 29
     },
     {
       "seq": 99,
@@ -1801,9 +1801,9 @@
       "type": "send",
       "account_id": "acct_x7q2",
       "api_key_id": "key_5d0c",
-      "decision_id": "01M50XQ41XTPNS89G29S2YK95V",
+      "decision_id": "01M50Y33HZRZEJSHF7JZRH5JBV",
       "action": "allow",
-      "latency_us": 0
+      "latency_us": 26
     },
     {
       "seq": 100,
@@ -1811,9 +1811,9 @@
       "type": "send",
       "account_id": "acct_x7q2",
       "api_key_id": "key_5d0c",
-      "decision_id": "01M50XQ41XTPNS89G29S2YK95X",
+      "decision_id": "01M50Y33HZRZEJSHF7JZRH5JBX",
       "action": "allow",
-      "latency_us": 0
+      "latency_us": 31
     },
     {
       "seq": 101,
@@ -1821,9 +1821,9 @@
       "type": "send",
       "account_id": "acct_x7q2",
       "api_key_id": "key_5d0c",
-      "decision_id": "01M50XQ41Y6AH039M7ZVTWT056",
+      "decision_id": "01M50Y33HZRZEJSHF7JZRH5JBZ",
       "action": "allow",
-      "latency_us": 0
+      "latency_us": 35
     },
     {
       "seq": 102,
@@ -1831,9 +1831,9 @@
       "type": "send",
       "account_id": "acct_x7q2",
       "api_key_id": "key_5d0c",
-      "decision_id": "01M50XQ41Y6AH039M7ZVTWT058",
+      "decision_id": "01M50Y33J0FB5TX6DNMX4FMF3S",
       "action": "allow",
-      "latency_us": 0
+      "latency_us": 29
     },
     {
       "seq": 103,
@@ -1841,9 +1841,9 @@
       "type": "send",
       "account_id": "acct_x7q2",
       "api_key_id": "key_5d0c",
-      "decision_id": "01M50XQ41Y6AH039M7ZVTWT05A",
+      "decision_id": "01M50Y33J0FB5TX6DNMX4FMF3V",
       "action": "allow",
-      "latency_us": 0
+      "latency_us": 29
     },
     {
       "seq": 104,
@@ -1851,9 +1851,9 @@
       "type": "send",
       "account_id": "acct_x7q2",
       "api_key_id": "key_5d0c",
-      "decision_id": "01M50XQ41Y6AH039M7ZVTWT05C",
+      "decision_id": "01M50Y33J0FB5TX6DNMX4FMF3X",
       "action": "allow",
-      "latency_us": 0
+      "latency_us": 28
     },
     {
       "seq": 105,
@@ -1861,9 +1861,9 @@
       "type": "send",
       "account_id": "acct_x7q2",
       "api_key_id": "key_5d0c",
-      "decision_id": "01M50XQ41Y6AH039M7ZVTWT05E",
+      "decision_id": "01M50Y33J0FB5TX6DNMX4FMF3Z",
       "action": "allow",
-      "latency_us": 0
+      "latency_us": 50
     },
     {
       "seq": 106,
@@ -1871,9 +1871,9 @@
       "type": "send",
       "account_id": "acct_x7q2",
       "api_key_id": "key_5d0c",
-      "decision_id": "01M50XQ41Y6AH039M7ZVTWT05G",
+      "decision_id": "01M50Y33J0FB5TX6DNMX4FMF41",
       "action": "allow",
-      "latency_us": 0
+      "latency_us": 64
     },
     {
       "seq": 107,
@@ -1881,9 +1881,9 @@
       "type": "send",
       "account_id": "acct_x7q2",
       "api_key_id": "key_5d0c",
-      "decision_id": "01M50XQ41Z2F9BSXR2HDTNJAEP",
+      "decision_id": "01M50Y33J1CH8094ECXQJJ9EP8",
       "action": "allow",
-      "latency_us": 0
+      "latency_us": 30
     },
     {
       "seq": 108,
@@ -1891,9 +1891,9 @@
       "type": "send",
       "account_id": "acct_x7q2",
       "api_key_id": "key_5d0c",
-      "decision_id": "01M50XQ41Z2F9BSXR2HDTNJAER",
+      "decision_id": "01M50Y33J1CH8094ECXQJJ9EPA",
       "action": "allow",
-      "latency_us": 0
+      "latency_us": 29
     },
     {
       "seq": 109,
@@ -1901,9 +1901,9 @@
       "type": "send",
       "account_id": "acct_x7q2",
       "api_key_id": "key_5d0c",
-      "decision_id": "01M50XQ41Z2F9BSXR2HDTNJAET",
+      "decision_id": "01M50Y33J1CH8094ECXQJJ9EPC",
       "action": "allow",
-      "latency_us": 0
+      "latency_us": 29
     },
     {
       "seq": 110,
@@ -1911,9 +1911,9 @@
       "type": "send",
       "account_id": "acct_x7q2",
       "api_key_id": "key_5d0c",
-      "decision_id": "01M50XQ41Z2F9BSXR2HDTNJAEW",
+      "decision_id": "01M50Y33J1CH8094ECXQJJ9EPE",
       "action": "allow",
-      "latency_us": 0
+      "latency_us": 25
     },
     {
       "seq": 111,
@@ -1921,9 +1921,9 @@
       "type": "send",
       "account_id": "acct_x7q2",
       "api_key_id": "key_5d0c",
-      "decision_id": "01M50XQ41Z2F9BSXR2HDTNJAEY",
+      "decision_id": "01M50Y33J1CH8094ECXQJJ9EPG",
       "action": "allow",
-      "latency_us": 0
+      "latency_us": 25
     },
     {
       "seq": 112,
@@ -1931,9 +1931,9 @@
       "type": "send",
       "account_id": "acct_x7q2",
       "api_key_id": "key_5d0c",
-      "decision_id": "01M50XQ41Z2F9BSXR2HDTNJAF0",
+      "decision_id": "01M50Y33J2WSAKJPJ95KYGJB55",
       "action": "allow",
-      "latency_us": 0
+      "latency_us": 57
     },
     {
       "seq": 113,
@@ -1941,9 +1941,9 @@
       "type": "send",
       "account_id": "acct_x7q2",
       "api_key_id": "key_5d0c",
-      "decision_id": "01M50XQ41Z2F9BSXR2HDTNJAF2",
+      "decision_id": "01M50Y33J2WSAKJPJ95KYGJB57",
       "action": "allow",
-      "latency_us": 0
+      "latency_us": 380
     },
     {
       "seq": 114,
@@ -1951,13 +1951,13 @@
       "type": "send",
       "account_id": "acct_x7q2",
       "api_key_id": "key_5d0c",
-      "decision_id": "01M50XQ41Z2F9BSXR2HDTNJAF4",
+      "decision_id": "01M50Y33J3V00DN3VYZ173GMHY",
       "action": "throttle",
       "retry_after": 60,
       "rules": [
         "new-account-burst"
       ],
-      "latency_us": 0
+      "latency_us": 33
     },
     {
       "seq": 115,
@@ -1965,13 +1965,13 @@
       "type": "send",
       "account_id": "acct_x7q2",
       "api_key_id": "key_5d0c",
-      "decision_id": "01M50XQ4204MAYGSWSJ1PXKNHQ",
+      "decision_id": "01M50Y33J3V00DN3VYZ173GMJ0",
       "action": "throttle",
       "retry_after": 60,
       "rules": [
         "new-account-burst"
       ],
-      "latency_us": 0
+      "latency_us": 35
     },
     {
       "seq": 116,
@@ -1979,13 +1979,13 @@
       "type": "send",
       "account_id": "acct_x7q2",
       "api_key_id": "key_5d0c",
-      "decision_id": "01M50XQ4204MAYGSWSJ1PXKNHS",
+      "decision_id": "01M50Y33J3V00DN3VYZ173GMJ2",
       "action": "throttle",
       "retry_after": 60,
       "rules": [
         "new-account-burst"
       ],
-      "latency_us": 0
+      "latency_us": 31
     },
     {
       "seq": 117,
@@ -1993,13 +1993,13 @@
       "type": "send",
       "account_id": "acct_x7q2",
       "api_key_id": "key_5d0c",
-      "decision_id": "01M50XQ4204MAYGSWSJ1PXKNHV",
+      "decision_id": "01M50Y33J3V00DN3VYZ173GMJ4",
       "action": "throttle",
       "retry_after": 60,
       "rules": [
         "new-account-burst"
       ],
-      "latency_us": 0
+      "latency_us": 46
     },
     {
       "seq": 118,
@@ -2007,13 +2007,13 @@
       "type": "send",
       "account_id": "acct_x7q2",
       "api_key_id": "key_5d0c",
-      "decision_id": "01M50XQ4204MAYGSWSJ1PXKNHX",
+      "decision_id": "01M50Y33J3V00DN3VYZ173GMJ6",
       "action": "throttle",
       "retry_after": 60,
       "rules": [
         "new-account-burst"
       ],
-      "latency_us": 0
+      "latency_us": 33
     },
     {
       "seq": 119,
@@ -2021,13 +2021,13 @@
       "type": "send",
       "account_id": "acct_x7q2",
       "api_key_id": "key_5d0c",
-      "decision_id": "01M50XQ4204MAYGSWSJ1PXKNHZ",
+      "decision_id": "01M50Y33J4JF9VGP21619HN4BA",
       "action": "throttle",
       "retry_after": 60,
       "rules": [
         "new-account-burst"
       ],
-      "latency_us": 0
+      "latency_us": 34
     },
     {
       "seq": 120,
@@ -2035,13 +2035,13 @@
       "type": "send",
       "account_id": "acct_x7q2",
       "api_key_id": "key_5d0c",
-      "decision_id": "01M50XQ4204MAYGSWSJ1PXKNJ1",
+      "decision_id": "01M50Y33J4JF9VGP21619HN4BC",
       "action": "throttle",
       "retry_after": 60,
       "rules": [
         "new-account-burst"
       ],
-      "latency_us": 0
+      "latency_us": 34
     },
     {
       "seq": 121,
@@ -2049,13 +2049,13 @@
       "type": "send",
       "account_id": "acct_x7q2",
       "api_key_id": "key_5d0c",
-      "decision_id": "01M50XQ4204MAYGSWSJ1PXKNJ3",
+      "decision_id": "01M50Y33J4JF9VGP21619HN4BE",
       "action": "throttle",
       "retry_after": 60,
       "rules": [
         "new-account-burst"
       ],
-      "latency_us": 0
+      "latency_us": 24
     },
     {
       "seq": 122,
@@ -2063,13 +2063,13 @@
       "type": "send",
       "account_id": "acct_x7q2",
       "api_key_id": "key_5d0c",
-      "decision_id": "01M50XQ421KB7F1DW58S4GB2ZJ",
+      "decision_id": "01M50Y33J4JF9VGP21619HN4BG",
       "action": "throttle",
       "retry_after": 60,
       "rules": [
         "new-account-burst"
       ],
-      "latency_us": 0
+      "latency_us": 41
     },
     {
       "seq": 123,
@@ -2077,13 +2077,13 @@
       "type": "send",
       "account_id": "acct_x7q2",
       "api_key_id": "key_5d0c",
-      "decision_id": "01M50XQ421KB7F1DW58S4GB2ZM",
+      "decision_id": "01M50Y33J5NMF5TBBN1A11G88C",
       "action": "throttle",
       "retry_after": 60,
       "rules": [
         "new-account-burst"
       ],
-      "latency_us": 0
+      "latency_us": 23
     },
     {
       "seq": 124,
@@ -2091,13 +2091,13 @@
       "type": "send",
       "account_id": "acct_x7q2",
       "api_key_id": "key_5d0c",
-      "decision_id": "01M50XQ421KB7F1DW58S4GB2ZP",
+      "decision_id": "01M50Y33J5NMF5TBBN1A11G88E",
       "action": "throttle",
       "retry_after": 60,
       "rules": [
         "new-account-burst"
       ],
-      "latency_us": 0
+      "latency_us": 40
     },
     {
       "seq": 125,
@@ -2105,13 +2105,13 @@
       "type": "send",
       "account_id": "acct_x7q2",
       "api_key_id": "key_5d0c",
-      "decision_id": "01M50XQ421KB7F1DW58S4GB2ZR",
+      "decision_id": "01M50Y33J5NMF5TBBN1A11G88G",
       "action": "throttle",
       "retry_after": 60,
       "rules": [
         "new-account-burst"
       ],
-      "latency_us": 0
+      "latency_us": 35
     },
     {
       "seq": 126,
@@ -2119,13 +2119,13 @@
       "type": "send",
       "account_id": "acct_x7q2",
       "api_key_id": "key_5d0c",
-      "decision_id": "01M50XQ421KB7F1DW58S4GB2ZT",
+      "decision_id": "01M50Y33J5NMF5TBBN1A11G88J",
       "action": "throttle",
       "retry_after": 60,
       "rules": [
         "new-account-burst"
       ],
-      "latency_us": 0
+      "latency_us": 31
     },
     {
       "seq": 127,
@@ -2133,13 +2133,13 @@
       "type": "send",
       "account_id": "acct_x7q2",
       "api_key_id": "key_5d0c",
-      "decision_id": "01M50XQ421KB7F1DW58S4GB2ZW",
+      "decision_id": "01M50Y33J5NMF5TBBN1A11G88M",
       "action": "throttle",
       "retry_after": 60,
       "rules": [
         "new-account-burst"
       ],
-      "latency_us": 498
+      "latency_us": 29
     },
     {
       "seq": 128,
@@ -2147,13 +2147,13 @@
       "type": "send",
       "account_id": "acct_x7q2",
       "api_key_id": "key_5d0c",
-      "decision_id": "01M50XQ422TG3WT9RT330DM0VQ",
+      "decision_id": "01M50Y33J5NMF5TBBN1A11G88P",
       "action": "throttle",
       "retry_after": 60,
       "rules": [
         "new-account-burst"
       ],
-      "latency_us": 0
+      "latency_us": 35
     },
     {
       "seq": 129,
@@ -2161,13 +2161,13 @@
       "type": "send",
       "account_id": "acct_x7q2",
       "api_key_id": "key_5d0c",
-      "decision_id": "01M50XQ422TG3WT9RT330DM0VS",
+      "decision_id": "01M50Y33J6DJZH1B5C5ET7VJGB",
       "action": "throttle",
       "retry_after": 60,
       "rules": [
         "new-account-burst"
       ],
-      "latency_us": 0
+      "latency_us": 31
     },
     {
       "seq": 130,
@@ -2175,13 +2175,13 @@
       "type": "send",
       "account_id": "acct_x7q2",
       "api_key_id": "key_5d0c",
-      "decision_id": "01M50XQ422TG3WT9RT330DM0VV",
+      "decision_id": "01M50Y33J6DJZH1B5C5ET7VJGD",
       "action": "throttle",
       "retry_after": 60,
       "rules": [
         "new-account-burst"
       ],
-      "latency_us": 0
+      "latency_us": 39
     },
     {
       "seq": 131,
@@ -2189,13 +2189,13 @@
       "type": "send",
       "account_id": "acct_x7q2",
       "api_key_id": "key_5d0c",
-      "decision_id": "01M50XQ422TG3WT9RT330DM0VX",
+      "decision_id": "01M50Y33J6DJZH1B5C5ET7VJGF",
       "action": "throttle",
       "retry_after": 60,
       "rules": [
         "new-account-burst"
       ],
-      "latency_us": 0
+      "latency_us": 40
     },
     {
       "seq": 132,
@@ -2203,13 +2203,13 @@
       "type": "send",
       "account_id": "acct_x7q2",
       "api_key_id": "key_5d0c",
-      "decision_id": "01M50XQ422TG3WT9RT330DM0VZ",
+      "decision_id": "01M50Y33J6DJZH1B5C5ET7VJGH",
       "action": "throttle",
       "retry_after": 60,
       "rules": [
         "new-account-burst"
       ],
-      "latency_us": 0
+      "latency_us": 30
     },
     {
       "seq": 133,
@@ -2217,13 +2217,13 @@
       "type": "send",
       "account_id": "acct_x7q2",
       "api_key_id": "key_5d0c",
-      "decision_id": "01M50XQ422TG3WT9RT330DM0W1",
+      "decision_id": "01M50Y33J6DJZH1B5C5ET7VJGK",
       "action": "throttle",
       "retry_after": 60,
       "rules": [
         "new-account-burst"
       ],
-      "latency_us": 0
+      "latency_us": 38
     },
     {
       "seq": 134,
@@ -2231,13 +2231,13 @@
       "type": "send",
       "account_id": "acct_x7q2",
       "api_key_id": "key_5d0c",
-      "decision_id": "01M50XQ423GQ0BANVR3VSY23YB",
+      "decision_id": "01M50Y33J7C5RBV2WEH9Q4M8G6",
       "action": "throttle",
       "retry_after": 60,
       "rules": [
         "new-account-burst"
       ],
-      "latency_us": 0
+      "latency_us": 30
     },
     {
       "seq": 135,
@@ -2245,13 +2245,13 @@
       "type": "send",
       "account_id": "acct_x7q2",
       "api_key_id": "key_5d0c",
-      "decision_id": "01M50XQ423GQ0BANVR3VSY23YD",
+      "decision_id": "01M50Y33J7C5RBV2WEH9Q4M8G8",
       "action": "throttle",
       "retry_after": 60,
       "rules": [
         "new-account-burst"
       ],
-      "latency_us": 0
+      "latency_us": 30
     },
     {
       "seq": 136,
@@ -2259,13 +2259,13 @@
       "type": "send",
       "account_id": "acct_x7q2",
       "api_key_id": "key_5d0c",
-      "decision_id": "01M50XQ423GQ0BANVR3VSY23YF",
+      "decision_id": "01M50Y33J7C5RBV2WEH9Q4M8GA",
       "action": "throttle",
       "retry_after": 60,
       "rules": [
         "new-account-burst"
       ],
-      "latency_us": 0
+      "latency_us": 27
     },
     {
       "seq": 137,
@@ -2273,13 +2273,13 @@
       "type": "send",
       "account_id": "acct_x7q2",
       "api_key_id": "key_5d0c",
-      "decision_id": "01M50XQ423GQ0BANVR3VSY23YH",
+      "decision_id": "01M50Y33J7C5RBV2WEH9Q4M8GC",
       "action": "throttle",
       "retry_after": 60,
       "rules": [
         "new-account-burst"
       ],
-      "latency_us": 0
+      "latency_us": 37
     },
     {
       "seq": 138,
@@ -2287,13 +2287,13 @@
       "type": "send",
       "account_id": "acct_x7q2",
       "api_key_id": "key_5d0c",
-      "decision_id": "01M50XQ423GQ0BANVR3VSY23YK",
+      "decision_id": "01M50Y33J7C5RBV2WEH9Q4M8GE",
       "action": "throttle",
       "retry_after": 60,
       "rules": [
         "new-account-burst"
       ],
-      "latency_us": 0
+      "latency_us": 38
     },
     {
       "seq": 139,
@@ -2301,13 +2301,13 @@
       "type": "send",
       "account_id": "acct_x7q2",
       "api_key_id": "key_5d0c",
-      "decision_id": "01M50XQ423GQ0BANVR3VSY23YN",
+      "decision_id": "01M50Y33J8VGVABF8MBF8BD5QX",
       "action": "throttle",
       "retry_after": 60,
       "rules": [
         "new-account-burst"
       ],
-      "latency_us": 0
+      "latency_us": 37
     },
     {
       "seq": 140,
@@ -2315,13 +2315,13 @@
       "type": "send",
       "account_id": "acct_x7q2",
       "api_key_id": "key_5d0c",
-      "decision_id": "01M50XQ424TJ7P9WYC5ZQJQX4P",
+      "decision_id": "01M50Y33J8VGVABF8MBF8BD5QZ",
       "action": "throttle",
       "retry_after": 60,
       "rules": [
         "new-account-burst"
       ],
-      "latency_us": 0
+      "latency_us": 39
     },
     {
       "seq": 141,
@@ -2329,13 +2329,13 @@
       "type": "send",
       "account_id": "acct_x7q2",
       "api_key_id": "key_5d0c",
-      "decision_id": "01M50XQ424TJ7P9WYC5ZQJQX4R",
+      "decision_id": "01M50Y33J8VGVABF8MBF8BD5R1",
       "action": "throttle",
       "retry_after": 60,
       "rules": [
         "new-account-burst"
       ],
-      "latency_us": 0
+      "latency_us": 26
     },
     {
       "seq": 142,
@@ -2343,13 +2343,13 @@
       "type": "send",
       "account_id": "acct_x7q2",
       "api_key_id": "key_5d0c",
-      "decision_id": "01M50XQ424TJ7P9WYC5ZQJQX4T",
+      "decision_id": "01M50Y33J8VGVABF8MBF8BD5R3",
       "action": "throttle",
       "retry_after": 60,
       "rules": [
         "new-account-burst"
       ],
-      "latency_us": 0
+      "latency_us": 33
     },
     {
       "seq": 143,
@@ -2357,13 +2357,13 @@
       "type": "send",
       "account_id": "acct_x7q2",
       "api_key_id": "key_5d0c",
-      "decision_id": "01M50XQ424TJ7P9WYC5ZQJQX4W",
+      "decision_id": "01M50Y33J8VGVABF8MBF8BD5R5",
       "action": "throttle",
       "retry_after": 60,
       "rules": [
         "new-account-burst"
       ],
-      "latency_us": 0
+      "latency_us": 37
     },
     {
       "seq": 144,
@@ -2371,13 +2371,13 @@
       "type": "send",
       "account_id": "acct_x7q2",
       "api_key_id": "key_5d0c",
-      "decision_id": "01M50XQ424TJ7P9WYC5ZQJQX4Y",
+      "decision_id": "01M50Y33J8VGVABF8MBF8BD5R7",
       "action": "throttle",
       "retry_after": 60,
       "rules": [
         "new-account-burst"
       ],
-      "latency_us": 0
+      "latency_us": 32
     },
     {
       "seq": 145,
@@ -2385,13 +2385,13 @@
       "type": "send",
       "account_id": "acct_x7q2",
       "api_key_id": "key_5d0c",
-      "decision_id": "01M50XQ424TJ7P9WYC5ZQJQX50",
+      "decision_id": "01M50Y33J9XD9MQPCKMYNTFZFM",
       "action": "throttle",
       "retry_after": 60,
       "rules": [
         "new-account-burst"
       ],
-      "latency_us": 0
+      "latency_us": 58
     },
     {
       "seq": 146,
@@ -2399,13 +2399,13 @@
       "type": "send",
       "account_id": "acct_x7q2",
       "api_key_id": "key_5d0c",
-      "decision_id": "01M50XQ424TJ7P9WYC5ZQJQX52",
+      "decision_id": "01M50Y33J9XD9MQPCKMYNTFZFP",
       "action": "throttle",
       "retry_after": 60,
       "rules": [
         "new-account-burst"
       ],
-      "latency_us": 499
+      "latency_us": 39
     },
     {
       "seq": 147,
@@ -2413,13 +2413,13 @@
       "type": "send",
       "account_id": "acct_x7q2",
       "api_key_id": "key_5d0c",
-      "decision_id": "01M50XQ4257DQSC0J0Z42BRRBE",
+      "decision_id": "01M50Y33J9XD9MQPCKMYNTFZFR",
       "action": "throttle",
       "retry_after": 60,
       "rules": [
         "new-account-burst"
       ],
-      "latency_us": 0
+      "latency_us": 35
     },
     {
       "seq": 148,
@@ -2427,13 +2427,13 @@
       "type": "send",
       "account_id": "acct_x7q2",
       "api_key_id": "key_5d0c",
-      "decision_id": "01M50XQ4257DQSC0J0Z42BRRBG",
+      "decision_id": "01M50Y33JAPSNNYWA79RP2F981",
       "action": "throttle",
       "retry_after": 60,
       "rules": [
         "new-account-burst"
       ],
-      "latency_us": 0
+      "latency_us": 32
     },
     {
       "seq": 149,
@@ -2441,13 +2441,13 @@
       "type": "send",
       "account_id": "acct_x7q2",
       "api_key_id": "key_5d0c",
-      "decision_id": "01M50XQ4257DQSC0J0Z42BRRBJ",
+      "decision_id": "01M50Y33JAPSNNYWA79RP2F983",
       "action": "throttle",
       "retry_after": 60,
       "rules": [
         "new-account-burst"
       ],
-      "latency_us": 0
+      "latency_us": 38
     },
     {
       "seq": 150,
@@ -2455,13 +2455,13 @@
       "type": "send",
       "account_id": "acct_x7q2",
       "api_key_id": "key_5d0c",
-      "decision_id": "01M50XQ4257DQSC0J0Z42BRRBM",
+      "decision_id": "01M50Y33JAPSNNYWA79RP2F985",
       "action": "throttle",
       "retry_after": 60,
       "rules": [
         "new-account-burst"
       ],
-      "latency_us": 0
+      "latency_us": 32
     },
     {
       "seq": 151,
@@ -2469,13 +2469,13 @@
       "type": "send",
       "account_id": "acct_x7q2",
       "api_key_id": "key_5d0c",
-      "decision_id": "01M50XQ4267FNZSEHMC6P81WBT",
+      "decision_id": "01M50Y33JAPSNNYWA79RP2F987",
       "action": "throttle",
       "retry_after": 60,
       "rules": [
         "new-account-burst"
       ],
-      "latency_us": 0
+      "latency_us": 33
     },
     {
       "seq": 152,
@@ -2483,13 +2483,13 @@
       "type": "send",
       "account_id": "acct_x7q2",
       "api_key_id": "key_5d0c",
-      "decision_id": "01M50XQ4267FNZSEHMC6P81WBW",
+      "decision_id": "01M50Y33JAPSNNYWA79RP2F989",
       "action": "throttle",
       "retry_after": 60,
       "rules": [
         "new-account-burst"
       ],
-      "latency_us": 0
+      "latency_us": 57
     },
     {
       "seq": 153,
@@ -2497,13 +2497,13 @@
       "type": "send",
       "account_id": "acct_x7q2",
       "api_key_id": "key_5d0c",
-      "decision_id": "01M50XQ4267FNZSEHMC6P81WBY",
+      "decision_id": "01M50Y33JB2608PBANY1Q2HCVX",
       "action": "throttle",
       "retry_after": 60,
       "rules": [
         "new-account-burst"
       ],
-      "latency_us": 0
+      "latency_us": 30
     },
     {
       "seq": 154,
@@ -2511,9 +2511,9 @@
       "type": "send",
       "account_id": "acct_lumen",
       "api_key_id": "key_4f1a",
-      "decision_id": "01M50XQ4267FNZSEHMC6P81WC0",
+      "decision_id": "01M50Y33JB2608PBANY1Q2HCVZ",
       "action": "allow",
-      "latency_us": 0
+      "latency_us": 441
     },
     {
       "seq": 155,
@@ -2521,9 +2521,9 @@
       "type": "send",
       "account_id": "acct_okapi",
       "api_key_id": "key_2e8b",
-      "decision_id": "01M50XQ4267FNZSEHMC6P81WC2",
+      "decision_id": "01M50Y33JCAQ75C7S61S4TD9PD",
       "action": "allow",
-      "latency_us": 0
+      "latency_us": 121
     },
     {
       "seq": 156,
@@ -2531,18 +2531,18 @@
       "type": "send",
       "account_id": "acct_tidal",
       "api_key_id": "key_9c2e",
-      "decision_id": "01M50XQ427VF3CMXSKKPNYQRBH",
+      "decision_id": "01M50Y33JCAQ75C7S61S4TD9PF",
       "action": "allow",
-      "latency_us": 0
+      "latency_us": 156
     },
     {
       "seq": 157,
       "phase": "complaints",
       "type": "feedback",
       "account_id": "acct_fernway",
-      "decision_id": "01M50XQ427VF3CMXSKKPNYQRBK",
+      "decision_id": "01M50Y33JCAQ75C7S61S4TD9PH",
       "action": "allow",
-      "latency_us": 0
+      "latency_us": 123
     },
     {
       "seq": 158,
@@ -2550,9 +2550,9 @@
       "type": "send",
       "account_id": "acct_tidal",
       "api_key_id": "key_9c2e",
-      "decision_id": "01M50XQ427VF3CMXSKKPNYQRBN",
+      "decision_id": "01M50Y33JDDZ8C94YSX7ZR9YHP",
       "action": "allow",
-      "latency_us": 0
+      "latency_us": 132
     },
     {
       "seq": 159,
@@ -2560,9 +2560,9 @@
       "type": "send",
       "account_id": "acct_fernway",
       "api_key_id": "key_7b3d",
-      "decision_id": "01M50XQ427VF3CMXSKKPNYQRBQ",
+      "decision_id": "01M50Y33JDDZ8C94YSX7ZR9YHR",
       "action": "allow",
-      "latency_us": 0
+      "latency_us": 179
     },
     {
       "seq": 160,
@@ -2570,18 +2570,18 @@
       "type": "send",
       "account_id": "acct_okapi",
       "api_key_id": "key_2e8b",
-      "decision_id": "01M50XQ4287BCGYQPYHAM2FYDA",
+      "decision_id": "01M50Y33JDDZ8C94YSX7ZR9YHT",
       "action": "allow",
-      "latency_us": 0
+      "latency_us": 194
     },
     {
       "seq": 161,
       "phase": "complaints",
       "type": "feedback",
       "account_id": "acct_fernway",
-      "decision_id": "01M50XQ4287BCGYQPYHAM2FYDC",
+      "decision_id": "01M50Y33JE67PFD9BDTAARMWFP",
       "action": "allow",
-      "latency_us": 0
+      "latency_us": 85
     },
     {
       "seq": 162,
@@ -2589,9 +2589,9 @@
       "type": "send",
       "account_id": "acct_lumen",
       "api_key_id": "key_4f1a",
-      "decision_id": "01M50XQ4287BCGYQPYHAM2FYDE",
+      "decision_id": "01M50Y33JE67PFD9BDTAARMWFR",
       "action": "allow",
-      "latency_us": 500
+      "latency_us": 139
     },
     {
       "seq": 163,
@@ -2599,9 +2599,9 @@
       "type": "send",
       "account_id": "acct_fernway",
       "api_key_id": "key_7b3d",
-      "decision_id": "01M50XQ4287BCGYQPYHAM2FYDG",
+      "decision_id": "01M50Y33JE67PFD9BDTAARMWFT",
       "action": "allow",
-      "latency_us": 0
+      "latency_us": 110
     },
     {
       "seq": 164,
@@ -2609,18 +2609,18 @@
       "type": "send",
       "account_id": "acct_okapi",
       "api_key_id": "key_2e8b",
-      "decision_id": "01M50XQ4287BCGYQPYHAM2FYDJ",
+      "decision_id": "01M50Y33JFF5RSX66YJK0BM83J",
       "action": "allow",
-      "latency_us": 0
+      "latency_us": 130
     },
     {
       "seq": 165,
       "phase": "complaints",
       "type": "feedback",
       "account_id": "acct_fernway",
-      "decision_id": "01M50XQ4298MVGK67P06FDKZWF",
+      "decision_id": "01M50Y33JFF5RSX66YJK0BM83M",
       "action": "allow",
-      "latency_us": 0
+      "latency_us": 138
     },
     {
       "seq": 166,
@@ -2628,9 +2628,9 @@
       "type": "send",
       "account_id": "acct_tidal",
       "api_key_id": "key_9c2e",
-      "decision_id": "01M50XQ4298MVGK67P06FDKZWH",
+      "decision_id": "01M50Y33JFF5RSX66YJK0BM83P",
       "action": "allow",
-      "latency_us": 0
+      "latency_us": 124
     },
     {
       "seq": 167,
@@ -2638,9 +2638,9 @@
       "type": "send",
       "account_id": "acct_fernway",
       "api_key_id": "key_7b3d",
-      "decision_id": "01M50XQ4298MVGK67P06FDKZWK",
+      "decision_id": "01M50Y33JGD428TPR878GCS4XP",
       "action": "allow",
-      "latency_us": 499
+      "latency_us": 130
     },
     {
       "seq": 168,
@@ -2648,18 +2648,18 @@
       "type": "send",
       "account_id": "acct_okapi",
       "api_key_id": "key_2e8b",
-      "decision_id": "01M50XQ4298MVGK67P06FDKZWN",
+      "decision_id": "01M50Y33JGD428TPR878GCS4XR",
       "action": "allow",
-      "latency_us": 0
+      "latency_us": 322
     },
     {
       "seq": 169,
       "phase": "complaints",
       "type": "feedback",
       "account_id": "acct_fernway",
-      "decision_id": "01M50XQ4298MVGK67P06FDKZWQ",
+      "decision_id": "01M50Y33JH2AJ3NV6280S39AVR",
       "action": "allow",
-      "latency_us": 0
+      "latency_us": 72
     },
     {
       "seq": 170,
@@ -2667,9 +2667,9 @@
       "type": "send",
       "account_id": "acct_lumen",
       "api_key_id": "key_4f1a",
-      "decision_id": "01M50XQ4298MVGK67P06FDKZWS",
+      "decision_id": "01M50Y33JH2AJ3NV6280S39AVT",
       "action": "allow",
-      "latency_us": 499
+      "latency_us": 117
     },
     {
       "seq": 171,
@@ -2677,12 +2677,12 @@
       "type": "send",
       "account_id": "acct_fernway",
       "api_key_id": "key_7b3d",
-      "decision_id": "01M50XQ42A6P0G3NCWWGZGBJMV",
+      "decision_id": "01M50Y33JH2AJ3NV6280S39AVW",
       "action": "hold",
       "rules": [
         "complaint-rate-high"
       ],
-      "latency_us": 0
+      "latency_us": 110
     },
     {
       "seq": 172,
@@ -2690,9 +2690,9 @@
       "type": "send",
       "account_id": "acct_okapi",
       "api_key_id": "key_2e8b",
-      "decision_id": "01M50XQ42A6P0G3NCWWGZGBJMX",
+      "decision_id": "01M50Y33JJ95SMJK8SQMPEBJCS",
       "action": "allow",
-      "latency_us": 0
+      "latency_us": 98
     },
     {
       "seq": 173,
@@ -2700,9 +2700,9 @@
       "type": "send",
       "account_id": "acct_lumen",
       "api_key_id": "key_4f1a",
-      "decision_id": "01M50XQ42A6P0G3NCWWGZGBJMZ",
+      "decision_id": "01M50Y33JJ95SMJK8SQMPEBJCV",
       "action": "allow",
-      "latency_us": 0
+      "latency_us": 105
     },
     {
       "seq": 174,
@@ -2710,9 +2710,9 @@
       "type": "send",
       "account_id": "acct_tidal",
       "api_key_id": "key_9c2e",
-      "decision_id": "01M50XQ42A6P0G3NCWWGZGBJN1",
+      "decision_id": "01M50Y33JJ95SMJK8SQMPEBJCX",
       "action": "allow",
-      "latency_us": 0
+      "latency_us": 134
     },
     {
       "seq": 175,
@@ -2720,9 +2720,9 @@
       "type": "key_leak",
       "account_id": "acct_tidal",
       "api_key_id": "key_9c2e",
-      "decision_id": "01M50XQ42A6P0G3NCWWGZGBJN3",
+      "decision_id": "01M50Y33JJ95SMJK8SQMPEBJCZ",
       "action": "allow",
-      "latency_us": 0
+      "latency_us": 61
     },
     {
       "seq": 176,
@@ -2730,9 +2730,9 @@
       "type": "send",
       "account_id": "acct_lumen",
       "api_key_id": "key_4f1a",
-      "decision_id": "01M50XQ42BJ24XKRC39N0Y72GJ",
+      "decision_id": "01M50Y33JKDCEAYFD5RFEA1MWW",
       "action": "allow",
-      "latency_us": 0
+      "latency_us": 117
     },
     {
       "seq": 177,
@@ -2740,9 +2740,9 @@
       "type": "send",
       "account_id": "acct_okapi",
       "api_key_id": "key_2e8b",
-      "decision_id": "01M50XQ42BJ24XKRC39N0Y72GM",
+      "decision_id": "01M50Y33JKDCEAYFD5RFEA1MWY",
       "action": "allow",
-      "latency_us": 0
+      "latency_us": 102
     },
     {
       "seq": 178,
@@ -2750,9 +2750,9 @@
       "type": "send",
       "account_id": "acct_lumen",
       "api_key_id": "key_4f1a",
-      "decision_id": "01M50XQ42BJ24XKRC39N0Y72GP",
+      "decision_id": "01M50Y33JKDCEAYFD5RFEA1MX0",
       "action": "allow",
-      "latency_us": 500
+      "latency_us": 135
     },
     {
       "seq": 179,
@@ -2760,12 +2760,12 @@
       "type": "send",
       "account_id": "acct_tidal",
       "api_key_id": "key_9c2e",
-      "decision_id": "01M50XQ42BJ24XKRC39N0Y72GR",
+      "decision_id": "01M50Y33JMPZ4MYNAJMWSCZMV0",
       "action": "block",
       "rules": [
         "leaked-key-send"
       ],
-      "latency_us": 0
+      "latency_us": 109
     },
     {
       "seq": 180,
@@ -2773,9 +2773,9 @@
       "type": "send",
       "account_id": "acct_okapi",
       "api_key_id": "key_2e8b",
-      "decision_id": "01M50XQ42CMT0EYNJ4FZ2D4V5J",
+      "decision_id": "01M50Y33JMPZ4MYNAJMWSCZMV2",
       "action": "allow",
-      "latency_us": 0
+      "latency_us": 116
     },
     {
       "seq": 181,
@@ -2783,9 +2783,9 @@
       "type": "send",
       "account_id": "acct_lumen",
       "api_key_id": "key_4f1a",
-      "decision_id": "01M50XQ42CMT0EYNJ4FZ2D4V5M",
+      "decision_id": "01M50Y33JMPZ4MYNAJMWSCZMV4",
       "action": "allow",
-      "latency_us": 0
+      "latency_us": 156
     },
     {
       "seq": 182,
@@ -2793,9 +2793,9 @@
       "type": "send",
       "account_id": "acct_okapi",
       "api_key_id": "key_2e8b",
-      "decision_id": "01M50XQ42CMT0EYNJ4FZ2D4V5P",
+      "decision_id": "01M50Y33JNPZVGRXQS0T0HQQ5V",
       "action": "allow",
-      "latency_us": 0
+      "latency_us": 96
     },
     {
       "seq": 183,
@@ -2803,9 +2803,9 @@
       "type": "account",
       "account_id": "acct_tidal",
       "api_key_id": "key_b61e",
-      "decision_id": "01M50XQ435ZE7HW4HXHJ4XWPWG",
+      "decision_id": "01M50Y33KF6E0NAY0C0K5D623P",
       "action": "allow",
-      "latency_us": 0
+      "latency_us": 164
     },
     {
       "seq": 184,
@@ -2813,9 +2813,9 @@
       "type": "send",
       "account_id": "acct_tidal",
       "api_key_id": "key_b61e",
-      "decision_id": "01M50XQ435ZE7HW4HXHJ4XWPWJ",
+      "decision_id": "01M50Y33KGXP27H8EV1KF3476C",
       "action": "allow",
-      "latency_us": 0
+      "latency_us": 308
     },
     {
       "seq": 185,
@@ -2823,9 +2823,9 @@
       "type": "send",
       "account_id": "acct_okapi",
       "api_key_id": "key_2e8b",
-      "decision_id": "01M50XQ435ZE7HW4HXHJ4XWPWM",
+      "decision_id": "01M50Y33KGXP27H8EV1KF3476E",
       "action": "allow",
-      "latency_us": 500
+      "latency_us": 163
     },
     {
       "seq": 186,
@@ -2833,16 +2833,16 @@
       "type": "send",
       "account_id": "acct_lumen",
       "api_key_id": "key_4f1a",
-      "decision_id": "01M50XQ436TSEJVC6XB5VWD20G",
+      "decision_id": "01M50Y33KHCG2C6K8Z49FKB9R4",
       "action": "allow",
-      "latency_us": 0
+      "latency_us": 190
     },
     {
       "seq": 187,
       "phase": "shadow",
       "type": "account",
       "account_id": "acct_f62",
-      "decision_id": "01M50XQ436TSEJVC6XB5VWD20J",
+      "decision_id": "01M50Y33KHCG2C6K8Z49FKB9R6",
       "action": "allow",
       "shadow": [
         {
@@ -2850,7 +2850,7 @@
           "action": "flag"
         }
       ],
-      "latency_us": 0
+      "latency_us": 23
     },
     {
       "seq": 188,
@@ -2858,9 +2858,9 @@
       "type": "send",
       "account_id": "acct_okapi",
       "api_key_id": "key_2e8b",
-      "decision_id": "01M50XQ436TSEJVC6XB5VWD20M",
+      "decision_id": "01M50Y33KHCG2C6K8Z49FKB9R8",
       "action": "allow",
-      "latency_us": 0
+      "latency_us": 105
     },
     {
       "seq": 189,
@@ -2868,16 +2868,16 @@
       "type": "send",
       "account_id": "acct_lumen",
       "api_key_id": "key_4f1a",
-      "decision_id": "01M50XQ436TSEJVC6XB5VWD20P",
+      "decision_id": "01M50Y33KJPDYHMFFYMASHMR09",
       "action": "allow",
-      "latency_us": 498
+      "latency_us": 115
     },
     {
       "seq": 190,
       "phase": "shadow",
       "type": "account",
       "account_id": "acct_f63",
-      "decision_id": "01M50XQ4373DFMCM4XWGYYS4NA",
+      "decision_id": "01M50Y33KJPDYHMFFYMASHMR0B",
       "action": "allow",
       "shadow": [
         {
@@ -2885,7 +2885,7 @@
           "action": "flag"
         }
       ],
-      "latency_us": 0
+      "latency_us": 23
     },
     {
       "seq": 191,
@@ -2893,9 +2893,9 @@
       "type": "send",
       "account_id": "acct_lumen",
       "api_key_id": "key_4f1a",
-      "decision_id": "01M50XQ4373DFMCM4XWGYYS4NC",
+      "decision_id": "01M50Y33KJPDYHMFFYMASHMR0D",
       "action": "allow",
-      "latency_us": 0
+      "latency_us": 141
     },
     {
       "seq": 192,
@@ -2903,16 +2903,16 @@
       "type": "send",
       "account_id": "acct_tidal",
       "api_key_id": "key_b61e",
-      "decision_id": "01M50XQ4373DFMCM4XWGYYS4NE",
+      "decision_id": "01M50Y33KJPDYHMFFYMASHMR0F",
       "action": "allow",
-      "latency_us": 0
+      "latency_us": 113
     },
     {
       "seq": 193,
       "phase": "shadow",
       "type": "account",
       "account_id": "acct_f64",
-      "decision_id": "01M50XQ4373DFMCM4XWGYYS4NG",
+      "decision_id": "01M50Y33KKG0AQ5QTA9AFE1RGX",
       "action": "allow",
       "shadow": [
         {
@@ -2920,7 +2920,7 @@
           "action": "flag"
         }
       ],
-      "latency_us": 0
+      "latency_us": 28
     },
     {
       "seq": 194,
@@ -2928,9 +2928,9 @@
       "type": "send",
       "account_id": "acct_tidal",
       "api_key_id": "key_b61e",
-      "decision_id": "01M50XQ4373DFMCM4XWGYYS4NJ",
+      "decision_id": "01M50Y33KKG0AQ5QTA9AFE1RGZ",
       "action": "allow",
-      "latency_us": 0
+      "latency_us": 125
     },
     {
       "seq": 195,
@@ -2938,9 +2938,9 @@
       "type": "send",
       "account_id": "acct_okapi",
       "api_key_id": "key_2e8b",
-      "decision_id": "01M50XQ4388S6CA8ASA1XKMJ12",
+      "decision_id": "01M50Y33KKG0AQ5QTA9AFE1RH1",
       "action": "allow",
-      "latency_us": 0
+      "latency_us": 121
     },
     {
       "seq": 196,
@@ -2948,9 +2948,9 @@
       "type": "send",
       "account_id": "acct_lumen",
       "api_key_id": "key_4f1a",
-      "decision_id": "01M50XQ4388S6CA8ASA1XKMJ14",
+      "decision_id": "01M50Y33KMWDD8WZV43671Y1PN",
       "action": "allow",
-      "latency_us": 0
+      "latency_us": 163
     },
     {
       "seq": 197,
@@ -2958,9 +2958,9 @@
       "type": "send",
       "account_id": "acct_tidal",
       "api_key_id": "key_b61e",
-      "decision_id": "01M50XQ4388S6CA8ASA1XKMJ16",
+      "decision_id": "01M50Y33KMWDD8WZV43671Y1PQ",
       "action": "allow",
-      "latency_us": 500
+      "latency_us": 184
     },
     {
       "seq": 198,
@@ -2968,9 +2968,9 @@
       "type": "send",
       "account_id": "acct_okapi",
       "api_key_id": "key_2e8b",
-      "decision_id": "01M50XQ4388S6CA8ASA1XKMJ18",
+      "decision_id": "01M50Y33KMWDD8WZV43671Y1PS",
       "action": "allow",
-      "latency_us": 0
+      "latency_us": 88
     },
     {
       "seq": 199,
@@ -2978,9 +2978,9 @@
       "type": "send",
       "account_id": "acct_lumen",
       "api_key_id": "key_4f1a",
-      "decision_id": "01M50XQ4388S6CA8ASA1XKMJ1A",
+      "decision_id": "01M50Y33KNQ6FCVQWWE8YX9AZM",
       "action": "allow",
-      "latency_us": 0
+      "latency_us": 97
     },
     {
       "seq": 200,
@@ -2988,9 +2988,9 @@
       "type": "send",
       "account_id": "acct_tidal",
       "api_key_id": "key_b61e",
-      "decision_id": "01M50XQ4396NAZ6DMHY41GXKZS",
+      "decision_id": "01M50Y33KNQ6FCVQWWE8YX9AZP",
       "action": "allow",
-      "latency_us": 0
+      "latency_us": 88
     }
   ]
 }
