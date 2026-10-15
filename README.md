@@ -17,13 +17,47 @@ throttle, hold or block) and the rules behind it.
 - **Integrations:** Amazon SES (via SNS), useSend, and GitHub's secret
   scanning partner program.
 
-> Status: early development. The engine, signals, rules, audit log,
-> precision gate, hooks, feedback and secret scanning packages are built and
-> tested; the HTTP server and CLI that wire them together are next.
+> Status: early development. Everything below works and is tested, but the
+> API and the configuration may still change before a first release.
+
+## Quick start
+
+```sh
+go build -o catraca ./cmd/catraca
+
+cp catraca.example.yaml catraca.yaml
+export CATRACA_API_TOKEN=$(openssl rand -hex 32)
+export CATRACA_HOOK_SECRET=$(openssl rand -hex 32)
+export CATRACA_FEEDBACK_SECRET=$(openssl rand -hex 32)
+
+./catraca config check            # validate the configuration and the ruleset
+./catraca serve                   # listens on :8080, audit log in catraca.db
+```
+
+Ask before a send:
+
+```sh
+curl -s -X POST localhost:8080/v1/decide \
+  -H "Authorization: Bearer $CATRACA_API_TOKEN" \
+  -d '{"type": "send", "account_id": "acct_42", "api_key_id": "key_1",
+       "ip": "203.0.113.7", "from": "hello@shop.example", "to": ["ana@mail.example"]}'
+```
+
+```json
+{"decision": {"id": "01M50QGN32570CX37SPKGJDZ7A", "action": "allow", "ruleset_version": "098086f42c27", "...": "..."}}
+```
+
+The platform acts on `action`. Every rule in the
+[starter ruleset](rules/default.yaml) runs in shadow mode except
+`leaked-key-send`, so out of the box Catraca records what it would do and
+blocks only keys reported leaked.
 
 ## Docs
 
 - [Design](docs/design.md)
+- [HTTP API](docs/api.md)
+- [Configuration](docs/config.md)
+- [Command line](docs/cli.md)
 - [Signals](docs/signals.md)
 - [Writing rules](docs/rules.md)
 - [Audit log and the precision gate](docs/audit.md)
