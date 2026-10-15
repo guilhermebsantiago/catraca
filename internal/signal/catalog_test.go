@@ -619,6 +619,9 @@ func TestReplayReproducesSignals(t *testing.T) {
 	if storetest.RedisServerSkip() == "" {
 		runs["redis-server"] = replay(backends[2].new(t))
 	}
+	if storetest.RedisClusterSkip() == "" {
+		runs["redis-cluster-server"] = replay(backends[3].new(t))
+	}
 	for name, sets := range runs {
 		for i := range sets {
 			if !reflect.DeepEqual(sets[i], first[i]) {

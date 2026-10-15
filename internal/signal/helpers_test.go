@@ -23,8 +23,10 @@ const (
 )
 
 // backends are the stores the catalog is tested on. redis-server is a real
-// Redis server, used when CATRACA_TEST_REDIS_URL is set; each test writes
-// under its own prefix and deletes its keys when it ends.
+// Redis server, used when CATRACA_TEST_REDIS_URL is set, and
+// redis-cluster-server a real Redis Cluster, used when
+// CATRACA_TEST_REDIS_CLUSTER is set; each test writes under its own prefix
+// and deletes its keys when it ends.
 var backends = []struct {
 	name string
 	new  func(tb testing.TB) store.Store
@@ -40,6 +42,10 @@ var backends = []struct {
 	}},
 	{name: "redis-server", skip: storetest.RedisServerSkip, new: func(tb testing.TB) store.Store {
 		client, prefix := storetest.RedisServer(tb)
+		return store.NewRedis(client, store.RedisOptions{Prefix: prefix})
+	}},
+	{name: "redis-cluster-server", skip: storetest.RedisClusterSkip, new: func(tb testing.TB) store.Store {
+		client, prefix := storetest.RedisCluster(tb)
 		return store.NewRedis(client, store.RedisOptions{Prefix: prefix})
 	}},
 }
