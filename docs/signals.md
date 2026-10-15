@@ -1,0 +1,205 @@
+# Signals
+
+Signals are the values rules read. For every event, Catraca records the event
+in its counters and reads them back in one store round trip, then hands the
+results to the rules as five CEL maps: `event`, `account`, `key`, `ip` and
+`domain`.
+
+```yaml
+when: event.type == "send" && account.age_hours < 24.0 && account.sends_1m > 100
+```
+
+Types are CEL types: `int` (a 64-bit integer), `double`, `bool`, `string`,
+`list(string)` and `map(string, string)`. Compare doubles with double literals
+(`24.0`, not `24`) and ints with int literals.
+
+## Windows
+
+Counters are sliding windows over **event time**: the `time` the platform
+reports, not the time Catraca processed the event. Replaying old events in
+order therefore reproduces the values they had. The window is the suffix:
+`_1m`, `_1h`, `_24h`, `_7d`.
+
+Every count includes the event being decided. The first send of an account
+sees `account.sends_1m == 1`.
+
+Each window is split into 60 buckets. An event is always counted while it is
+younger than the window minus one bucket, never once it is as old as the
+window, and in between it is counted until its bucket leaves the window:
+
+| window | bucket | an event counts for at least | and at most |
+|---|---|---|---|
+| `_1m` | 1 s | 59 s | 1 min |
+| `_1h` | 1 min | 59 min | 1 h |
+| `_24h` | 24 min | 23 h 36 min | 24 h |
+| `_7d` | 2 h 48 min | 6 d 21 h 12 min | 7 d |
+
+Distinct counts (`distinct_*`) are exact with the memory store. The Redis store
+estimates them with HyperLogLog: exact for small sets, within 0.81% (one
+standard error) for large ones.
+
+## When a signal is absent
+
+A rule that reads an absent signal fails, and its `on_error` policy decides:
+`open` skips the rule, `closed` counts it as matched.
+
+- `event` is always present, with every signal in it.
+- `account` is present when the event has an `account_id`.
+- `key` is present when the event has an `api_key_id`.
+- `ip` is present when the event has an `ip`.
+- `domain` is present when `from` has a domain.
+- `account.new_ip` and `key.new_ip` are absent when the event has no `ip`.
+- When the counter store fails or does not answer within the deadline, only
+  `event` is present and the decision is marked degraded.
+
+## What each event records
+
+| event | records |
+|---|---|
+| `send` | account: sends, recipients, recipient domains, IP and API key; key: sends and IP; ip: sends, account and API key; domain: sends and account; the IP as known to the account and to the key (`new_ip`) |
+| `feedback` | account: bounces, hard bounces, complaints or deliveries; domain: complaints |
+| `account` | ip: a signup, when `account.action` is `signup`; account: its creation time, when `account.created_at` is set |
+| `key_leak` | key: leaked |
+| every event | the first time its account and API key were seen |
+
+Feedback counts toward the account and sender domain the feedback event names,
+which should be those of the original send. Only send events record IPs: a
+login from a new IP leaves `account.new_ip` true for the first send from that
+IP, so a hijacked account still shows a new IP when it starts sending.
+
+Values are matched as follows: account and key ids exactly as sent; domains in
+lowercase; IPs in canonical form, so `2001:DB8::1` and `2001:db8::1` are the
+same address, and so are `::ffff:203.0.113.7` and `203.0.113.7`.
+
+## `event`
+
+Computed from the event alone.
+
+| signal | type | meaning |
+|---|---|---|
+| `type` | string | `send`, `feedback`, `account` or `key_leak` |
+| `account_id` | string | as sent |
+| `api_key_id` | string | as sent, `""` when there is none |
+| `ip` | string | as sent, `""` when there is none |
+| `from_domain` | string | domain of `from`, lowercase, `""` when it has none |
+| `recipients` | int | number of `to` addresses |
+| `to_domains` | list(string) | distinct domains of `to`, lowercase, sorted |
+| `link_domains` | list(string) | distinct hostnames of `links`, lowercase, sorted; a link without a scheme, such as `example.com/offer`, is read as http |
+| `links` | int | number of `links` |
+| `subject_length` | int | characters (Unicode code points) in `subject` |
+| `feedback_kind` | string | `bounce`, `complaint` or `delivery` for feedback events, `""` otherwise |
+| `bounce_type` | string | as sent for bounces (`permanent`, `transient`), `""` otherwise |
+| `account_action` | string | `account.action` for account events, such as `signup`; `""` otherwise |
+| `attributes` | map(string, string) | the platform's attributes, empty when there are none |
+
+## `account`
+
+The account that sent the event.
+
+| signal | type | window | meaning |
+|---|---|---|---|
+| `sends_1m` | int | 1 min | send events |
+| `sends_1h` | int | 1 h | send events |
+| `sends_24h` | int | 24 h | send events |
+| `sends_7d` | int | 7 d | send events |
+| `recipients_1h` | int | 1 h | `to` addresses over all send events |
+| `recipients_24h` | int | 24 h | `to` addresses over all send events |
+| `distinct_recipient_domains_1h` | int | 1 h | distinct `to` domains of send events |
+| `distinct_recipient_domains_24h` | int | 24 h | distinct `to` domains of send events |
+| `distinct_ips_24h` | int | 24 h | distinct IPs of send events |
+| `distinct_keys_24h` | int | 24 h | distinct API keys of send events |
+| `bounces_24h` | int | 24 h | bounce feedback events |
+| `hard_bounces_24h` | int | 24 h | bounce feedback events with bounce type `permanent` (in any case) |
+| `complaints_24h` | int | 24 h | complaint feedback events |
+| `deliveries_24h` | int | 24 h | delivery feedback events |
+| `bounce_rate_24h` | double | 24 h | `bounces_24h / max(sends_24h, 1)`, at most 1 |
+| `hard_bounce_rate_24h` | double | 24 h | `hard_bounces_24h / max(sends_24h, 1)`, at most 1 |
+| `complaint_rate_24h` | double | 24 h | `complaints_24h / max(sends_24h, 1)`, at most 1 |
+| `age_hours` | double | | hours since the account was created, or since it was first seen when the creation time is unknown |
+| `hourly_baseline_7d` | double | 7 d | `sends_7d / 168`: the average sends per hour over the week |
+| `volume_ratio_1h` | double | 1 h | `sends_1h / max(hourly_baseline_7d, 1)`: how this hour compares to the weekly average |
+| `new_ip` | bool | 30 d | true when no send event of the account came from this IP in the last 30 days |
+
+Rates are capped at 1 because feedback about sends older than 24 hours can
+outnumber the sends in the window. Use `ratio(account.bounces_24h,
+account.sends_24h)` for the uncapped value.
+
+The creation time comes from `account.created_at` on any event; the latest one
+sent wins. The first-seen time is the earliest event time seen for the
+account, whatever the order events arrived in. Both are kept for a year after
+the account's last event (configurable), so an account idle for longer looks
+new again. Ages are never negative: a creation time in the future gives 0.
+
+## `key`
+
+The API key the event names.
+
+| signal | type | window | meaning |
+|---|---|---|---|
+| `sends_1m` | int | 1 min | send events with the key |
+| `sends_1h` | int | 1 h | send events with the key |
+| `distinct_ips_1h` | int | 1 h | distinct IPs of send events with the key |
+| `distinct_ips_24h` | int | 24 h | distinct IPs of send events with the key |
+| `new_ip` | bool | 30 d | true when no send event with the key came from this IP in the last 30 days |
+| `age_hours` | double | | hours since the key was first seen in any event, for example an `account` event with action `api_key_created` |
+| `leaked` | bool | | true once the key was reported leaked, by a `key_leak` event or by the engine; it never resets |
+
+## `ip`
+
+The IP the event came from.
+
+| signal | type | window | meaning |
+|---|---|---|---|
+| `sends_1m` | int | 1 min | send events from the IP |
+| `sends_1h` | int | 1 h | send events from the IP |
+| `distinct_accounts_24h` | int | 24 h | distinct accounts of send events from the IP |
+| `distinct_keys_24h` | int | 24 h | distinct API keys of send events from the IP |
+| `signups_24h` | int | 24 h | account events with action `signup` from the IP |
+
+## `domain`
+
+The sender domain: the domain of `from`.
+
+| signal | type | window | meaning |
+|---|---|---|---|
+| `sends_1h` | int | 1 h | send events from the domain |
+| `distinct_accounts_24h` | int | 24 h | distinct accounts of send events from the domain |
+| `complaints_24h` | int | 24 h | complaint feedback events whose `from` has the domain |
+
+## Examples
+
+```yaml
+rules:
+  - id: leaked-key-send
+    when: event.type == "send" && key.leaked
+    action: block
+    reason: API key was found in public and must be rotated
+
+  - id: new-account-burst
+    when: event.type == "send" && account.age_hours < 24.0 && account.sends_1m > 100
+    action: throttle
+    retry_after: 60s
+    reason: New account sending at burst volume
+
+  - id: dormant-account-new-ip-spike
+    when: >
+      event.type == "send" && account.new_ip &&
+      account.age_hours > 720.0 && account.volume_ratio_1h > 10.0
+    action: hold
+    reason: Established account sending far above its baseline from a new IP
+
+  - id: complaint-rate
+    when: account.sends_24h >= 1000 && account.complaint_rate_24h > 0.003
+    action: flag
+    reason: Complaint rate above 0.3% over the last day
+
+  - id: signup-farm
+    when: event.type == "account" && event.account_action == "signup" && ip.signups_24h > 5
+    action: flag
+    reason: Many signups from one IP
+
+  - id: shortened-links
+    when: event.type == "send" && any_in_list("url_shorteners", event.link_domains)
+    action: flag
+    reason: Links through a URL shortener
+```
