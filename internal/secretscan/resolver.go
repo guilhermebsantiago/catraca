@@ -3,29 +3,23 @@ package secretscan
 import (
 	"bytes"
 	"context"
-	"crypto/hmac"
-	"crypto/sha256"
-	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
 	"net/http"
 	"net/url"
-	"strconv"
 	"time"
-)
 
-// SignatureHeader carries the signature of resolver requests:
-// "t=<unix seconds>,v1=<hex HMAC-SHA256 of t + "." + body>", the scheme
-// Catraca signs all its outgoing requests with.
-const SignatureHeader = "Catraca-Signature"
+	"github.com/guilhermebsantiago/catraca/signature"
+)
 
 // HTTPResolverConfig configures an HTTPResolver.
 type HTTPResolverConfig struct {
 	// URL is the platform endpoint that maps tokens to keys. Required.
 	URL string
-	// Secret signs each request in SignatureHeader. Required.
+	// Secret signs each request in signature.Header, the scheme Catraca
+	// signs all its outgoing requests with. Required.
 	Secret string
 	// SendRawToken adds the raw token to the request. By default only its
 	// SHA-256 is sent, which is enough for a platform that stores key
@@ -44,13 +38,14 @@ type HTTPResolverConfig struct {
 //	{"token_sha256": "<hex>", "type": "acme_api_key", "source": "commit",
 //	 "url": "https://github.com/..."}
 //
-// with "token" added only when SendRawToken is set. The platform answers
-// 200 with {"api_key_id": "key_123", "account_id": "acct_456"} when the
-// token is one of its keys, and 404 when it is not. Any other answer is an
-// error.
+// with "token" added only when SendRawToken is set, signed in
+// signature.Header. The platform verifies the signature (in Go, with
+// signature.Verify) and answers 200 with {"api_key_id": "key_123",
+// "account_id": "acct_456"} when the token is one of its keys, and 404 when
+// it is not. Any other answer is an error.
 type HTTPResolver struct {
 	url    string
-	secret []byte
+	secret string
 	raw    bool
 	client *http.Client
 	now    func() time.Time
@@ -72,7 +67,7 @@ func NewHTTPResolver(cfg HTTPResolverConfig) (*HTTPResolver, error) {
 		c.Timeout = 10 * time.Second
 	}
 	c.CheckRedirect = func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }
-	return &HTTPResolver{url: cfg.URL, secret: []byte(cfg.Secret), raw: cfg.SendRawToken, client: &c, now: time.Now}, nil
+	return &HTTPResolver{url: cfg.URL, secret: cfg.Secret, raw: cfg.SendRawToken, client: &c, now: time.Now}, nil
 }
 
 type resolveRequest struct {
@@ -104,7 +99,7 @@ func (r *HTTPResolver) Resolve(ctx context.Context, t Token) (Key, error) {
 	}
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("User-Agent", "catraca-secretscan")
-	req.Header.Set(SignatureHeader, sign(r.secret, r.now(), body))
+	req.Header.Set(signature.Header, signature.Sign(r.secret, r.now(), body))
 
 	resp, err := r.client.Do(req)
 	if err != nil {
@@ -128,14 +123,4 @@ func (r *HTTPResolver) Resolve(ctx context.Context, t Token) (Key, error) {
 		return Key{}, errors.New("secretscan: resolver response has no api_key_id")
 	}
 	return Key{APIKeyID: out.APIKeyID, AccountID: out.AccountID}, nil
-}
-
-// sign returns a SignatureHeader value for body.
-func sign(secret []byte, at time.Time, body []byte) string {
-	ts := strconv.FormatInt(at.Unix(), 10)
-	mac := hmac.New(sha256.New, secret)
-	mac.Write([]byte(ts))
-	mac.Write([]byte{'.'})
-	mac.Write(body)
-	return "t=" + ts + ",v1=" + hex.EncodeToString(mac.Sum(nil))
 }

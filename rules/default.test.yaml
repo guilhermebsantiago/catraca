@@ -95,10 +95,30 @@ cases:
       action: allow
       matches: []
 
-  - name: when the store is down a send with an API key is blocked
+  - name: when the store is down a send with an API key is allowed
     signals:
       account: null
       key: null
+      ip: null
+      domain: null
+    expect:
+      action: allow
+      matches: []
+      errors:
+        - leaked-key-send
+        - new-account-burst
+        - complaint-rate-high
+        - hard-bounce-rate-high
+        - key-many-ips
+        - account-takeover-volume
+        - recipient-domain-spray
+
+  # While the store is down, the catalog still answers key.leaked for keys
+  # it knows leaked, and only that: every other key signal is absent.
+  - name: when the store is down a key known to be leaked is still blocked
+    signals:
+      account: null
+      key: {leaked: true, sends_1m: null, sends_1h: null, distinct_ips_1h: null, distinct_ips_24h: null, new_ip: null, age_hours: null}
       ip: null
       domain: null
     expect:
@@ -106,7 +126,6 @@ cases:
       enforced: [leaked-key-send]
       shadow: []
       errors:
-        - leaked-key-send
         - new-account-burst
         - complaint-rate-high
         - hard-bounce-rate-high

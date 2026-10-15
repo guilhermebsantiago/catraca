@@ -1,27 +1,17 @@
 package feedback
 
 import (
-	"crypto/hmac"
-	"crypto/sha256"
-	"encoding/hex"
 	"encoding/json"
 	"net/http"
-	"strconv"
 	"strings"
 	"testing"
 	"time"
 
 	"github.com/guilhermebsantiago/catraca/internal/event"
+	"github.com/guilhermebsantiago/catraca/signature"
 )
 
 const genericSecret = "s3cret"
-
-func catracaSignature(secret string, at time.Time, body []byte) string {
-	ts := strconv.FormatInt(at.Unix(), 10)
-	mac := hmac.New(sha256.New, []byte(secret))
-	mac.Write([]byte(ts + "." + string(body)))
-	return "t=" + ts + ",v1=" + hex.EncodeToString(mac.Sum(nil))
-}
 
 func newTestGeneric(t *testing.T, dec Decider, out *outcomes) http.Handler {
 	t.Helper()
@@ -39,7 +29,7 @@ func newTestGeneric(t *testing.T, dec Decider, out *outcomes) http.Handler {
 func postSigned(t *testing.T, h http.Handler, body string) (int, string) {
 	t.Helper()
 	b := []byte(body)
-	rec := post(t, h, b, http.Header{SignatureHeader: {catracaSignature(genericSecret, time.Now(), b)}})
+	rec := post(t, h, b, http.Header{signature.Header: {signature.Sign(genericSecret, time.Now(), b)}})
 	return rec.Code, rec.Body.String()
 }
 
@@ -131,18 +121,18 @@ func TestGenericComplaintDropsBounceType(t *testing.T) {
 func TestGenericSignature(t *testing.T) {
 	body := []byte(`{"account_id":"a","feedback":{"kind":"delivery"}}`)
 	now := time.Now()
-	good := catracaSignature(genericSecret, now, body)
+	good := signature.Sign(genericSecret, now, body)
 	tests := []struct {
 		name   string
 		header string
 		ok     bool
 	}{
 		{"valid", good, true},
-		{"rotation: second v1 matches", strings.Replace(catracaSignature("old", now, body), ",v1=", ",v1=00,v1=", 1) + "," + good[strings.Index(good, "v1="):], true},
+		{"rotation: second v1 matches", strings.Replace(signature.Sign("old", now, body), ",v1=", ",v1=00,v1=", 1) + "," + good[strings.Index(good, "v1="):], true},
 		{"spaces", strings.ReplaceAll(good, ",", ", "), true},
 		{"missing", "", false},
-		{"wrong secret", catracaSignature("other", now, body), false},
-		{"stale", catracaSignature(genericSecret, now.Add(-10*time.Minute), body), false},
+		{"wrong secret", signature.Sign("other", now, body), false},
+		{"stale", signature.Sign(genericSecret, now.Add(-10*time.Minute), body), false},
 		{"no timestamp", good[strings.Index(good, "v1="):], false},
 		{"no signature", good[:strings.Index(good, ",")], false},
 		{"bad hex", good[:strings.Index(good, "v1=")] + "v1=zz", false},
@@ -152,7 +142,7 @@ func TestGenericSignature(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			dec := &recorder{}
 			h := newTestGeneric(t, dec, nil)
-			rec := post(t, h, body, http.Header{SignatureHeader: {tt.header}})
+			rec := post(t, h, body, http.Header{signature.Header: {tt.header}})
 			if tt.ok != (rec.Code == http.StatusAccepted) {
 				t.Fatalf("status %d, want accepted = %v", rec.Code, tt.ok)
 			}

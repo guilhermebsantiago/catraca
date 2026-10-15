@@ -2,10 +2,11 @@
 // rules, such as revoking an API key or suspending an account.
 //
 // Dispatch writes one delivery per effect to a durable outbox before it
-// returns; Run delivers them. Each request is signed with HMAC-SHA256 (see
-// Sign and Verify), carries an idempotency key that is the same on every
-// attempt, and is retried with exponential backoff and jitter until it gets a
-// 2xx response or runs out of attempts.
+// returns; Run delivers them. Each request is signed in the
+// signature.Header header (receivers verify it with signature.Verify),
+// carries an idempotency key that is the same on every attempt, and is
+// retried with exponential backoff and jitter until it gets a 2xx response or
+// runs out of attempts.
 package hooks
 
 import (
@@ -28,6 +29,16 @@ import (
 	"github.com/guilhermebsantiago/catraca/internal/audit"
 	"github.com/guilhermebsantiago/catraca/internal/decision"
 	"github.com/guilhermebsantiago/catraca/internal/event"
+	"github.com/guilhermebsantiago/catraca/signature"
+)
+
+// Headers sent with every delivery, next to signature.Header.
+const (
+	// IdempotencyKeyHeader carries "<decision id>:<effect>". It is the same
+	// on every attempt of a delivery: receivers should act on a key once.
+	IdempotencyKeyHeader = "Catraca-Idempotency-Key"
+	// AttemptHeader carries the attempt number, starting at 1.
+	AttemptHeader = "Catraca-Attempt"
 )
 
 // Hook is a webhook that carries out one effect.
@@ -288,6 +299,9 @@ func newPayload(effect string, ev event.Event, dec decision.Decision) Payload {
 		p.EventID = ev.ID
 	}
 	for _, m := range dec.Matches {
+		if m.Errored {
+			continue
+		}
 		for _, e := range m.Effects {
 			if e == effect {
 				p.RuleIDs = append(p.RuleIDs, m.RuleID)
@@ -409,7 +423,7 @@ func (d *Dispatcher) send(ctx context.Context, h Hook, del audit.Delivery) (int,
 	}
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("User-Agent", "Catraca-Hooks/1")
-	req.Header.Set(SignatureHeader, Sign(h.Secret, d.now(), del.Payload))
+	req.Header.Set(signature.Header, signature.Sign(h.Secret, d.now(), del.Payload))
 	req.Header.Set(IdempotencyKeyHeader, del.DecisionID+":"+del.Effect)
 	req.Header.Set(AttemptHeader, strconv.Itoa(del.Attempts))
 

@@ -37,6 +37,7 @@ internal/feedback    SES (via SNS, signature verified), useSend, generic
 internal/secretscan  GitHub secret scanning partner endpoint
 internal/api         HTTP server, auth, metrics
 internal/config      catraca.yaml
+signature            Catraca-Signature: sign and verify (public, for receivers)
 ```
 
 Dependency direction: `event` and `decision` import nothing internal.
@@ -45,7 +46,10 @@ Dependency direction: `event` and `decision` import nothing internal.
 (`Recorder`, `Dispatcher`). `audit`, `hooks` implement those. `feedback` and
 `secretscan` produce events and call a `Decider` interface they define
 (`Decide(ctx, event.Event) (decision.Decision, error)`). `api` and `cmd` wire
-everything. No package imports `api` or `cmd`.
+everything. No package imports `api` or `cmd`. `signature` is the one public
+package, so platforms in Go can verify Catraca's requests and sign their own;
+it imports nothing from the module, and `hooks`, `feedback` and
+`secretscan` use it.
 
 ## Signals
 
@@ -98,6 +102,12 @@ Rates are `float64` in [0, 1]; counts are `int64`; ages are hours as
 | age_hours | since first seen |
 | leaked | the key was reported leaked (MarkLeaked) |
 
+When the store fails, every store-backed map is absent except that, for a
+key this process knows was leaked, `key` holds `leaked: true`. The catalog
+keeps a bounded in-memory set of leaked key ids, filled by `MarkLeaked`,
+`key_leak` events and store reads that see a leaked key, so a rule that
+fails open still blocks known leaked keys through an outage.
+
 `ip` (present when the event has an IP): `sends_1m`, `sends_1h`,
 `distinct_accounts_24h`, `distinct_keys_24h`, `signups_24h` (account events
 with action "signup").
@@ -128,7 +138,7 @@ rules:
     when: event.type == "send" && key.leaked
     action: block
     mode: enforce
-    on_error: closed
+    on_error: open      # known leaked keys stay blocked when the store is down
     effects: [revoke_key]
     reason: API key was found in public and must be rotated
   - id: new-account-burst
@@ -141,7 +151,7 @@ rules:
 Fields: `id` (required, unique, kebab-case), `description`, `when` (CEL,
 must return bool), `action` (flag|throttle|hold|block), `mode`
 (shadow|enforce), `on_error` (open|closed), `effects` (names of hooks to call
-when the rule is enforced and matches), `retry_after` (for throttle),
+when the rule is enforced and its `when` is true), `retry_after` (for throttle),
 `reason` (required: shown to the platform and in the audit log), `owner`,
 `tags`, and `override` (`{by, reason, at}`: a recorded decision to enforce a
 rule that has not passed the gate).
@@ -168,12 +178,14 @@ and the expected matches, so a rule change comes with a test like code does.
    mark the decision degraded and continue with what was returned.
 3. Evaluate every rule. A matching enforced rule contributes its action; a
    matching shadow rule is recorded in `Shadow`. An evaluation error follows
-   `on_error`: open skips the rule, closed counts it as matched (`Errored`).
+   `on_error`: open skips the rule, closed counts it as matched (`Errored`):
+   its action applies, its effects do not, so an outage never fires effects
+   for every event.
 4. The action is the most severe enforced match; Throttle carries the largest
    retry_after among enforced throttles.
 5. For key_leak events, call `Catalog.MarkLeaked` before evaluating.
-6. Hand the decision to the Recorder (non-blocking) and, when there are
-   enforced effects, to the Dispatcher.
+6. Hand the decision to the Recorder (non-blocking) and, when enforced
+   matches that are not `Errored` have effects, to the Dispatcher.
 7. Metrics: decisions by action, matches by rule and mode, errors by rule,
    degraded decisions, latency histogram.
 
@@ -203,7 +215,8 @@ An enforced rule with `effects` triggers outgoing webhooks configured by
 name (`revoke_key`, `suspend_account`, `notify`, ...). Payload: effect,
 decision id, event type, account, key, rule, reason. Signed with
 HMAC-SHA256 over `timestamp.body` in a `Catraca-Signature: t=..,v1=..`
-header. Deliveries are written to an outbox table in the audit database
+header (package `signature`; the generic feedback endpoint and the secret
+scanning resolver use the same scheme). Deliveries are written to an outbox table in the audit database
 first, retried with exponential backoff and jitter, and are idempotent per
 (decision id, effect).
 
