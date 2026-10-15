@@ -1,5 +1,10 @@
 # Catraca
 
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="docs/media/lane-dark.gif">
+  <img alt="The Catraca rotor deciding a stream of events from the demo: most allowed, one each flagged, throttled, held and blocked, and dashed rings for shadow matches" src="docs/media/lane.gif" width="800">
+</picture>
+
 A self-hosted anti-abuse engine for platforms that send email.
 
 Your platform asks Catraca before each send and reports delivery feedback and
@@ -71,6 +76,8 @@ blocks only keys reported leaked.
 - [Hono email API](examples/hono) that asks Catraca before each send
 - [Synthetic replay dataset](examples/replay) and the default ruleset's
   backtest on it
+- [Demo scenario](examples/demo) against a real server, recorded for the
+  [launch video](docs/media/catraca.mp4) ([how it is made](media))
 
 ## Development
 
