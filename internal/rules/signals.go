@@ -1,5 +1,7 @@
 package rules
 
+import "github.com/guilhermebsantiago/catraca/internal/signal"
+
 // signalKind is the Go type a signal has in a signal.Set.
 type signalKind int
 
@@ -30,75 +32,40 @@ func (k signalKind) String() string {
 	return "unknown"
 }
 
-// knownSignals are the signals the catalog computes, as listed in
-// docs/design.md. Lint warns about rules that read anything else, since such
-// a rule always fails to evaluate, and fixtures use the kinds to give values
-// the types the catalog produces (age_hours: 2 becomes float64(2)).
-var knownSignals = map[string]map[string]signalKind{
-	"event": {
-		"type":           kindString,
-		"account_id":     kindString,
-		"api_key_id":     kindString,
-		"ip":             kindString,
-		"from_domain":    kindString,
-		"recipients":     kindInt,
-		"to_domains":     kindStrings,
-		"link_domains":   kindStrings,
-		"links":          kindInt,
-		"subject_length": kindInt,
-		"feedback_kind":  kindString,
-		"bounce_type":    kindString,
-		"account_action": kindString,
-		"attributes":     kindStringMap,
-	},
-	"account": {
-		"sends_1m":                       kindInt,
-		"sends_1h":                       kindInt,
-		"sends_24h":                      kindInt,
-		"sends_7d":                       kindInt,
-		"recipients_1h":                  kindInt,
-		"recipients_24h":                 kindInt,
-		"distinct_recipient_domains_1h":  kindInt,
-		"distinct_recipient_domains_24h": kindInt,
-		"distinct_ips_24h":               kindInt,
-		"distinct_keys_24h":              kindInt,
-		"bounces_24h":                    kindInt,
-		"hard_bounces_24h":               kindInt,
-		"complaints_24h":                 kindInt,
-		"deliveries_24h":                 kindInt,
-		"bounce_rate_24h":                kindFloat,
-		"hard_bounce_rate_24h":           kindFloat,
-		"complaint_rate_24h":             kindFloat,
-		"age_hours":                      kindFloat,
-		"hourly_baseline_7d":             kindFloat,
-		"volume_ratio_1h":                kindFloat,
-		"new_ip":                         kindBool,
-	},
-	"key": {
-		"sends_1m":         kindInt,
-		"sends_1h":         kindInt,
-		"distinct_ips_1h":  kindInt,
-		"distinct_ips_24h": kindInt,
-		"new_ip":           kindBool,
-		"age_hours":        kindFloat,
-		"leaked":           kindBool,
-	},
-	"ip": {
-		"sends_1m":              kindInt,
-		"sends_1h":              kindInt,
-		"distinct_accounts_24h": kindInt,
-		"distinct_keys_24h":     kindInt,
-		"signups_24h":           kindInt,
-	},
-	"domain": {
-		"sends_1h":              kindInt,
-		"distinct_accounts_24h": kindInt,
-		"complaints_24h":        kindInt,
-	},
+// kindOfType maps the CEL types of signal.Spec to kinds.
+var kindOfType = map[string]signalKind{
+	"int":                 kindInt,
+	"double":              kindFloat,
+	"bool":                kindBool,
+	"string":              kindString,
+	"list(string)":        kindStrings,
+	"map(string, string)": kindStringMap,
+}
+
+// knownSignals are the signals the catalog computes, by map and name, built
+// from signal.Specs so the two cannot disagree. Lint warns about rules that
+// read anything else, since such a rule always fails to evaluate, and
+// fixtures use the kinds to give values the types the catalog produces
+// (age_hours: 2 becomes float64(2)).
+var knownSignals = indexSpecs(signal.Specs())
+
+func indexSpecs(specs []signal.Spec) map[string]map[string]signalKind {
+	out := map[string]map[string]signalKind{}
+	for _, s := range specs {
+		if out[s.Map] == nil {
+			out[s.Map] = map[string]signalKind{}
+		}
+		// A type missing from kindOfType gets kind 0, and fixtures guess
+		// its kind from the YAML value; a test keeps that from happening.
+		out[s.Map][s.Name] = kindOfType[s.Type]
+	}
+	return out
 }
 
 // presenceGuards name, for each map that is absent on some events, the event
-// signal that says whether it is present.
+// signal that says whether it is present. They describe the catalog's
+// behavior rather than its signal list, so they are kept here, on top of
+// signal.Specs; a test checks that they name known signals.
 var presenceGuards = []struct{ Map, Guard string }{
 	{"key", "api_key_id"},
 	{"ip", "ip"},
