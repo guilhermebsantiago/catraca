@@ -123,8 +123,9 @@ policy decides:
 - `open` skips the rule. Detection degrades; good senders are not stopped.
   This is the right choice for almost every rule.
 - `closed` counts the rule as matched, with `errored: true` in the decision.
-  Use it only when letting abuse through is worse than stopping good
-  traffic, such as a leaked key.
+  The rule's action applies but its effects do not run (see
+  [Effects](#effects)). Use it only when letting abuse through is worse
+  than stopping good traffic while the store is down.
 
 Either way the rule is listed in the decision's `errors`, and
 `catraca_rule_errors_total` counts it.
@@ -226,8 +227,10 @@ effects: [revoke_key, notify]
 ```
 
 An effect is the name of an outgoing webhook configured in `catraca.yaml`.
-Effects run only when the rule is **enforced** and matches, including when
-it matches because it fails closed. Deliveries go through a durable outbox,
+Effects run only when the rule is **enforced** and its `when` is true. A
+rule that matches only because it fails closed (`errored: true`) takes its
+action but runs no effects: during a store outage it would otherwise revoke
+or suspend everything it covers. Deliveries go through a durable outbox,
 are retried, and are idempotent per decision and effect, so a webhook may be
 delivered more than once but represents one decision. Effects on a shadow
 rule never run; lint points them out.

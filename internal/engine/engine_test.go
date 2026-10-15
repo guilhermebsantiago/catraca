@@ -386,6 +386,28 @@ func TestDecideStoreFailure(t *testing.T) {
 	if got := counter(t, h.reg, "catraca_degraded_decisions_total", nil); got != 1 {
 		t.Errorf("degraded counter = %v, want 1", got)
 	}
+	// leaked lists revoke_key, but it matched only by failing closed: an
+	// outage must not revoke every key that sends.
+	if effects := d.Effects(); len(effects) != 0 || len(h.disp.calls) != 0 {
+		t.Errorf("effects = %v, dispatched %d times, want none for an errored match", effects, len(h.disp.calls))
+	}
+}
+
+func TestDecideStoreFailureWithAKnownLeakedKey(t *testing.T) {
+	h := newHarness(t, Options{})
+	h.cat.set = signal.Set{
+		Event: map[string]any{"type": "send", "api_key_id": "key_1"},
+		Key:   map[string]any{"leaked": true},
+	}
+	h.cat.err = errors.New("redis: connection refused")
+
+	d := h.decide(t, sendEvent())
+	if !d.Degraded || d.Action != decision.Block || !slices.Equal(ruleIDs(d.Matches), []string{"leaked"}) || d.Matches[0].Errored {
+		t.Errorf("decision = %+v, want a degraded block by leaked, not errored", d)
+	}
+	if len(h.disp.calls) != 1 || !slices.Equal(h.disp.calls[0].d.Effects(), []string{"revoke_key"}) {
+		t.Errorf("dispatched %d times, want once with revoke_key", len(h.disp.calls))
+	}
 }
 
 func TestDecideStoreFailureWithoutKey(t *testing.T) {

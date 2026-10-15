@@ -145,7 +145,7 @@ rules:
 Fields: `id` (required, unique, kebab-case), `description`, `when` (CEL,
 must return bool), `action` (flag|throttle|hold|block), `mode`
 (shadow|enforce), `on_error` (open|closed), `effects` (names of hooks to call
-when the rule is enforced and matches), `retry_after` (for throttle),
+when the rule is enforced and its `when` is true), `retry_after` (for throttle),
 `reason` (required: shown to the platform and in the audit log), `owner`,
 `tags`, and `override` (`{by, reason, at}`: a recorded decision to enforce a
 rule that has not passed the gate).
@@ -172,12 +172,14 @@ and the expected matches, so a rule change comes with a test like code does.
    mark the decision degraded and continue with what was returned.
 3. Evaluate every rule. A matching enforced rule contributes its action; a
    matching shadow rule is recorded in `Shadow`. An evaluation error follows
-   `on_error`: open skips the rule, closed counts it as matched (`Errored`).
+   `on_error`: open skips the rule, closed counts it as matched (`Errored`):
+   its action applies, its effects do not, so an outage never fires effects
+   for every event.
 4. The action is the most severe enforced match; Throttle carries the largest
    retry_after among enforced throttles.
 5. For key_leak events, call `Catalog.MarkLeaked` before evaluating.
-6. Hand the decision to the Recorder (non-blocking) and, when there are
-   enforced effects, to the Dispatcher.
+6. Hand the decision to the Recorder (non-blocking) and, when enforced
+   matches that are not `Errored` have effects, to the Dispatcher.
 7. Metrics: decisions by action, matches by rule and mode, errors by rule,
    degraded decisions, latency histogram.
 

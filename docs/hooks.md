@@ -33,10 +33,12 @@ Dispatcher-wide settings:
 
 ## When a webhook is called
 
-For each decision, the engine hands the decision to the dispatcher, which
-writes one delivery per effect of the **enforced** matches. Effects of shadow
-matches never fire: a shadow rule only records what it would have done. An
-effect with no configured hook is skipped.
+For each decision whose enforced matches have effects, the engine hands the
+decision to the dispatcher, which writes one delivery per effect. Effects of
+shadow matches never fire: a shadow rule only records what it would have
+done. Nor do the effects of a rule that matched only because it fails closed
+(`errored` in the decision): while the store is down such a rule matches
+every event it covers. An effect with no configured hook is skipped.
 
 The delivery is written to the `outbox` table in the audit database before
 `Dispatch` returns, so it survives a crash or a restart. A background worker

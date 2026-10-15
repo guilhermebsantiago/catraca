@@ -299,6 +299,9 @@ func newPayload(effect string, ev event.Event, dec decision.Decision) Payload {
 		p.EventID = ev.ID
 	}
 	for _, m := range dec.Matches {
+		if m.Errored {
+			continue
+		}
 		for _, e := range m.Effects {
 			if e == effect {
 				p.RuleIDs = append(p.RuleIDs, m.RuleID)

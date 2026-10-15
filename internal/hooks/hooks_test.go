@@ -421,6 +421,29 @@ func TestDispatchWithoutEffectsWritesNothing(t *testing.T) {
 	}
 }
 
+func TestDispatchSkipsErroredMatches(t *testing.T) {
+	db := openOutbox(t)
+	d, _ := newTestDispatcher(t, db, Config{Hooks: []Hook{
+		{Name: "revoke_key", URL: "https://hooks.example/revoke", Secret: secret},
+		{Name: "notify", URL: "https://hooks.example/notify", Secret: secret},
+	}})
+	dec := leakDecision("d1")
+	dec.Matches[0].Errored = true // leaked-key-send failed closed: no effects
+	d.Dispatch(context.Background(), sendEvent(), dec)
+
+	all := deliveries(t, db, "d1")
+	if len(all) != 1 {
+		t.Fatalf("outbox = %+v, want only revoke_key from key-many-ips", all)
+	}
+	var p Payload
+	if err := json.Unmarshal(all["revoke_key"].Payload, &p); err != nil {
+		t.Fatal(err)
+	}
+	if len(p.RuleIDs) != 1 || p.RuleIDs[0] != "key-many-ips" {
+		t.Errorf("rule_ids = %v, want [key-many-ips]", p.RuleIDs)
+	}
+}
+
 func TestDispatchSurvivesCanceledContext(t *testing.T) {
 	db := openOutbox(t)
 	d, _ := newTestDispatcher(t, db, Config{Hooks: []Hook{{Name: "revoke_key", URL: "https://hooks.example/", Secret: secret}}})
