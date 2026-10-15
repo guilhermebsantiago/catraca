@@ -275,15 +275,23 @@ func TestReplay(t *testing.T) {
 	expect(t, runCLI(t, nil, "replay", rules), exitUsage)
 }
 
+// labelRequest is what the fake server saw of the last label request.
+type labelRequest struct {
+	path, auth string
+	label      audit.Label
+}
+
 func TestLabel(t *testing.T) {
-	var got struct {
-		path, auth string
-		label      audit.Label
-	}
+	var mu sync.Mutex
+	var last labelRequest
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		got.path, got.auth = r.URL.Path, r.Header.Get("Authorization")
+		var req labelRequest
+		req.path, req.auth = r.URL.Path, r.Header.Get("Authorization")
 		body, _ := io.ReadAll(r.Body)
-		_ = json.Unmarshal(body, &got.label)
+		_ = json.Unmarshal(body, &req.label)
+		mu.Lock()
+		last = req
+		mu.Unlock()
 		w.Header().Set("Content-Type", "application/json")
 		switch {
 		case strings.Contains(r.URL.Path, "missing"):
@@ -294,7 +302,7 @@ func TestLabel(t *testing.T) {
 			_, _ = w.Write([]byte(`{"error":{"code":"internal","message":"the audit log could not be read"}}`))
 		default:
 			w.WriteHeader(http.StatusCreated)
-			_ = json.NewEncoder(w).Encode(audit.Entry{Labels: []audit.Label{got.label}})
+			_ = json.NewEncoder(w).Encode(audit.Entry{Labels: []audit.Label{req.label}})
 		}
 	}))
 	defer srv.Close()
@@ -302,6 +310,9 @@ func TestLabel(t *testing.T) {
 	r := runCLI(t, map[string]string{"CATRACA_TOKEN": testToken}, "label", "dec/1",
 		"--verdict", "false_positive", "--by", "support@platform", "--reason", "appeal #4411", "--rule", "burst", "--server", srv.URL+"/")
 	expect(t, r, exitOK, "labeled decision dec/1 false_positive for rule burst; it has 1 label(s)")
+	mu.Lock()
+	got := last
+	mu.Unlock()
 	if got.path != "/v1/decisions/dec%2F1/labels" && got.path != "/v1/decisions/dec/1/labels" {
 		t.Errorf("path = %q", got.path)
 	}

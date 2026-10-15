@@ -32,7 +32,10 @@ const (
 	DefaultHookTimeout     = 10 * time.Second
 	DefaultLogLevel        = "info"
 	DefaultLogFormat       = "json"
+)
 
+// Store backends, the values of store.backend.
+const (
 	StoreMemory = "memory"
 	StoreRedis  = "redis"
 )
