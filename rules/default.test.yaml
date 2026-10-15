@@ -1,0 +1,310 @@
+# Fixtures for default.yaml. Run them with `catraca rules test`.
+#
+# `base` is a healthy, established sender. Each case starts from it and
+# changes only the signals that matter, so a case reads as "a healthy sender,
+# except...". A null value removes a signal or a whole map, as when the store
+# fails. Most cases check `matches`, which holds whatever the rules' modes, so
+# promoting a rule from shadow to enforce does not break them; `action`,
+# `enforced` and `shadow` pin down what the current modes do.
+
+base:
+  event:
+    type: send
+    account_id: acct_healthy
+    api_key_id: key_live
+    ip: 203.0.113.10
+    from_domain: example.com
+    recipients: 1
+    to_domains: [gmail.com]
+    link_domains: [example.com]
+    links: 1
+    subject_length: 32
+    attributes: {}
+  account:
+    sends_1m: 2
+    sends_1h: 40
+    sends_24h: 900
+    sends_7d: 6000
+    recipients_1h: 40
+    recipients_24h: 900
+    distinct_recipient_domains_1h: 12
+    distinct_recipient_domains_24h: 60
+    distinct_ips_24h: 2
+    distinct_keys_24h: 1
+    bounces_24h: 4
+    hard_bounces_24h: 2
+    complaints_24h: 0
+    deliveries_24h: 890
+    bounce_rate_24h: 0.0044
+    hard_bounce_rate_24h: 0.0022
+    complaint_rate_24h: 0
+    age_hours: 4000
+    hourly_baseline_7d: 35.7
+    volume_ratio_1h: 1.12
+    new_ip: false
+  key:
+    sends_1m: 2
+    sends_1h: 40
+    distinct_ips_1h: 1
+    distinct_ips_24h: 2
+    new_ip: false
+    age_hours: 3000
+    leaked: false
+  ip:
+    sends_1m: 2
+    sends_1h: 40
+    distinct_accounts_24h: 1
+    distinct_keys_24h: 1
+    signups_24h: 0
+  domain:
+    sends_1h: 40
+    distinct_accounts_24h: 1
+    complaints_24h: 0
+
+cases:
+  - name: a healthy established sender is allowed
+    expect:
+      action: allow
+      matches: []
+      errors: []
+
+  # leaked-key-send
+
+  - name: a send with a leaked key is blocked and the key revoked
+    signals:
+      key: {leaked: true}
+    expect:
+      action: block
+      enforced: [leaked-key-send]
+      shadow: []
+
+  - name: a send without an API key does not read key signals
+    signals:
+      event: {api_key_id: ""}
+      key: null
+    expect:
+      action: allow
+      matches: []
+      errors: []
+
+  - name: the key_leak report itself is not a send
+    signals:
+      event: {type: key_leak}
+      key: {leaked: true}
+    expect:
+      action: allow
+      matches: []
+
+  - name: when the store is down a send with an API key is blocked
+    signals:
+      account: null
+      key: null
+      ip: null
+      domain: null
+    expect:
+      action: block
+      enforced: [leaked-key-send]
+      shadow: []
+      errors:
+        - leaked-key-send
+        - new-account-burst
+        - complaint-rate-high
+        - hard-bounce-rate-high
+        - key-many-ips
+        - account-takeover-volume
+        - recipient-domain-spray
+
+  - name: a leaked key outranks a burst whatever the burst rule's mode
+    signals:
+      account: {age_hours: 3, sends_1m: 250}
+      key: {leaked: true}
+    expect:
+      action: block
+      matches: [leaked-key-send, new-account-burst]
+
+  # new-account-burst
+
+  - name: a day-old account sending 150 a minute bursts
+    signals:
+      account: {age_hours: 5, sends_1m: 150}
+    expect:
+      matches: [new-account-burst]
+
+  - name: exactly 100 a minute is not a burst
+    signals:
+      account: {age_hours: 5, sends_1m: 100}
+    expect:
+      matches: []
+
+  - name: an established account may send 150 a minute
+    signals:
+      account: {sends_1m: 150}
+    expect:
+      matches: []
+
+  # complaint-rate-high
+
+  - name: complaints at 0.4% over 5000 sends
+    signals:
+      account: {sends_24h: 5000, complaints_24h: 20, complaint_rate_24h: 0.004}
+    expect:
+      matches: [complaint-rate-high]
+
+  - name: complaints at 0.2% are under the bulk sender ceiling
+    signals:
+      account: {sends_24h: 5000, complaints_24h: 10, complaint_rate_24h: 0.002}
+    expect:
+      matches: []
+
+  - name: two complaints on a small account are not a rate
+    signals:
+      account: {sends_24h: 200, complaints_24h: 2, complaint_rate_24h: 0.01}
+    expect:
+      matches: []
+
+  # hard-bounce-rate-high
+
+  - name: hard bounces at 8% over 2000 sends
+    signals:
+      account: {sends_24h: 2000, hard_bounces_24h: 160, hard_bounce_rate_24h: 0.08}
+    expect:
+      matches: [hard-bounce-rate-high]
+
+  - name: hard bounces at 3% are tolerated
+    signals:
+      account: {sends_24h: 2000, hard_bounces_24h: 60, hard_bounce_rate_24h: 0.03}
+    expect:
+      matches: []
+
+  - name: a high bounce rate on 100 sends is noise
+    signals:
+      account: {sends_24h: 100, hard_bounces_24h: 20, hard_bounce_rate_24h: 0.2}
+    expect:
+      matches: []
+
+  # key-many-ips
+
+  - name: a key used from 35 IPs in an hour, now from a new one
+    signals:
+      key: {distinct_ips_1h: 35, new_ip: true}
+    expect:
+      matches: [key-many-ips]
+
+  - name: a key used by a known fleet of 35 IPs
+    signals:
+      key: {distinct_ips_1h: 35, new_ip: false}
+    expect:
+      matches: []
+
+  - name: a key seen on a new IP after a few known ones
+    signals:
+      key: {distinct_ips_1h: 3, new_ip: true}
+    expect:
+      matches: []
+
+  # account-takeover-volume
+
+  - name: an old account sending 22 times its baseline from a new IP
+    signals:
+      account: {sends_1h: 800, volume_ratio_1h: 22.4, new_ip: true}
+    expect:
+      matches: [account-takeover-volume]
+
+  - name: an old account spiking from its usual IP
+    signals:
+      account: {sends_1h: 800, volume_ratio_1h: 22.4, new_ip: false}
+    expect:
+      matches: []
+
+  - name: a young account spiking from a new IP is not a takeover
+    signals:
+      account: {age_hours: 300, sends_1h: 800, volume_ratio_1h: 22.4, new_ip: true}
+    expect:
+      matches: []
+
+  - name: a tiny account whose ratio jumps on a few sends
+    signals:
+      account: {sends_1h: 30, hourly_baseline_7d: 0.5, volume_ratio_1h: 30, new_ip: true}
+    expect:
+      matches: []
+
+  # shortener-links-new-account
+
+  - name: a two-day-old account linking through bit.ly
+    signals:
+      event: {link_domains: [example.com, bit.ly], links: 2}
+      account: {age_hours: 40}
+    expect:
+      matches: [shortener-links-new-account]
+
+  - name: an established account linking through bit.ly
+    signals:
+      event: {link_domains: [bit.ly]}
+    expect:
+      matches: []
+
+  - name: a new account linking to its own domain
+    signals:
+      account: {age_hours: 40}
+    expect:
+      matches: []
+
+  # signup-farm-ip
+
+  - name: the ninth signup from one IP in a day
+    signals:
+      event: {type: account, account_action: signup}
+      ip: {signups_24h: 9}
+    expect:
+      matches: [signup-farm-ip]
+
+  - name: a second signup from a shared office IP
+    signals:
+      event: {type: account, account_action: signup}
+      ip: {signups_24h: 2}
+    expect:
+      matches: []
+
+  - name: logins from a busy IP are not signups
+    signals:
+      event: {type: account, account_action: login}
+      ip: {signups_24h: 9}
+    expect:
+      matches: []
+
+  - name: a signup without an IP is skipped, not an error
+    signals:
+      event: {type: account, account_action: signup, ip: ""}
+      ip: null
+    expect:
+      matches: []
+      errors: []
+
+  # recipient-domain-spray
+
+  - name: a new account mailing 400 recipients on 350 domains in an hour
+    signals:
+      account: {age_hours: 30, recipients_1h: 400, distinct_recipient_domains_1h: 350}
+    expect:
+      matches: [recipient-domain-spray]
+
+  - name: a new consumer app mailing 400 recipients on 20 domains
+    signals:
+      account: {age_hours: 30, recipients_1h: 400, distinct_recipient_domains_1h: 20}
+    expect:
+      matches: []
+
+  - name: an established B2B sender reaching many domains
+    signals:
+      account: {recipients_1h: 400, distinct_recipient_domains_1h: 350}
+    expect:
+      matches: []
+
+  # Several rules at once.
+
+  - name: a new account bursting through shorteners matches both rules
+    signals:
+      event: {link_domains: [tinyurl.com]}
+      account: {age_hours: 2, sends_1m: 300}
+    expect:
+      matches: [new-account-burst, shortener-links-new-account]
