@@ -1,0 +1,19 @@
+Ruleset 3ed1ef48775c, matches since 2026-09-15T23:17:51Z
+Gate: at least 30 labeled matches and a precision lower bound of 0.90 (Wilson 95%)
+
+RULE                         MODE     MATCHES  LABELED  TP  FP  PRECISION  95% CI          STATUS
+leaked-key-send              enforce  1        1        1   0   1.000      [0.207, 1.000]  insufficient_labels (override)
+new-account-burst            enforce  40       40       40  0   1.000      [0.912, 1.000]  passes
+complaint-rate-high          enforce  1        1        1   0   1.000      [0.207, 1.000]  insufficient_labels
+hard-bounce-rate-high        shadow   0        0        0   0   -          -               insufficient_labels
+key-many-ips                 shadow   0        0        0   0   -          -               insufficient_labels
+account-takeover-volume      shadow   0        0        0   0   -          -               insufficient_labels
+shortener-links-new-account  enforce  10       10       4   6   0.400      [0.168, 0.687]  below_precision
+signup-farm-ip               shadow   60       60       59  1   0.983      [0.911, 0.997]  passes
+recipient-domain-spray       shadow   0        0        0   0   -          -               insufficient_labels
+
+Promote candidates (shadow rules that pass the gate):
+  signup-farm-ip: precision 0.983 [0.911, 0.997] on 60 labeled matches
+
+Retire candidates (enforced rules below the gate):
+  shortener-links-new-account: precision 0.400 [0.168, 0.687] on 10 labeled matches

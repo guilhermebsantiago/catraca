@@ -1,0 +1,158 @@
+{
+  "since": "2026-09-15T23:17:51.9770474Z",
+  "ruleset_version": "3ed1ef48775c",
+  "gate": {
+    "min_labeled": 30,
+    "min_precision": 0.9
+  },
+  "rules": [
+    {
+      "rule_id": "leaked-key-send",
+      "mode": "enforce",
+      "matches": 1,
+      "errored": 0,
+      "labeled": 1,
+      "true_positives": 1,
+      "false_positives": 0,
+      "precision": 1,
+      "precision_lower": 0.20654931437723742,
+      "precision_upper": 1,
+      "status": "insufficient_labels",
+      "override": true
+    },
+    {
+      "rule_id": "new-account-burst",
+      "mode": "enforce",
+      "matches": 40,
+      "errored": 0,
+      "labeled": 40,
+      "true_positives": 40,
+      "false_positives": 0,
+      "precision": 1,
+      "precision_lower": 0.9123783988027134,
+      "precision_upper": 1,
+      "status": "passes"
+    },
+    {
+      "rule_id": "complaint-rate-high",
+      "mode": "enforce",
+      "matches": 1,
+      "errored": 0,
+      "labeled": 1,
+      "true_positives": 1,
+      "false_positives": 0,
+      "precision": 1,
+      "precision_lower": 0.20654931437723742,
+      "precision_upper": 1,
+      "status": "insufficient_labels"
+    },
+    {
+      "rule_id": "hard-bounce-rate-high",
+      "mode": "shadow",
+      "matches": 0,
+      "errored": 0,
+      "labeled": 0,
+      "true_positives": 0,
+      "false_positives": 0,
+      "precision": 0,
+      "precision_lower": 0,
+      "precision_upper": 1,
+      "status": "insufficient_labels"
+    },
+    {
+      "rule_id": "key-many-ips",
+      "mode": "shadow",
+      "matches": 0,
+      "errored": 0,
+      "labeled": 0,
+      "true_positives": 0,
+      "false_positives": 0,
+      "precision": 0,
+      "precision_lower": 0,
+      "precision_upper": 1,
+      "status": "insufficient_labels"
+    },
+    {
+      "rule_id": "account-takeover-volume",
+      "mode": "shadow",
+      "matches": 0,
+      "errored": 0,
+      "labeled": 0,
+      "true_positives": 0,
+      "false_positives": 0,
+      "precision": 0,
+      "precision_lower": 0,
+      "precision_upper": 1,
+      "status": "insufficient_labels"
+    },
+    {
+      "rule_id": "shortener-links-new-account",
+      "mode": "enforce",
+      "matches": 10,
+      "errored": 0,
+      "labeled": 10,
+      "true_positives": 4,
+      "false_positives": 6,
+      "precision": 0.4,
+      "precision_lower": 0.1681803297062362,
+      "precision_upper": 0.6873262302663418,
+      "status": "below_precision"
+    },
+    {
+      "rule_id": "signup-farm-ip",
+      "mode": "shadow",
+      "matches": 60,
+      "errored": 0,
+      "labeled": 60,
+      "true_positives": 59,
+      "false_positives": 1,
+      "precision": 0.9833333333333333,
+      "precision_lower": 0.9114487027240993,
+      "precision_upper": 0.9970518402052138,
+      "status": "passes"
+    },
+    {
+      "rule_id": "recipient-domain-spray",
+      "mode": "shadow",
+      "matches": 0,
+      "errored": 0,
+      "labeled": 0,
+      "true_positives": 0,
+      "false_positives": 0,
+      "precision": 0,
+      "precision_lower": 0,
+      "precision_upper": 1,
+      "status": "insufficient_labels"
+    }
+  ],
+  "promote": [
+    {
+      "rule_id": "signup-farm-ip",
+      "mode": "shadow",
+      "matches": 60,
+      "errored": 0,
+      "labeled": 60,
+      "true_positives": 59,
+      "false_positives": 1,
+      "precision": 0.9833333333333333,
+      "precision_lower": 0.9114487027240993,
+      "precision_upper": 0.9970518402052138,
+      "status": "passes"
+    }
+  ],
+  "retire": [
+    {
+      "rule_id": "shortener-links-new-account",
+      "mode": "enforce",
+      "matches": 10,
+      "errored": 0,
+      "labeled": 10,
+      "true_positives": 4,
+      "false_positives": 6,
+      "precision": 0.4,
+      "precision_lower": 0.1681803297062362,
+      "precision_upper": 0.6873262302663418,
+      "status": "below_precision"
+    }
+  ]
+}
