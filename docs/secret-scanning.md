@@ -23,10 +23,12 @@ rules:
     effects: [revoke_key, notify]
     reason: API key was found in public by GitHub secret scanning
   - id: leaked-key-send
-    when: event.type == "send" && key.leaked
+    when: event.type == "send" && event.api_key_id != "" && key.leaked
     action: block
     mode: enforce
-    on_error: closed
+    # Known leaked keys stay blocked while the store is down; see
+    # docs/signals.md.
+    on_error: open
     reason: API key was found in public and must be rotated
 ```
 

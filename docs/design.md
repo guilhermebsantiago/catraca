@@ -102,6 +102,12 @@ Rates are `float64` in [0, 1]; counts are `int64`; ages are hours as
 | age_hours | since first seen |
 | leaked | the key was reported leaked (MarkLeaked) |
 
+When the store fails, every store-backed map is absent except that, for a
+key this process knows was leaked, `key` holds `leaked: true`. The catalog
+keeps a bounded in-memory set of leaked key ids, filled by `MarkLeaked`,
+`key_leak` events and store reads that see a leaked key, so a rule that
+fails open still blocks known leaked keys through an outage.
+
 `ip` (present when the event has an IP): `sends_1m`, `sends_1h`,
 `distinct_accounts_24h`, `distinct_keys_24h`, `signups_24h` (account events
 with action "signup").
@@ -132,7 +138,7 @@ rules:
     when: event.type == "send" && key.leaked
     action: block
     mode: enforce
-    on_error: closed
+    on_error: open      # known leaked keys stay blocked when the store is down
     effects: [revoke_key]
     reason: API key was found in public and must be rotated
   - id: new-account-burst

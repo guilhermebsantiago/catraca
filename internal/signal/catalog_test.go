@@ -7,6 +7,7 @@ import (
 	"math/rand/v2"
 	"reflect"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -390,6 +391,101 @@ func TestObserveWhenTheStoreFails(t *testing.T) {
 			t.Errorf("set = %+v, want only event signals", set)
 		}
 	})
+}
+
+// flakyStore runs batches on a store until it is told to fail.
+type flakyStore struct {
+	store.Store
+	failing atomic.Bool
+}
+
+func (s *flakyStore) Do(ctx context.Context, b *store.Batch) error {
+	if s.failing.Load() {
+		return errBoom
+	}
+	return s.Store.Do(ctx, b)
+}
+
+// TestKnownLeakedKeysWhenTheStoreFails checks the in-memory fallback for
+// key.leaked: while the store fails, keys this catalog knows leaked still
+// read leaked = true and every other key has no key signals.
+func TestKnownLeakedKeysWhenTheStoreFails(t *testing.T) {
+	ctx := context.Background()
+	for _, be := range backends {
+		t.Run(be.name, func(t *testing.T) {
+			shared := &flakyStore{Store: be.new(t)}
+			c := signal.NewCatalog(shared, signal.Options{})
+			// other is another replica on the same store.
+			other := signal.NewCatalog(shared.Store, signal.Options{})
+			defer c.Close()
+
+			if err := c.MarkLeaked(ctx, "marked"); err != nil {
+				t.Fatal(err)
+			}
+			observe(t, c, event.Event{Type: event.KeyLeak, Time: t0, APIKeyID: "reported"})
+			if err := other.MarkLeaked(ctx, "elsewhere"); err != nil {
+				t.Fatal(err)
+			}
+			if err := other.MarkLeaked(ctx, "elsewhere-unused"); err != nil {
+				t.Fatal(err)
+			}
+			// c learns of "elsewhere" when the key is next used through it.
+			want(t, "read before the outage", observe(t, c, send(time.Minute, withKey("elsewhere"))).Key, map[string]any{"leaked": true})
+			observe(t, c, send(time.Minute, withKey("clean")))
+
+			shared.failing.Store(true)
+			if err := c.MarkLeaked(ctx, "during"); !errors.Is(err, errBoom) {
+				t.Errorf("MarkLeaked during the outage: error = %v, want the store's", err)
+			}
+			leak := event.Event{Type: event.KeyLeak, Time: t0.Add(2 * time.Minute), APIKeyID: "reported-during"}
+			if set, err := c.Observe(ctx, leak); !errors.Is(err, errBoom) || !reflect.DeepEqual(set.Key, map[string]any{"leaked": true}) {
+				t.Errorf("key_leak during the outage: key = %v, error = %v", set.Key, err)
+			}
+
+			for _, tc := range []struct {
+				key    string
+				leaked bool
+			}{
+				{"marked", true},
+				{"reported", true},
+				{"elsewhere", true},
+				{"during", true},
+				{"reported-during", true},
+				{"clean", false},
+				{"never-seen", false},
+				// Marked through another replica and not used here since:
+				// unknown to c until the store recovers.
+				{"elsewhere-unused", false},
+			} {
+				set, err := c.Observe(ctx, send(3*time.Minute, withKey(tc.key)))
+				if !errors.Is(err, errBoom) {
+					t.Errorf("%s: error = %v, want the store's", tc.key, err)
+				}
+				if tc.leaked && !reflect.DeepEqual(set.Key, map[string]any{"leaked": true}) {
+					t.Errorf("%s: key signals = %v, want only leaked = true", tc.key, set.Key)
+				}
+				if !tc.leaked && set.Key != nil {
+					t.Errorf("%s: key signals = %v, want absent", tc.key, set.Key)
+				}
+				if set.Account != nil || set.IP != nil || set.Domain != nil {
+					t.Errorf("%s: store-backed signals present during the outage: %+v", tc.key, set)
+				}
+			}
+			if set, _ := c.Observe(ctx, send(3*time.Minute, withKey(""))); set.Key != nil {
+				t.Errorf("a send without a key has key signals %v", set.Key)
+			}
+
+			shared.failing.Store(false)
+			set := observe(t, c, send(4*time.Minute, withKey("elsewhere-unused")))
+			want(t, "after the outage", set.Key, map[string]any{"leaked": true, "sends_1m": int64(1)})
+
+			// "during" never reached the store, so the other replica does
+			// not know it until the key is used through c, which writes it.
+			want(t, "other replica, before", observe(t, other, send(5*time.Minute, withKey("during"))).Key, map[string]any{"leaked": false})
+			want(t, "c, written back", observe(t, c, send(5*time.Minute, withKey("during"))).Key, map[string]any{"leaked": true})
+			want(t, "other replica, after", observe(t, other, send(5*time.Minute, withKey("during"))).Key, map[string]any{"leaked": true})
+		})
+	}
 }
 
 // randomEvents returns n events of every type, in time order, drawn from a

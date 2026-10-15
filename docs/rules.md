@@ -147,6 +147,16 @@ fail to evaluate and, failing closed, be blocked. Lint warns about closed
 rules that read `key`, `ip` or `domain` signals without checking
 `event.api_key_id`, `event.ip` or `event.from_domain`.
 
+Even guarded, that rule blocks every send with a key while the store is
+down, which is why the starter ruleset's `leaked-key-send` fails **open**
+instead. It loses little: each Catraca process remembers the leaked keys it
+marked or read from the store, and while the store is down `key.leaked` is
+`true` for those keys (with no other `key` signal) and absent for the rest.
+Known leaked keys stay blocked and everyone else keeps sending. The cost is
+a key reported to another replica during the outage: this one does not see
+it until the store recovers. See
+[Signals](signals.md#leaked-keys-while-the-store-is-down).
+
 `has(account.sends_1m)` and `account.?sends_1m.orValue(0)` test for or
 default a missing signal. They turn "unknown" into "known false", which
 bypasses `on_error`: use them for optional data such as platform attributes,
@@ -160,7 +170,7 @@ Rules see five variables, each a `map(string, dyn)`:
 |---|---|---|
 | `event` | computed from the event alone: `type`, `account_id`, `api_key_id`, `ip`, `from_domain`, `recipients`, `to_domains`, `link_domains`, `links`, `subject_length`, `feedback_kind`, `bounce_type`, `account_action`, `attributes` | always |
 | `account` | sends, recipients, distinct domains/IPs/keys, bounces, complaints and their rates, `age_hours`, `hourly_baseline_7d`, `volume_ratio_1h`, `new_ip` | when the store answers |
-| `key` | `sends_1m`, `sends_1h`, `distinct_ips_1h`, `distinct_ips_24h`, `new_ip`, `age_hours`, `leaked` | when the event has an API key |
+| `key` | `sends_1m`, `sends_1h`, `distinct_ips_1h`, `distinct_ips_24h`, `new_ip`, `age_hours`, `leaked` | when the event has an API key; while the store is down, only `leaked`, for keys known to be leaked |
 | `ip` | `sends_1m`, `sends_1h`, `distinct_accounts_24h`, `distinct_keys_24h`, `signups_24h` | when the event has an IP |
 | `domain` | `sends_1h`, `distinct_accounts_24h`, `complaints_24h` | when From has a domain |
 
@@ -245,7 +255,7 @@ The precision gate needs labeled matches, which a new rule does not have. An
   when: event.type == "send" && event.api_key_id != "" && key.leaked
   action: block
   mode: enforce
-  on_error: closed
+  on_error: open
   effects: [revoke_key]
   reason: This API key was found in public and must be rotated
   override:
@@ -313,13 +323,12 @@ cases:
     expect:
       matches: []
 
-  - name: when the store is down a send with an API key is blocked
+  - name: when the store is down a send with an API key is allowed
     signals:
       account: null    # null removes a map or a signal: absent
       key: null
     expect:
-      action: block
-      enforced: [leaked-key-send]
+      action: allow
       errors: [leaked-key-send, new-account-burst]
 ```
 
