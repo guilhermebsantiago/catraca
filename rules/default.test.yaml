@@ -42,6 +42,9 @@ base:
     hourly_baseline_7d: 35.7
     volume_ratio_1h: 1.12
     new_ip: false
+    ip_sends_24h: 450
+    ip_sends_7d: 3000
+    recent_ip: false
   key:
     sends_1m: 2
     sends_1h: 40
@@ -225,25 +228,33 @@ cases:
 
   - name: an old account sending 22 times its baseline from a new IP
     signals:
-      account: {sends_1h: 800, volume_ratio_1h: 22.4, new_ip: true}
+      account: {sends_1h: 800, volume_ratio_1h: 22.4, new_ip: true, ip_sends_24h: 1, ip_sends_7d: 1, recent_ip: true}
+    expect:
+      matches: [account-takeover-volume]
+
+  # new_ip is true for the first send from an IP only; the 400th send of a
+  # takeover from one server sees it false. recent_ip still holds it.
+  - name: an old account 400 sends into a spike from an IP it started using today
+    signals:
+      account: {sends_1h: 400, volume_ratio_1h: 11.2, new_ip: false, ip_sends_24h: 400, ip_sends_7d: 400, recent_ip: true}
     expect:
       matches: [account-takeover-volume]
 
   - name: an old account spiking from its usual IP
     signals:
-      account: {sends_1h: 800, volume_ratio_1h: 22.4, new_ip: false}
+      account: {sends_1h: 800, volume_ratio_1h: 22.4}
     expect:
       matches: []
 
   - name: a young account spiking from a new IP is not a takeover
     signals:
-      account: {age_hours: 300, sends_1h: 800, volume_ratio_1h: 22.4, new_ip: true}
+      account: {age_hours: 300, sends_1h: 800, volume_ratio_1h: 22.4, ip_sends_24h: 800, ip_sends_7d: 800, recent_ip: true}
     expect:
       matches: []
 
   - name: a tiny account whose ratio jumps on a few sends
     signals:
-      account: {sends_1h: 30, hourly_baseline_7d: 0.5, volume_ratio_1h: 30, new_ip: true}
+      account: {sends_1h: 30, hourly_baseline_7d: 0.5, volume_ratio_1h: 30, ip_sends_24h: 30, ip_sends_7d: 30, recent_ip: true}
     expect:
       matches: []
 

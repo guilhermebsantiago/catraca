@@ -471,10 +471,10 @@ func takeoverWithProxies(d *dataset) {
 	d.burst(r, attacker, 500, login.Add(5*time.Minute), 45*time.Minute)
 }
 
-// takeoverFromOneIP: the same attack from a single server. Only the first
-// send comes from an address new to the account, and the hour has one send
-// then, so account-takeover-volume misses every send: a gap in the rule,
-// left in so the numbers show it.
+// takeoverFromOneIP: the same attack from a single server. account.new_ip
+// is true for its first send only, when the hour has one send, but
+// account.recent_ip stays true for the whole attack, so
+// account-takeover-volume holds it once the hour passes 200 sends.
 func takeoverFromOneIP(d *dataset) {
 	r := newRNG("takeover-one-ip")
 	owner := &sender{

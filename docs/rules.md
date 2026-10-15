@@ -169,7 +169,7 @@ Rules see five variables, each a `map(string, dyn)`:
 | variable | signals | present |
 |---|---|---|
 | `event` | computed from the event alone: `type`, `account_id`, `api_key_id`, `ip`, `from_domain`, `recipients`, `to_domains`, `link_domains`, `links`, `subject_length`, `feedback_kind`, `bounce_type`, `account_action`, `attributes` | always |
-| `account` | sends, recipients, distinct domains/IPs/keys, bounces, complaints and their rates, `age_hours`, `hourly_baseline_7d`, `volume_ratio_1h`, `new_ip` | when the store answers |
+| `account` | sends, sends from the event's IP, recipients, distinct domains/IPs/keys, bounces, complaints and their rates, `age_hours`, `hourly_baseline_7d`, `volume_ratio_1h`, `new_ip`, `recent_ip` | when the store answers |
 | `key` | `sends_1m`, `sends_1h`, `distinct_ips_1h`, `distinct_ips_24h`, `new_ip`, `age_hours`, `leaked` | when the event has an API key; while the store is down, only `leaked`, for keys known to be leaked |
 | `ip` | `sends_1m`, `sends_1h`, `distinct_accounts_24h`, `distinct_keys_24h`, `signups_24h` | when the event has an IP |
 | `domain` | `sends_1h`, `distinct_accounts_24h`, `complaints_24h` | when From has a domain |

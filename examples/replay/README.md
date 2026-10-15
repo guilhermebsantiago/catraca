@@ -91,7 +91,7 @@ Abuse:
 
 ## Results with the default ruleset
 
-Ruleset version `d1354ae8bf5f`. A match in either mode counts as predicting
+Ruleset version `adf1d0464c14`. A match in either mode counts as predicting
 "abusive"; precision is TP / (TP + FP), recall TP / (TP + FN).
 
 | rule | mode | action | TP | FP | FN | TN | precision | recall |
@@ -101,13 +101,13 @@ Ruleset version `d1354ae8bf5f`. A match in either mode counts as predicting
 | complaint-rate-high | shadow | hold | 257 | 105 | 4,169 | 8,276 | 0.710 | 0.058 |
 | hard-bounce-rate-high | shadow | hold | 225 | 147 | 4,201 | 8,234 | 0.605 | 0.051 |
 | key-many-ips | shadow | hold | 507 | 485 | 3,919 | 7,896 | 0.511 | 0.115 |
-| account-takeover-volume | shadow | hold | 303 | 104 | 4,123 | 8,277 | 0.744 | 0.068 |
+| account-takeover-volume | shadow | hold | 561 | 104 | 3,865 | 8,277 | 0.844 | 0.127 |
 | shortener-links-new-account | shadow | flag | 259 | 45 | 4,167 | 8,336 | 0.852 | 0.059 |
 | signup-farm-ip | shadow | flag | 13 | 3 | 4,413 | 8,378 | 0.812 | 0.003 |
 | recipient-domain-spray | shadow | hold | 56 | 28 | 4,370 | 8,353 | 0.667 | 0.013 |
 | **enforced rules (effective action)** | | | 60 | 0 | 4,366 | 8,381 | 1.000 | 0.014 |
-| **shadow rules** | | | 1,816 | 933 | 2,610 | 7,448 | 0.661 | 0.410 |
-| **all rules, as if enforced** | | | 1,876 | 933 | 2,550 | 7,448 | 0.668 | 0.424 |
+| **shadow rules** | | | 2,074 | 933 | 2,352 | 7,448 | 0.690 | 0.469 |
+| **all rules, as if enforced** | | | 2,087 | 933 | 2,339 | 7,448 | 0.691 | 0.472 |
 
 Per-rule recall is low by design: each rule targets one pattern, so every
 other abusive event is a miss for it, and rules that need volume (1,000 sends
@@ -118,15 +118,18 @@ What the run shows:
 
 - **leaked-key-send** blocks the 60 sends after the leak report and nothing
   else. The 260 abusive sends before the report are up to the other rules;
-  key-many-ips catches 26 of them.
+  key-many-ips catches 26 of them and account-takeover-volume 61, since the
+  abusers send through the owner's established account from proxies it never
+  used.
 - **key-many-ips** has the lowest precision: both serverless senders use their
   keys from dozens of IPs an hour, which is what a leaked key looks like. The
   rule's description warns about this; here it costs 485 false positives.
-- **account-takeover-volume** holds 302 of the 500 proxy takeover sends, and
-  its false positives are the serverless launch. It misses every send of the
-  takeover from one IP: `account.new_ip` is true only for the first send from
-  an address, when the account has sent once that hour, and false for the
-  rest.
+- **account-takeover-volume** holds 302 of the 500 proxy takeover sends and
+  151 of the 350 sends of the takeover from one IP: each one once the hour
+  passes 200 sends. It reads `account.recent_ip`, which stays true for every
+  send of the account's first day on an address. With `account.new_ip`,
+  true only for the first send from an address, it missed every send of the
+  takeover from one IP. Its false positives are still the serverless launch.
 - **hard-bounce-rate-high** also holds 28 of the taken-over account owner's
   own sends after the attack: account-level rates cannot tell who sent the
   mail that bounced.

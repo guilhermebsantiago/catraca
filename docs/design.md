@@ -94,6 +94,8 @@ Rates are `float64` in [0, 1]; counts are `int64`; ages are hours as
 | hourly_baseline_7d | sends_7d / 168 |
 | volume_ratio_1h | sends_1h / max(hourly_baseline_7d, 1) |
 | new_ip | IP not used by the account in the last 30 days |
+| ip_sends_24h, ip_sends_7d | send events of the account from this IP |
+| recent_ip | no send from this IP between 24h and 7d ago: ip_sends_7d == ip_sends_24h, so it stays true for the account's first day on the IP |
 
 `key` (present when the event has api_key_id):
 

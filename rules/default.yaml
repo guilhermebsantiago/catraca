@@ -121,16 +121,21 @@ rules:
   - id: account-takeover-volume
     description: >-
       Holds sends from accounts older than 30 days that send more than 10
-      times their usual hourly volume from an IP they have not used in 30
-      days: an established account taken over and drained for spam. It needs
-      200 sends in the hour so small accounts with a tiny baseline do not
-      trip it.
+      times their usual hourly volume from an IP they started using in the
+      last day: an established account taken over and drained for spam.
+      account.recent_ip (no sends from the IP between a day and a week ago)
+      stays true for every send of that first day, unlike account.new_ip,
+      which is true for the first send only and so never meets the spike.
+      It needs 200 sends in the hour so small accounts with a tiny baseline
+      do not trip it. A launch from new servers looks the same, and so does
+      a sender that uses an IP only once a week: measure precision before
+      enforcing.
     when: >-
       event.type == "send"
       && account.age_hours > 720
       && account.sends_1h >= 200
       && account.volume_ratio_1h > 10
-      && account.new_ip
+      && account.recent_ip
     action: hold
     reason: Sudden volume spike from a new IP on an established account
     tags: [account-takeover]

@@ -199,6 +199,68 @@ func TestNewIP(t *testing.T) {
 	})
 }
 
+// TestRecentIP checks the account's sends per IP and recent_ip. Cases run in
+// time order, since the memory store forgets what has fallen out of every
+// window relative to the newest event it stored.
+func TestRecentIP(t *testing.T) {
+	const ipA, ipB, ipC = "203.0.113.1", "203.0.113.2", "203.0.113.3"
+	at := func(acct, ip string) []func(*event.Event) {
+		return []func(*event.Event){withAccount(acct), withIP(ip)}
+	}
+	sendFrom := func(offset time.Duration, acct, ip string) event.Event { return send(offset, at(acct, ip)...) }
+	recent := func(sends24h, sends7d int64, recent bool) map[string]any {
+		return map[string]any{"ip_sends_24h": sends24h, "ip_sends_7d": sends7d, "recent_ip": recent}
+	}
+	with := func(m map[string]any, name string, v any) map[string]any { m[name] = v; return m }
+	cases := []struct {
+		name string
+		ev   event.Event
+		want map[string]any // nil means the three signals are absent
+	}{
+		{"first send", sendFrom(0, "a", ipA), recent(1, 1, true)},
+		{"7d edge, first send", sendFrom(0, "b", ipA), recent(1, 1, true)},
+		{"7d forgotten, first send", sendFrom(0, "c", ipA), recent(1, 1, true)},
+		{"ids and IPs with ':', first pair", sendFrom(0, "x", "y:z"), recent(1, 1, true)},
+		{"ids and IPs with ':', second pair", sendFrom(0, "x:y", "z"), recent(1, 1, true)},
+		{"no IP", sendFrom(0, "a", ""), nil},
+		{"24h bucket edge, first send", sendFrom(10*time.Minute, "d", ipA), recent(1, 1, true)},
+		{"second send, no longer new but still recent", sendFrom(time.Hour, "a", ipA), with(recent(2, 2, true), "new_ip", false)},
+		{"7d bucket edge, first send", sendFrom(time.Hour, "e", ipA), recent(1, 1, true)},
+		{"IPv6 spelled two ways, first", sendFrom(2*time.Hour, "v6", "2001:DB8::1"), recent(1, 1, true)},
+		{"IPv6 spelled two ways, second", sendFrom(2*time.Hour, "v6", "2001:db8:0:0::1"), recent(2, 2, true)},
+		{"login from an IP never sent from", accountEvent(3*time.Hour, "login", at("a", ipC)...), recent(0, 0, true)},
+		{"logins do not count", sendFrom(3*time.Hour, "a", ipC), recent(1, 1, true)},
+		{"just under a day after the first send", sendFrom(day-time.Millisecond, "a", ipA), recent(3, 3, true)},
+		{"a day after the first send", sendFrom(day, "a", ipA), recent(3, 4, false)},
+		{"another IP of the same account", sendFrom(day, "a", ipB), recent(1, 1, true)},
+		{"another account on the same IP", sendFrom(day, "f", ipA), recent(1, 1, true)},
+		// The first send was at 0:10, in the 24h window's bucket from 0:00
+		// to 0:24, which leaves the window at 24:00: 23h50m later.
+		{"24h bucket edge, 23h50m later", sendFrom(day, "d", ipA), recent(1, 2, false)},
+		{"7d edge, just under 7 days later", sendFrom(week-time.Millisecond, "b", ipA), recent(1, 2, false)},
+		// recent_ip forgets an IP after 7 days, new_ip after 30.
+		{"7d forgotten, 7 days later", sendFrom(week, "c", ipA), with(recent(1, 1, true), "new_ip", false)},
+		// The first send was at 1:00, in the 7d window's bucket from 0:00 to
+		// 2:48, which leaves the window at 7 days: 6d23h later.
+		{"7d bucket edge, 6d23h later", sendFrom(week, "e", ipA), recent(1, 1, true)},
+	}
+	names := []string{"ip_sends_24h", "ip_sends_7d", "recent_ip"}
+	eachBackend(t, func(t *testing.T, c signal.Catalog) {
+		for _, tc := range cases {
+			set := observe(t, c, tc.ev)
+			if tc.want != nil {
+				want(t, tc.name, set.Account, tc.want)
+				continue
+			}
+			for _, name := range names {
+				if got, ok := set.Account[name]; ok {
+					t.Errorf("%s: %s = %v, want absent", tc.name, name, got)
+				}
+			}
+		}
+	})
+}
+
 func TestKeySignals(t *testing.T) {
 	eachBackend(t, func(t *testing.T, c signal.Catalog) {
 		ctx := context.Background()
