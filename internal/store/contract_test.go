@@ -25,9 +25,12 @@ type backend struct {
 var backends = []struct {
 	name string
 	new  func(t *testing.T) backend
+	// skip, when set, says why the backend cannot run here, or returns "".
+	skip func() string
 }{
-	{"memory", newMemoryBackend},
-	{"redis", newRedisBackend},
+	{name: "memory", new: newMemoryBackend},
+	{name: "redis", new: newRedisBackend},
+	{name: "redis-server", new: newRedisServerBackend, skip: redisServerSkip},
 }
 
 func newMemoryBackend(t *testing.T) backend {
@@ -115,6 +118,11 @@ func get(t *testing.T, s Store, key string) (string, bool) {
 func TestContract(t *testing.T) {
 	for _, be := range backends {
 		t.Run(be.name, func(t *testing.T) {
+			if be.skip != nil {
+				if why := be.skip(); why != "" {
+					t.Skip(why)
+				}
+			}
 			for _, tc := range contractCases {
 				t.Run(tc.name, func(t *testing.T) { tc.run(t, be.new(t)) })
 			}
