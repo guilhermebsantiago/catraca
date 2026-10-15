@@ -57,6 +57,12 @@ func apiKeyKey(name, id string) string  { return "key:" + name + ":" + id }
 func ipKey(name, ip string) string      { return "ip:" + name + ":" + ip }
 func domainKey(name, d string) string   { return "domain:" + name + ":" + d }
 
+// accountIPKey is the key of what an account did from one IP. Account ids and
+// IPs as sent may both contain ':', so the account id is length-prefixed.
+func accountIPKey(name, id, ip string) string {
+	return accountKey(name, strconv.Itoa(len(id))+":"+id+":"+ip)
+}
+
 func (c *catalog) Observe(ctx context.Context, ev event.Event) (Set, error) {
 	f := factsOf(ev)
 	set := Set{Event: eventSignals(ev, f)}
@@ -139,6 +145,7 @@ type accountReads struct {
 	firstSeen                                                *store.TimeResult
 	createdAt                                                *store.StringResult
 	seenIP                                                   *store.BoolResult // nil without an IP
+	ipSends24h, ipSends7d                                    *store.IntResult  // nil without an IP
 }
 
 // account queues the account's writes and reads, or returns nil when the
@@ -154,11 +161,16 @@ func (c *catalog) account(b *store.Batch, ev event.Event, f facts) *accountReads
 	bounces, hard := accountKey("bounces", id), accountKey("hard_bounces", id)
 	complaints, deliveries := accountKey("complaints", id), accountKey("deliveries", id)
 	created := accountKey("created_at", id)
+	ipSends := accountIPKey("ip_sends", id, f.ip)
 
 	switch ev.Type {
 	case event.Send:
 		for _, w := range []time.Duration{time.Minute, time.Hour, day, week} {
 			b.Incr(sends, w, at, 1)
+		}
+		if f.ip != "" {
+			b.Incr(ipSends, day, at, 1)
+			b.Incr(ipSends, week, at, 1)
 		}
 		if n := int64(len(ev.To)); n > 0 {
 			b.Incr(rcpts, time.Hour, at, n)
@@ -213,6 +225,8 @@ func (c *catalog) account(b *store.Batch, ev event.Event, f facts) *accountReads
 	}
 	if f.ip != "" {
 		r.seenIP = b.SeenWithin(accountKey("seen_ips", id), f.ip, newIPLookback, at)
+		r.ipSends24h = b.Count(ipSends, day, at)
+		r.ipSends7d = b.Count(ipSends, week, at)
 	}
 	return r
 }
@@ -251,6 +265,14 @@ func (r *accountReads) signals(at time.Time) map[string]any {
 	}
 	if r.seenIP != nil {
 		m["new_ip"] = !r.seenIP.Val()
+		ip24h, ip7d := r.ipSends24h.Val(), r.ipSends7d.Val()
+		m["ip_sends_24h"] = ip24h
+		m["ip_sends_7d"] = ip7d
+		// Every send counted over 24 hours is counted over 7 days too, so the
+		// difference is the sends from this IP between about a day and about
+		// a week ago (docs/signals.md has the exact edges). <= only guards
+		// against a store that ever counts fewer over the longer window.
+		m["recent_ip"] = ip7d <= ip24h
 	}
 	return m
 }

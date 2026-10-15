@@ -57,6 +57,9 @@ var specs = []Spec{
 	{"account", "hourly_baseline_7d", "double"},
 	{"account", "volume_ratio_1h", "double"},
 	{"account", "new_ip", "bool"},
+	{"account", "ip_sends_24h", "int"},
+	{"account", "ip_sends_7d", "int"},
+	{"account", "recent_ip", "bool"},
 
 	{"key", "sends_1m", "int"},
 	{"key", "sends_1h", "int"},

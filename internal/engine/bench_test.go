@@ -28,6 +28,7 @@ func benchSignals() signal.Set {
 			"bounces_24h": int64(4), "hard_bounces_24h": int64(2), "complaints_24h": int64(0), "deliveries_24h": int64(890),
 			"bounce_rate_24h": 0.0044, "hard_bounce_rate_24h": 0.0022, "complaint_rate_24h": 0.0,
 			"age_hours": 4000.0, "hourly_baseline_7d": 35.7, "volume_ratio_1h": 1.12, "new_ip": false,
+			"ip_sends_24h": int64(450), "ip_sends_7d": int64(3000), "recent_ip": false,
 		},
 		Key: map[string]any{
 			"sends_1m": int64(2), "sends_1h": int64(40), "distinct_ips_1h": int64(1), "distinct_ips_24h": int64(2),

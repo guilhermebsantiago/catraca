@@ -48,7 +48,8 @@ A rule that reads an absent signal fails, and its `on_error` policy decides:
 - `key` is present when the event has an `api_key_id`.
 - `ip` is present when the event has an `ip`.
 - `domain` is present when `from` has a domain.
-- `account.new_ip` and `key.new_ip` are absent when the event has no `ip`.
+- `account.new_ip`, `account.ip_sends_24h`, `account.ip_sends_7d`,
+  `account.recent_ip` and `key.new_ip` are absent when the event has no `ip`.
 - When the counter store fails or does not answer within the deadline, only
   `event` is present and the decision is marked degraded, with one
   exception: for a key this Catraca process knows was leaked, `key` holds
@@ -76,7 +77,7 @@ empty after a restart and fills as leaked keys are used.
 
 | event | records |
 |---|---|
-| `send` | account: sends, recipients, recipient domains, IP and API key; key: sends and IP; ip: sends, account and API key; domain: sends and account; the IP as known to the account and to the key (`new_ip`) |
+| `send` | account: sends, sends from the IP, recipients, recipient domains, IP and API key; key: sends and IP; ip: sends, account and API key; domain: sends and account; the IP as known to the account and to the key (`new_ip`) |
 | `feedback` | account: bounces, hard bounces, complaints or deliveries; domain: complaints |
 | `account` | ip: a signup, when `account.action` is `signup`; account: its creation time, when `account.created_at` is set |
 | `key_leak` | key: leaked |
@@ -85,7 +86,8 @@ empty after a restart and fills as leaked keys are used.
 Feedback counts toward the account and sender domain the feedback event names,
 which should be those of the original send. Only send events record IPs: a
 login from a new IP leaves `account.new_ip` true for the first send from that
-IP, so a hijacked account still shows a new IP when it starts sending.
+IP, and `account.recent_ip` true for the sends after it, so a hijacked account
+still shows a new IP when it starts sending.
 
 Values are matched as follows: account and key ids exactly as sent; domains in
 lowercase; IPs in canonical form, so `2001:DB8::1` and `2001:db8::1` are the
@@ -139,6 +141,9 @@ The account that sent the event.
 | `hourly_baseline_7d` | double | 7 d | `sends_7d / 168`: the average sends per hour over the week |
 | `volume_ratio_1h` | double | 1 h | `sends_1h / max(hourly_baseline_7d, 1)`: how this hour compares to the weekly average |
 | `new_ip` | bool | 30 d | true when no send event of the account came from this IP in the last 30 days |
+| `ip_sends_24h` | int | 24 h | send events of the account from this IP |
+| `ip_sends_7d` | int | 7 d | send events of the account from this IP |
+| `recent_ip` | bool | 24 h, 7 d | true when no send event of the account came from this IP between 24 hours and 7 days ago: `ip_sends_7d == ip_sends_24h` |
 
 Rates are capped at 1 because feedback about sends older than 24 hours can
 outnumber the sends in the window. Use `ratio(account.bounces_24h,
@@ -149,6 +154,29 @@ sent wins. The first-seen time is the earliest event time seen for the
 account, whatever the order events arrived in. Both are kept for a year after
 the account's last event (configurable), so an account idle for longer looks
 new again. Ages are never negative: a creation time in the future gives 0.
+
+### `new_ip` and `recent_ip`
+
+`new_ip` is true for the first send from an IP only, since that send makes
+the IP known to the account. A rule that also needs a count built up over
+many sends, such as an hour of volume far above the account's baseline, sees
+`new_ip` true on at most one of them. `recent_ip` stays true through the
+account's first day on the IP: until then every send from the IP is in both
+`ip_sends_24h` and `ip_sends_7d`, and the two only differ once one of those
+sends has left the 24 hour window but not the 7 day one.
+
+The edges follow the buckets of the two windows (see Windows above):
+
+- `recent_ip` turns false between 23 h 36 min and 24 h after the account's
+  first send from the IP, depending on where that send fell in its 24 minute
+  bucket.
+- It turns true again once the account has not sent from the IP for between
+  6 d 21 h 12 min and 7 d. An IP last used 7 to 30 days ago is therefore
+  recent but not new, and a sender that uses an IP once a week and never in
+  between, such as a weekly newsletter from a host that sends nothing else,
+  looks recent every week.
+- A login or other non-send event reads the counts without adding to them,
+  so an IP the account has never sent from reads 0, 0 and recent.
 
 ## `key`
 
@@ -203,7 +231,7 @@ rules:
 
   - id: dormant-account-new-ip-spike
     when: >
-      event.type == "send" && account.new_ip &&
+      event.type == "send" && account.recent_ip &&
       account.age_hours > 720.0 && account.volume_ratio_1h > 10.0
     action: hold
     reason: Established account sending far above its baseline from a new IP
