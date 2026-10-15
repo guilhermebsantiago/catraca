@@ -1,0 +1,9 @@
+{
+  "private": true,
+  "type": "module",
+  "description": "Optimizes Catraca's brand SVGs and renders the PNG assets from them.",
+  "dependencies": {
+    "playwright-core": "^1.64.1",
+    "svgo": "^4.1.0"
+  }
+}
