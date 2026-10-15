@@ -122,5 +122,5 @@ func (r *HTTPResolver) Resolve(ctx context.Context, t Token) (Key, error) {
 	if out.APIKeyID == "" {
 		return Key{}, errors.New("secretscan: resolver response has no api_key_id")
 	}
-	return Key{APIKeyID: out.APIKeyID, AccountID: out.AccountID}, nil
+	return Key(out), nil
 }

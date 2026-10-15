@@ -36,10 +36,7 @@ const (
 // https://github.com/aws/aws-php-sns-message-validator/blob/master/src/MessageValidator.php
 var snsHostPattern = regexp.MustCompile(`^sns\.[a-zA-Z0-9\-]{3,}\.amazonaws\.com(\.cn)?$`)
 
-var (
-	errBadSignature = errors.New("sns: invalid signature")
-	errBadCertURL   = errors.New("sns: signing certificate URL is not an SNS URL")
-)
+var errBadSignature = errors.New("sns: invalid signature")
 
 // snsMessage is the JSON document SNS posts to HTTP(S) endpoints.
 type snsMessage struct {

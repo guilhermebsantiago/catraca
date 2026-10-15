@@ -65,13 +65,22 @@ blocks only keys reported leaked.
 - [Feedback: SES, useSend](docs/feedback.md)
 - [GitHub secret scanning](docs/secret-scanning.md)
 
+## Examples
+
+- [TypeScript client](examples/client-ts): typed, dependency-free, fails open
+- [Hono email API](examples/hono) that asks Catraca before each send
+- [Synthetic replay dataset](examples/replay) and the default ruleset's
+  backtest on it
+
 ## Development
 
 ```sh
 go test ./...
 ```
 
-Postgres tests run when `CATRACA_TEST_POSTGRES_URL` is set.
+Postgres tests run when `CATRACA_TEST_POSTGRES_URL` is set, and the store's
+contract suite also runs against a real Redis when `CATRACA_TEST_REDIS_URL`
+is set (for example `redis://localhost:6379/0`). CI runs both.
 
 ## License
 
