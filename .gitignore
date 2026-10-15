@@ -6,3 +6,5 @@
 .env
 .claude/
 coverage.out
+node_modules/
+__pycache__/
