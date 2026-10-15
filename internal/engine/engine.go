@@ -19,6 +19,7 @@ import (
 
 	"github.com/guilhermebsantiago/catraca/internal/decision"
 	"github.com/guilhermebsantiago/catraca/internal/event"
+	"github.com/guilhermebsantiago/catraca/internal/monotime"
 	"github.com/guilhermebsantiago/catraca/internal/rules"
 	"github.com/guilhermebsantiago/catraca/internal/signal"
 )
@@ -98,10 +99,13 @@ type Engine struct {
 	dispatcher Dispatcher
 	deadline   time.Duration
 	now        func() time.Time
-	log        *slog.Logger
-	metrics    *metrics
-	records    *recordQueue
-	ids        idSource
+	// fakeClock is set when Options.Now is, so tests that control the
+	// clock also control the measured latency.
+	fakeClock bool
+	log       *slog.Logger
+	metrics   *metrics
+	records   *recordQueue
+	ids       idSource
 
 	observeLog, dropLog limiter
 }
@@ -128,6 +132,7 @@ func New(opts Options) (*Engine, error) {
 		dispatcher: opts.Dispatcher,
 		deadline:   cmp.Or(opts.Deadline, DefaultDeadline),
 		now:        opts.Now,
+		fakeClock:  opts.Now != nil,
 		log:        opts.Logger,
 		metrics:    m,
 	}
@@ -161,6 +166,7 @@ func New(opts Options) (*Engine, error) {
 // (ErrNoRuleset), or a leaked key could not be recorded.
 func (e *Engine) Decide(ctx context.Context, ev event.Event) (decision.Decision, error) {
 	start := e.now()
+	mono := monotime.Now()
 	if err := ev.Validate(); err != nil {
 		return decision.Decision{}, fmt.Errorf("%w: %w", ErrInvalidEvent, err)
 	}
@@ -194,7 +200,7 @@ func (e *Engine) Decide(ctx context.Context, ev event.Event) (decision.Decision,
 	d := decision.Decision{
 		ID:             e.ids.next(start),
 		EventID:        ev.ID,
-		Time:           start,
+		Time:           start.UTC(),
 		Action:         out.Action,
 		RetryAfter:     out.RetryAfter,
 		Matches:        out.Matches,
@@ -203,7 +209,10 @@ func (e *Engine) Decide(ctx context.Context, ev event.Event) (decision.Decision,
 		Degraded:       degraded,
 		RulesetVersion: rs.Version(),
 	}
-	elapsed := e.now().Sub(start)
+	elapsed := monotime.Since(mono)
+	if e.fakeClock {
+		elapsed = e.now().Sub(start)
+	}
 	d.LatencyMicros = elapsed.Microseconds()
 	e.metrics.observe(d, elapsed)
 

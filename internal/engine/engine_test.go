@@ -738,3 +738,20 @@ func counter(t *testing.T, reg *prometheus.Registry, name string, labels map[str
 	}
 	return 0
 }
+
+func TestDecisionTimeIsUTC(t *testing.T) {
+	brasilia := time.FixedZone("BRT", -3*60*60)
+	h := newHarness(t, Options{Now: func() time.Time { return time.Date(2026, 10, 15, 20, 17, 50, 0, brasilia) }})
+	d := h.decide(t, sendEvent())
+	if d.Time.Location() != time.UTC || d.Time.Hour() != 23 {
+		t.Errorf("decision time = %s, want the same instant in UTC", d.Time)
+	}
+}
+
+func TestLatencyIsMeasuredWithoutFakeClock(t *testing.T) {
+	h := newHarness(t, Options{})
+	d := h.decide(t, sendEvent())
+	if d.LatencyMicros < 0 || d.LatencyMicros > 1_000_000 {
+		t.Errorf("latency = %dµs", d.LatencyMicros)
+	}
+}
