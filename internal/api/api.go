@@ -1,0 +1,278 @@
+// Package api is Catraca's HTTP server: the /v1 routes platforms call to
+// decide events, read and label decisions and manage the ruleset, the
+// feedback and secret scanning endpoints providers call, and health and
+// Prometheus metrics. See docs/api.md.
+//
+// Every /v1 route needs a bearer token, except the feedback and secret
+// scanning routes, which authenticate each request by its signature. Every
+// response carries an X-Request-Id, every request is logged and measured,
+// and errors are JSON: {"error": {"code": "...", "message": "..."}}.
+package api
+
+import (
+	"context"
+	"crypto/sha256"
+	"errors"
+	"fmt"
+	"log/slog"
+	"net/http"
+	"strings"
+	"time"
+
+	"github.com/prometheus/client_golang/prometheus"
+	"github.com/prometheus/client_golang/prometheus/promhttp"
+
+	"github.com/guilhermebsantiago/catraca/internal/audit"
+	"github.com/guilhermebsantiago/catraca/internal/decision"
+	"github.com/guilhermebsantiago/catraca/internal/event"
+	"github.com/guilhermebsantiago/catraca/internal/precision"
+	"github.com/guilhermebsantiago/catraca/internal/rules"
+)
+
+// DefaultMaxBodyBytes limits /v1 request bodies when Options.MaxBodyBytes is
+// zero.
+const DefaultMaxBodyBytes = 1 << 20
+
+// Decider decides events. *engine.Engine is one.
+type Decider interface {
+	Decide(ctx context.Context, ev event.Event) (decision.Decision, error)
+}
+
+// RuleSource provides the ruleset decisions are made with. *rules.Holder is
+// one.
+type RuleSource interface {
+	Current() *rules.Ruleset
+}
+
+// AuditLog is the part of the decision log the API reads and labels.
+// *audit.DB is one.
+type AuditLog interface {
+	Get(ctx context.Context, decisionID string) (audit.Entry, error)
+	Label(ctx context.Context, decisionID string, l audit.Label) error
+	RuleStats(ctx context.Context, since time.Time) ([]precision.RuleStats, error)
+	ReviewQueue(ctx context.Context, ruleID string, mode decision.Mode, limit int) ([]audit.ReviewItem, error)
+	Flush(ctx context.Context) error
+}
+
+// Token is an API token the /v1 routes accept.
+type Token struct {
+	// Name identifies the client in access logs.
+	Name string
+	// Value is the bearer token.
+	Value string
+}
+
+// Check is one readiness check. Its error message is shown on /readyz,
+// which needs no token, so it should say what is wrong without details
+// such as hostnames.
+type Check struct {
+	Name  string
+	Check func(context.Context) error
+}
+
+// Options configure a Server. Decider, Rules, Audit and at least one Token
+// are required.
+type Options struct {
+	Decider Decider
+	Rules   RuleSource
+	// Reload reloads the ruleset from disk for POST /v1/rules/reload. On
+	// error the current ruleset must stay in place. Nil disables the route.
+	Reload func() (*rules.Ruleset, error)
+	Audit  AuditLog
+	// Gate is the precision gate GET /v1/stats/rules evaluates rules
+	// against. Zero fields take the defaults.
+	Gate   precision.Gate
+	Tokens []Token
+
+	// Provider endpoints. A nil handler answers 404 not_configured.
+	SESFeedback          http.Handler
+	UseSendFeedback      http.Handler
+	GenericFeedback      http.Handler
+	GitHubSecretScanning http.Handler
+
+	// Checks run on GET /readyz.
+	Checks []Check
+	// Gatherer is served on GET /metrics. Nil answers 404.
+	Gatherer prometheus.Gatherer
+	// Registerer receives the HTTP request duration histogram. Nil keeps
+	// it unregistered.
+	Registerer prometheus.Registerer
+	// Logger receives access logs and errors. Nil discards them.
+	Logger *slog.Logger
+	// MaxBodyBytes limits /v1 JSON bodies. Default DefaultMaxBodyBytes.
+	MaxBodyBytes int64
+	// Now returns the current time; nil means time.Now.
+	Now func() time.Time
+}
+
+// Server is the HTTP handler for every route. It is safe for concurrent
+// use.
+type Server struct {
+	mux      *http.ServeMux
+	decider  Decider
+	rules    RuleSource
+	reloadFn func() (*rules.Ruleset, error)
+	audit    AuditLog
+	gate     precision.Gate
+	tokens   []tokenHash
+	checks   []Check
+	log      *slog.Logger
+	maxBody  int64
+	now      func() time.Time
+	duration *prometheus.HistogramVec
+}
+
+type tokenHash struct {
+	name string
+	sum  [sha256.Size]byte
+}
+
+// New returns a Server with every route registered.
+func New(opts Options) (*Server, error) {
+	switch {
+	case opts.Decider == nil:
+		return nil, errors.New("api: Options.Decider is required")
+	case opts.Rules == nil:
+		return nil, errors.New("api: Options.Rules is required")
+	case opts.Audit == nil:
+		return nil, errors.New("api: Options.Audit is required")
+	case len(opts.Tokens) == 0:
+		return nil, errors.New("api: at least one API token is required")
+	}
+	s := &Server{
+		mux:      http.NewServeMux(),
+		decider:  opts.Decider,
+		rules:    opts.Rules,
+		reloadFn: opts.Reload,
+		audit:    opts.Audit,
+		gate:     opts.Gate,
+		checks:   opts.Checks,
+		log:      opts.Logger,
+		maxBody:  opts.MaxBodyBytes,
+		now:      opts.Now,
+	}
+	for _, t := range opts.Tokens {
+		if t.Value == "" {
+			return nil, fmt.Errorf("api: token %q is empty", t.Name)
+		}
+		s.tokens = append(s.tokens, tokenHash{name: t.Name, sum: sha256.Sum256([]byte(t.Value))})
+	}
+	if s.log == nil {
+		s.log = slog.New(slog.DiscardHandler)
+	}
+	if s.maxBody <= 0 {
+		s.maxBody = DefaultMaxBodyBytes
+	}
+	if s.now == nil {
+		s.now = time.Now
+	}
+	s.duration = prometheus.NewHistogramVec(prometheus.HistogramOpts{
+		Name:    "catraca_http_request_duration_seconds",
+		Help:    "Time to serve an HTTP request, by route pattern and status code.",
+		Buckets: []float64{0.0005, 0.001, 0.0025, 0.005, 0.01, 0.025, 0.05, 0.1, 0.25, 0.5, 1, 2.5, 5, 10, 30},
+	}, []string{"route", "status"})
+	if opts.Registerer != nil {
+		if err := opts.Registerer.Register(s.duration); err != nil {
+			return nil, fmt.Errorf("api: register metrics: %w", err)
+		}
+	}
+
+	s.handle("POST /v1/decide", s.authed(s.decide(http.StatusOK)))
+	s.handle("POST /v1/events", s.authed(s.decide(http.StatusAccepted)))
+	s.handle("GET /v1/decisions/{id}", s.authed(s.getDecision))
+	s.handle("POST /v1/decisions/{id}/labels", s.authed(s.label))
+	s.handle("GET /v1/rules", s.authed(s.getRules))
+	s.handle("POST /v1/rules/reload", s.authed(s.reload))
+	s.handle("GET /v1/rules/{id}/review", s.authed(s.review))
+	s.handle("GET /v1/stats/rules", s.authed(s.ruleStats))
+
+	s.handle("POST /v1/feedback", provider("generic feedback", "feedback.generic", opts.GenericFeedback))
+	s.handle("POST /v1/feedback/ses", provider("SES feedback", "feedback.ses", opts.SESFeedback))
+	s.handle("POST /v1/feedback/usesend", provider("useSend feedback", "feedback.usesend", opts.UseSendFeedback))
+	s.handle("POST /v1/secret-scanning/github", provider("GitHub secret scanning", "secret_scanning.github", opts.GitHubSecretScanning))
+
+	s.handle("GET /healthz", http.HandlerFunc(s.healthz))
+	s.handle("GET /readyz", http.HandlerFunc(s.readyz))
+	var metrics http.Handler = provider("metrics", "a Prometheus registry", nil)
+	if opts.Gatherer != nil {
+		metrics = promhttp.HandlerFor(opts.Gatherer, promhttp.HandlerOpts{})
+	}
+	s.handle("GET /metrics", metrics)
+	s.mux.HandleFunc("/", s.fallback)
+	return s, nil
+}
+
+// handle registers h for pattern and labels its requests with the pattern,
+// so logs and metrics name routes, not paths full of ids.
+func (s *Server) handle(pattern string, h http.Handler) {
+	s.mux.Handle(pattern, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if ri := infoFrom(r.Context()); ri != nil {
+			ri.route = pattern
+		}
+		h.ServeHTTP(w, r)
+	}))
+}
+
+// provider returns h, or a handler that explains how to configure it.
+func provider(name, section string, h http.Handler) http.Handler {
+	if h != nil {
+		return h
+	}
+	return http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		writeError(w, http.StatusNotFound, "not_configured", fmt.Sprintf("%s is not configured: add %s to catraca.yaml", name, section))
+	})
+}
+
+// fallback answers requests no route matches: 405 with Allow when the path
+// exists for another method, 404 otherwise.
+func (s *Server) fallback(w http.ResponseWriter, r *http.Request) {
+	var allowed []string
+	for _, m := range []string{http.MethodGet, http.MethodPost} {
+		if m == r.Method {
+			continue
+		}
+		probe := *r
+		probe.Method = m
+		if _, pattern := s.mux.Handler(&probe); pattern != "/" && pattern != "" {
+			allowed = append(allowed, m)
+		}
+	}
+	if len(allowed) > 0 {
+		w.Header().Set("Allow", strings.Join(allowed, ", "))
+		writeError(w, http.StatusMethodNotAllowed, "method_not_allowed",
+			fmt.Sprintf("%s is not allowed on %s; use %s", r.Method, r.URL.Path, strings.Join(allowed, " or ")))
+		return
+	}
+	writeError(w, http.StatusNotFound, "not_found", fmt.Sprintf("no route for %s %s", r.Method, r.URL.Path))
+}
+
+func (s *Server) healthz(w http.ResponseWriter, _ *http.Request) {
+	writeJSON(w, http.StatusOK, map[string]string{"status": "ok"})
+}
+
+// readyTimeout bounds all readiness checks together, so a probe gets an
+// answer before it times out itself.
+const readyTimeout = 2 * time.Second
+
+func (s *Server) readyz(w http.ResponseWriter, r *http.Request) {
+	ctx, cancel := context.WithTimeout(r.Context(), readyTimeout)
+	defer cancel()
+	results := make(map[string]string, len(s.checks))
+	ready := true
+	for _, c := range s.checks {
+		if err := c.Check(ctx); err != nil {
+			ready = false
+			results[c.Name] = err.Error()
+			continue
+		}
+		results[c.Name] = "ok"
+	}
+	status, word := http.StatusOK, "ready"
+	if !ready {
+		status, word = http.StatusServiceUnavailable, "not_ready"
+	}
+	writeJSON(w, status, struct {
+		Status string            `json:"status"`
+		Checks map[string]string `json:"checks"`
+	}{word, results})
+}

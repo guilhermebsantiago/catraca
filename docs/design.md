@@ -22,7 +22,7 @@ Principles, in order:
 ## Packages
 
 ```
-cmd/catraca          CLI: serve, rules check|test|gate, replay, report, label
+cmd/catraca          CLI: serve, config check, rules check|test|gate, replay, report, label
 internal/event       Event types (shared)
 internal/decision    Decision, Match, Action, Mode, OnError (shared)
 internal/signal      Signal Set + Catalog interface (shared); catalog impl
@@ -37,6 +37,7 @@ internal/feedback    SES (via SNS, signature verified), useSend, generic
 internal/secretscan  GitHub secret scanning partner endpoint
 internal/api         HTTP server, auth, metrics
 internal/config      catraca.yaml
+internal/app         Wiring: build everything from a config, serve, shut down in order
 signature            Catraca-Signature: sign and verify (public, for receivers)
 ```
 
@@ -45,8 +46,10 @@ Dependency direction: `event` and `decision` import nothing internal.
 `rules`, `decision`, `event` and defines the interfaces it calls
 (`Recorder`, `Dispatcher`). `audit`, `hooks` implement those. `feedback` and
 `secretscan` produce events and call a `Decider` interface they define
-(`Decide(ctx, event.Event) (decision.Decision, error)`). `api` and `cmd` wire
-everything. No package imports `api` or `cmd`. `signature` is the one public
+(`Decide(ctx, event.Event) (decision.Decision, error)`). `app` wires
+everything together behind `api`, and `cmd` runs `app` and the offline
+tools. Only `app` and `cmd` import `api`, only `cmd` imports `app`, and
+nothing imports `cmd`. `signature` is the one public
 package, so platforms in Go can verify Catraca's requests and sign their own;
 it imports nothing from the module, and `hooks`, `feedback` and
 `secretscan` use it.

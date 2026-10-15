@@ -1,0 +1,110 @@
+# Catraca server configuration. Copy it to catraca.yaml and adjust.
+#
+# Every field is documented in docs/config.md. Fields left out take their
+# defaults, unknown fields are errors, and `catraca config check` validates
+# the file (and the ruleset it points at) without starting the server.
+#
+# Values may read environment variables: ${NAME} fails when NAME is not set,
+# ${NAME:-default} falls back to default when NAME is unset or empty, and
+# $${ is a literal ${. Keep every secret in the environment, not here.
+#
+# Relative paths are resolved against the directory of this file.
+
+server:
+  # host:port to listen on. Put Catraca behind TLS (a load balancer or a
+  # reverse proxy) when it is reachable from outside the platform's network.
+  listen: ${CATRACA_LISTEN:-:8080}
+  # Largest JSON body accepted on the /v1 routes, in bytes.
+  max_body_bytes: 1048576
+  # How long a graceful shutdown may take: draining requests, finishing
+  # leaked-key batches and writing queued decisions to the audit log.
+  shutdown_timeout: 30s
+
+auth:
+  # Bearer tokens for the /v1 routes (feedback and secret scanning
+  # authenticate by signature instead). Give each client its own token; to
+  # rotate one, add the new token, move the client, then remove the old one.
+  tokens:
+    - name: platform
+      token: ${CATRACA_API_TOKEN}
+
+rules:
+  # The ruleset, kept in git. Reload it without a restart with
+  # POST /v1/rules/reload or, on Unix, SIGHUP.
+  path: rules/default.yaml
+
+store:
+  # memory keeps counters in the process: fine for one instance, lost on
+  # restart. redis shares them between instances.
+  backend: memory
+  # backend: redis
+  # redis:
+  #   url: ${CATRACA_REDIS_URL}      # redis://:password@localhost:6379/0
+  #   prefix: "catraca:"
+
+audit:
+  # The decision log: sqlite:<path> (or a plain path) for one instance,
+  # postgres://... for several.
+  dsn: ${CATRACA_AUDIT_DSN:-sqlite:catraca.db}
+  # minimal keeps no message content; full also keeps the whole event.
+  event_detail: minimal
+
+engine:
+  # Time budget for the signal lookup of one decision. When it runs out the
+  # decision is made without the missing signals and marked degraded.
+  deadline: 10ms
+
+gate:
+  # A rule may enforce once it has at least min_labeled labeled matches and
+  # a Wilson 95% lower bound on precision of at least min_precision.
+  min_labeled: 30
+  min_precision: 0.9
+
+# Webhooks that carry out the effects of enforced rules, one per effect name.
+# Each request is signed with the hook's secret (see docs/hooks.md).
+hooks:
+  - name: revoke_key
+    url: ${CATRACA_REVOKE_KEY_URL:-https://platform.internal/hooks/catraca/revoke-key}
+    secret: ${CATRACA_HOOK_SECRET}
+    timeout: 10s
+    # headers:
+    #   Authorization: Bearer ${PLATFORM_HOOK_TOKEN}
+
+# Delivery feedback. A provider is enabled when its section is present.
+feedback:
+  # Amazon SES through SNS (docs/feedback.md).
+  # ses:
+  #   topic_arns:
+  #     - arn:aws:sns:us-east-1:111122223333:catraca-ses-feedback
+  #   account_tag: catraca-account
+  #   account_header: X-Catraca-Account
+
+  # useSend webhooks.
+  # usesend:
+  #   secret: ${USESEND_WEBHOOK_SECRET}
+
+  # Catraca's own format, signed with a shared secret.
+  generic:
+    secret: ${CATRACA_FEEDBACK_SECRET}
+
+secret_scanning:
+  # GitHub's secret scanning partner endpoint (docs/secret-scanning.md).
+  github:
+    enabled: false
+    resolver:
+      # The platform endpoint that says which API key a token is.
+      url: https://platform.internal/internal/catraca/resolve-key
+      secret: ${CATRACA_RESOLVER_SECRET:-}
+      # Send the raw token, not only its SHA-256. Needs an https URL.
+      send_raw_token: false
+    # Answer GitHub with true/false positive labels, once GitHub enables it.
+    feedback: false
+    # A GitHub token without scopes, to raise the rate limit on GitHub's
+    # public keys endpoint.
+    github_token: ${GITHUB_TOKEN:-}
+
+logging:
+  # debug, info, warn or error.
+  level: info
+  # json or text.
+  format: json
