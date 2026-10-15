@@ -168,28 +168,25 @@ platform that cannot look keys up by hash; use it only over HTTPS.
 
 The platform must verify `Catraca-Signature` before answering: `t` is the
 Unix time in seconds and `v1` the hex HMAC-SHA256 of `<t>.<raw body>` with
-the shared secret, the same scheme as Catraca's outgoing webhooks. Reject a
-timestamp more than a few minutes old.
+the shared secret, the same scheme as Catraca's outgoing webhooks (see
+[Hooks](hooks.md#verifying-the-signature) for the steps and a Node.js
+version). Reject a timestamp more than a few minutes old. A platform in Go
+uses the public [`signature`](../signature) package:
 
 ```go
-func verify(header string, body []byte, secret []byte) bool {
-	var ts, sig string
-	for _, part := range strings.Split(header, ",") {
-		k, v, _ := strings.Cut(strings.TrimSpace(part), "=")
-		switch k {
-		case "t":
-			ts = v
-		case "v1":
-			sig = v
-		}
+import "github.com/guilhermebsantiago/catraca/signature"
+
+func resolveKey(w http.ResponseWriter, r *http.Request) {
+	body, err := io.ReadAll(io.LimitReader(r.Body, 64<<10))
+	if err != nil {
+		http.Error(w, "read error", http.StatusBadRequest)
+		return
 	}
-	sec, err := strconv.ParseInt(ts, 10, 64)
-	if err != nil || time.Since(time.Unix(sec, 0)).Abs() > 5*time.Minute {
-		return false
+	if err := signature.Verify(os.Getenv("CATRACA_RESOLVER_SECRET"), r.Header.Get(signature.Header), body, 0); err != nil {
+		http.Error(w, "invalid signature", http.StatusUnauthorized)
+		return
 	}
-	mac := hmac.New(sha256.New, secret)
-	mac.Write([]byte(ts + "." + string(body)))
-	return hmac.Equal([]byte(sig), []byte(hex.EncodeToString(mac.Sum(nil))))
+	// Look the key up by token_sha256 and answer 200 or 404.
 }
 ```
 

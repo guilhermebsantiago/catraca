@@ -2,18 +2,16 @@ package secretscan
 
 import (
 	"context"
-	"crypto/hmac"
-	"crypto/sha256"
-	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"io"
 	"net/http"
 	"net/http/httptest"
-	"strconv"
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/guilhermebsantiago/catraca/signature"
 )
 
 const resolverSecret = "resolver-secret"
@@ -23,7 +21,7 @@ func platform(t *testing.T, answer func(w http.ResponseWriter, req map[string]an
 	t.Helper()
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		body, _ := io.ReadAll(r.Body)
-		if !validSignature(r.Header.Get(SignatureHeader), body) {
+		if signature.Verify(resolverSecret, r.Header.Get(signature.Header), body, time.Minute) != nil {
 			w.WriteHeader(http.StatusUnauthorized)
 			return
 		}
@@ -36,26 +34,6 @@ func platform(t *testing.T, answer func(w http.ResponseWriter, req map[string]an
 	}))
 	t.Cleanup(srv.Close)
 	return srv
-}
-
-func validSignature(header string, body []byte) bool {
-	var ts, v1 string
-	for _, part := range strings.Split(header, ",") {
-		k, v, _ := strings.Cut(part, "=")
-		switch k {
-		case "t":
-			ts = v
-		case "v1":
-			v1 = v
-		}
-	}
-	sec, err := strconv.ParseInt(ts, 10, 64)
-	if err != nil || time.Since(time.Unix(sec, 0)).Abs() > time.Minute {
-		return false
-	}
-	mac := hmac.New(sha256.New, []byte(resolverSecret))
-	mac.Write([]byte(ts + "." + string(body)))
-	return hmac.Equal([]byte(v1), []byte(hex.EncodeToString(mac.Sum(nil))))
 }
 
 var testToken = Token{Raw: "acme_live_abc", SHA256: hashOf("acme_live_abc"), Type: "acme_api_key", URL: "https://github.com/o/r/blob/x/f", Source: "commit"}

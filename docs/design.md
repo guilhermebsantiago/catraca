@@ -37,6 +37,7 @@ internal/feedback    SES (via SNS, signature verified), useSend, generic
 internal/secretscan  GitHub secret scanning partner endpoint
 internal/api         HTTP server, auth, metrics
 internal/config      catraca.yaml
+signature            Catraca-Signature: sign and verify (public, for receivers)
 ```
 
 Dependency direction: `event` and `decision` import nothing internal.
@@ -45,7 +46,10 @@ Dependency direction: `event` and `decision` import nothing internal.
 (`Recorder`, `Dispatcher`). `audit`, `hooks` implement those. `feedback` and
 `secretscan` produce events and call a `Decider` interface they define
 (`Decide(ctx, event.Event) (decision.Decision, error)`). `api` and `cmd` wire
-everything. No package imports `api` or `cmd`.
+everything. No package imports `api` or `cmd`. `signature` is the one public
+package, so platforms in Go can verify Catraca's requests and sign their own;
+it imports nothing from the module, and `hooks`, `feedback` and
+`secretscan` use it.
 
 ## Signals
 
@@ -203,7 +207,8 @@ An enforced rule with `effects` triggers outgoing webhooks configured by
 name (`revoke_key`, `suspend_account`, `notify`, ...). Payload: effect,
 decision id, event type, account, key, rule, reason. Signed with
 HMAC-SHA256 over `timestamp.body` in a `Catraca-Signature: t=..,v1=..`
-header. Deliveries are written to an outbox table in the audit database
+header (package `signature`; the generic feedback endpoint and the secret
+scanning resolver use the same scheme). Deliveries are written to an outbox table in the audit database
 first, retried with exponential backoff and jitter, and are idempotent per
 (decision id, effect).
 
