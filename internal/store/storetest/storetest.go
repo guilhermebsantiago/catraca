@@ -1,5 +1,6 @@
-// Package storetest provides an in-process Redis server for tests of the
-// Redis store and of code built on it.
+// Package storetest provides Redis servers for tests of the Redis store and
+// of code built on it: an in-process miniredis, and a real server when
+// CATRACA_TEST_REDIS_URL points at one.
 package storetest
 
 import (

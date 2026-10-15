@@ -22,24 +22,44 @@ const (
 	week = 7 * day
 )
 
+// backends are the stores the catalog is tested on. redis-server is a real
+// Redis server, used when CATRACA_TEST_REDIS_URL is set; each test writes
+// under its own prefix and deletes its keys when it ends.
 var backends = []struct {
 	name string
 	new  func(tb testing.TB) store.Store
+	// skip, when set, says why the backend cannot run here, or returns "".
+	skip func() string
 }{
-	{"memory", func(testing.TB) store.Store { return store.NewMemory() }},
-	{"redis", func(tb testing.TB) store.Store {
+	{name: "memory", new: func(testing.TB) store.Store { return store.NewMemory() }},
+	{name: "redis", new: func(tb testing.TB) store.Store {
 		mr := storetest.Miniredis(tb)
 		client := redis.NewClient(&redis.Options{Addr: mr.Addr()})
 		tb.Cleanup(func() { client.Close() })
 		return store.NewRedis(client, store.RedisOptions{})
 	}},
+	{name: "redis-server", skip: storetest.RedisServerSkip, new: func(tb testing.TB) store.Store {
+		client, prefix := storetest.RedisServer(tb)
+		return store.NewRedis(client, store.RedisOptions{Prefix: prefix})
+	}},
+}
+
+// skipBackend skips tb when backend i cannot run here.
+func skipBackend(tb testing.TB, i int) {
+	tb.Helper()
+	if skip := backends[i].skip; skip != nil {
+		if why := skip(); why != "" {
+			tb.Skip(why)
+		}
+	}
 }
 
 // eachBackend runs test once per store backend, with a fresh catalog.
 func eachBackend(t *testing.T, test func(t *testing.T, c signal.Catalog)) {
 	t.Helper()
-	for _, be := range backends {
+	for i, be := range backends {
 		t.Run(be.name, func(t *testing.T) {
+			skipBackend(t, i)
 			c := signal.NewCatalog(be.new(t), signal.Options{})
 			t.Cleanup(func() { c.Close() })
 			test(t, c)

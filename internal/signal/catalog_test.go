@@ -14,6 +14,7 @@ import (
 	"github.com/guilhermebsantiago/catraca/internal/event"
 	"github.com/guilhermebsantiago/catraca/internal/signal"
 	"github.com/guilhermebsantiago/catraca/internal/store"
+	"github.com/guilhermebsantiago/catraca/internal/store/storetest"
 )
 
 func TestAccountSendCounters(t *testing.T) {
@@ -430,8 +431,9 @@ func TestObserveWhenTheStoreFails(t *testing.T) {
 		set, err := c.Observe(ctx, ev)
 		check(t, set, err, context.DeadlineExceeded)
 	})
-	for _, be := range backends {
+	for i, be := range backends {
 		t.Run("canceled context, "+be.name, func(t *testing.T) {
+			skipBackend(t, i)
 			c := signal.NewCatalog(be.new(t), signal.Options{})
 			defer c.Close()
 			ctx, cancel := context.WithCancel(context.Background())
@@ -473,8 +475,9 @@ func (s *flakyStore) Do(ctx context.Context, b *store.Batch) error {
 // read leaked = true and every other key has no key signals.
 func TestKnownLeakedKeysWhenTheStoreFails(t *testing.T) {
 	ctx := context.Background()
-	for _, be := range backends {
+	for i, be := range backends {
 		t.Run(be.name, func(t *testing.T) {
+			skipBackend(t, i)
 			shared := &flakyStore{Store: be.new(t)}
 			c := signal.NewCatalog(shared, signal.Options{})
 			// other is another replica on the same store.
@@ -612,6 +615,9 @@ func TestReplayReproducesSignals(t *testing.T) {
 	runs := map[string][]signal.Set{
 		"memory again": replay(store.NewMemory()),
 		"redis":        replay(backends[1].new(t)),
+	}
+	if storetest.RedisServerSkip() == "" {
+		runs["redis-server"] = replay(backends[2].new(t))
 	}
 	for name, sets := range runs {
 		for i := range sets {
