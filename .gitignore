@@ -1,0 +1,8 @@
+/catraca
+/catraca.exe
+/dist/
+*.db
+*.db-*
+.env
+.claude/
+coverage.out
