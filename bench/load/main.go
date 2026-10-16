@@ -24,6 +24,8 @@ import (
 	"sync"
 	"sync/atomic"
 	"time"
+
+	"github.com/guilhermebsantiago/catraca/internal/monotime"
 )
 
 func main() {
@@ -91,9 +93,9 @@ func main() {
 			wg.Add(1)
 			go func() {
 				defer wg.Done()
-				t0 := now()
+				t0 := monotime.Now()
 				action, micros, err := decide(client, *url, *token, body)
-				elapsed := now() - t0
+				elapsed := monotime.Since(t0)
 				if !measured {
 					return
 				}
