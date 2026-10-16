@@ -116,6 +116,14 @@ Where signal counters live.
 start over on restart. Use `redis` (6.2 or later) when several instances
 decide, so they share counters.
 
+The Redis store runs each decision's reads and writes as one Lua script
+call, so the server must allow scripting (`EVAL` and `EVALSHA`), as Redis,
+Valkey and the managed services do by default. With ACLs, give Catraca's
+user `+@scripting` and the commands the script calls (`+@read +@write`
+cover them) on keys under the prefix. A script that Redis lost after a
+restart or failover is loaded again on first use. [Benchmarks](benchmark.md)
+has what a decision costs.
+
 ### audit
 
 The decision log, labels and the webhook outbox. See [audit](audit.md).

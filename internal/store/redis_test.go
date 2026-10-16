@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/alicebob/miniredis/v2"
+	"github.com/alicebob/miniredis/v2/server"
 	"github.com/redis/go-redis/v9"
 
 	"github.com/guilhermebsantiago/catraca/internal/store/storetest"
@@ -38,8 +39,9 @@ func TestRedisKeysAndTTLs(t *testing.T) {
 	hourBucket := t0.Unix() / 60
 	dayBucket := t0.Unix() / (24 * 60)
 	want := map[string]time.Duration{
-		"app:c:{acct}:1h0m0s:" + itoa(hourBucket): time.Hour + time.Minute,
-		"app:d:{acct}:24h0m0s:" + itoa(dayBucket): 24*time.Hour + 24*time.Minute,
+		"app:c:{acct}:1h0m0s":                        time.Hour + time.Minute,
+		"app:d:{acct}:24h0m0s:" + itoa(dayBucket):    24*time.Hour + 24*time.Minute,
+		"app:d:{acct}:24h0m0s:b" + itoa(dayBucket/6): 24*time.Hour + 24*time.Minute,
 		"app:s:acct":    30 * 24 * time.Hour,
 		"app:f:acct":    365 * 24 * time.Hour,
 		"app:f:forever": 0,
@@ -59,6 +61,14 @@ func TestRedisKeysAndTTLs(t *testing.T) {
 	if len(keys) != len(want) {
 		t.Errorf("keys = %v, want %d of them", keys, len(want))
 	}
+	fields, err := mr.HKeys("app:c:{acct}:1h0m0s")
+	if err != nil {
+		t.Fatal(err)
+	}
+	slices.Sort(fields)
+	if want := []string{itoa(hourBucket), "n", "s"}; !slices.Equal(fields, want) {
+		t.Errorf("counter fields = %v, want %v", fields, want)
+	}
 }
 
 func TestRedisDefaultPrefix(t *testing.T) {
@@ -69,31 +79,91 @@ func TestRedisDefaultPrefix(t *testing.T) {
 	}
 }
 
-func TestRedisWindowKeysShareAHashTag(t *testing.T) {
+func TestRedisKeysOfAnOperationShareAHashTag(t *testing.T) {
 	r := NewRedis(nil, RedisOptions{})
 	for _, key := range []string{"plain", "with}brace", "with{brace", "{tagged}"} {
-		keys := r.windowKeys("c:", key, time.Hour, t0.UnixNano())
-		tag := hashTag(keys[0])
-		for _, k := range keys {
-			if hashTag(k) != tag {
-				t.Errorf("%q: %s and %s are in different slots", key, keys[0], k)
-				break
+		for _, o := range []op{
+			{kind: opIncr, key: key, span: time.Hour, at: t0.UnixNano()},
+			{kind: opAddDistinct, key: key, span: time.Hour, at: t0.UnixNano()},
+			{kind: opDistinct, key: key, span: time.Hour, at: t0.Add(17 * time.Minute).UnixNano()},
+		} {
+			keys := r.keys(&o)
+			tag := hashTag(keys[0])
+			for _, k := range keys {
+				if hashTag(k) != tag {
+					t.Errorf("%q: %s and %s are in different slots", key, keys[0], k)
+					break
+				}
 			}
 		}
 	}
 }
 
-// hashTag returns the part of a key Redis Cluster hashes.
-func hashTag(key string) string {
-	open := strings.IndexByte(key, '{')
-	if open < 0 {
-		return key
+func TestHashTag(t *testing.T) {
+	for key, want := range map[string]string{
+		"plain":        "plain",
+		"a{b}c":        "b",
+		"a{b}c{d}":     "b",
+		"a{}b{c}":      "a{}b{c}",
+		"a{b":          "a{b",
+		"a}b{c}":       "c",
+		"c:{x}y}:1h":   "x",
+		"{{tagged}}":   "{tagged",
+		"p:c:{k}:1h0m": "k",
+	} {
+		if got := hashTag(key); got != want {
+			t.Errorf("hashTag(%q) = %q, want %q", key, got, want)
+		}
 	}
-	end := strings.IndexByte(key[open+1:], '}')
-	if end <= 0 {
-		return key
+}
+
+// TestDistinctKeysCoverTheWindow checks that the blocks and buckets a
+// distinct count merges cover each bucket of the window exactly once, and
+// nothing else, for every alignment of the window to the blocks.
+func TestDistinctKeysCoverTheWindow(t *testing.T) {
+	r := NewRedis(nil, RedisOptions{Prefix: "p:"})
+	w := time.Hour
+	base := "p:d:{k}:1h0m0s:"
+	for shift := range 2 * distinctBlock {
+		for _, origin := range []time.Time{t0, time.Unix(-3_600_000, 0)} {
+			at := origin.Add(time.Duration(shift)*time.Minute + 30*time.Second)
+			last := floorDiv(at.UnixNano(), bucketWidth(w))
+			covered := make(map[int64]int)
+			keys := r.distinctKeys("k", w, at.UnixNano())
+			for _, k := range keys {
+				rest, ok := strings.CutPrefix(k, base)
+				if !ok {
+					t.Fatalf("key %s lacks prefix %s", k, base)
+				}
+				if blk, ok := strings.CutPrefix(rest, "b"); ok {
+					n, err := strconv.ParseInt(blk, 10, 64)
+					if err != nil {
+						t.Fatal(err)
+					}
+					for idx := n * distinctBlock; idx < (n+1)*distinctBlock; idx++ {
+						covered[idx]++
+					}
+					continue
+				}
+				n, err := strconv.ParseInt(rest, 10, 64)
+				if err != nil {
+					t.Fatal(err)
+				}
+				covered[n]++
+			}
+			if len(covered) != Buckets {
+				t.Errorf("at %v: %d buckets covered, want %d", at, len(covered), Buckets)
+			}
+			for idx := last - Buckets + 1; idx <= last; idx++ {
+				if covered[idx] != 1 {
+					t.Errorf("at %v: bucket %d covered %d times", at, idx, covered[idx])
+				}
+			}
+			if len(keys) > 15 {
+				t.Errorf("at %v: %d keys, want at most 15", at, len(keys))
+			}
+		}
 	}
-	return key[open+1 : open+1+end]
 }
 
 type countingHook struct{ commands, pipelines atomic.Int32 }
@@ -118,7 +188,8 @@ func TestRedisBatchIsOneRoundTrip(t *testing.T) {
 	s, _, client := newTestRedis(t, "")
 	hook := new(countingHook)
 	client.AddHook(hook)
-	// The first use of a connection sends its handshake through the hooks.
+	// The first use of a connection sends its handshake through the hooks,
+	// and the first batch loads the script.
 	run(t, s, func(b *Batch) { b.Get("warm-up") })
 	hook.commands.Store(0)
 	hook.pipelines.Store(0)
@@ -136,8 +207,108 @@ func TestRedisBatchIsOneRoundTrip(t *testing.T) {
 		b.Get("k")
 		b.Get("missing")
 	})
+	if p, c := hook.pipelines.Load(), hook.commands.Load(); p+c != 1 {
+		t.Errorf("Do sent %d pipelines and %d single commands, want one round trip", p, c)
+	}
+}
+
+func TestRedisClusterBatchIsOnePipeline(t *testing.T) {
+	mr := storetest.Miniredis(t)
+	client := redis.NewClusterClient(&redis.ClusterOptions{Addrs: []string{mr.Addr()}})
+	t.Cleanup(func() { client.Close() })
+	s := NewRedis(client, RedisOptions{})
+	run(t, s, func(b *Batch) { b.Get("warm-up") })
+	hook := new(countingHook)
+	client.AddHook(hook)
+	var counts []*IntResult
+	run(t, s, func(b *Batch) {
+		for _, key := range []string{"a", "b", "c"} {
+			b.Incr(key, time.Hour, t0, 1)
+			counts = append(counts, b.Count(key, time.Hour, t0))
+			b.Set(key, "v", 0)
+		}
+	})
 	if p, c := hook.pipelines.Load(), hook.commands.Load(); p != 1 || c != 0 {
 		t.Errorf("Do sent %d pipelines and %d single commands, want 1 and 0", p, c)
+	}
+	for i, r := range counts {
+		if r.Val() != 1 {
+			t.Errorf("count %d = %d, want 1", i, r.Val())
+		}
+	}
+}
+
+// TestRedisReloadsAFlushedScript checks the NOSCRIPT fallback: after SCRIPT
+// FLUSH each batch still runs exactly once, with reads in batch order.
+func TestRedisReloadsAFlushedScript(t *testing.T) {
+	for _, be := range []struct {
+		name string
+		new  func(t *testing.T) (*Redis, redis.UniversalClient)
+	}{
+		{"single", func(t *testing.T) (*Redis, redis.UniversalClient) {
+			s, _, client := newTestRedis(t, "")
+			return s, client
+		}},
+		{"cluster", func(t *testing.T) (*Redis, redis.UniversalClient) {
+			mr := storetest.Miniredis(t)
+			client := redis.NewClusterClient(&redis.ClusterOptions{Addrs: []string{mr.Addr()}})
+			t.Cleanup(func() { client.Close() })
+			return NewRedis(client, RedisOptions{}), client
+		}},
+	} {
+		t.Run(be.name, func(t *testing.T) {
+			s, client := be.new(t)
+			for i := range 3 {
+				if err := client.ScriptFlush(context.Background()).Err(); err != nil {
+					t.Fatal(err)
+				}
+				var before, after *IntResult
+				run(t, s, func(b *Batch) {
+					before = b.Count("k", time.Hour, t0)
+					b.Incr("k", time.Hour, t0, 1)
+					b.Incr("other", time.Hour, t0, 1)
+					after = b.Count("k", time.Hour, t0)
+				})
+				if before.Val() != int64(i) || after.Val() != int64(i+1) {
+					t.Errorf("batch %d after SCRIPT FLUSH: counts %d and %d, want %d and %d", i, before.Val(), after.Val(), i, i+1)
+				}
+			}
+		})
+	}
+}
+
+// TestRedisReturnsAtTheDeadline checks that Do gives up when its context
+// does, while Redis is slow to answer, and that the round trip it abandoned
+// still completes on its connection.
+func TestRedisReturnsAtTheDeadline(t *testing.T) {
+	s, mr, _ := newTestRedis(t, "")
+	run(t, s, func(b *Batch) { b.Get("warm-up") })
+
+	var slow atomic.Bool
+	mr.Server().SetPreHook(func(c *server.Peer, cmd string, args ...string) bool {
+		if slow.CompareAndSwap(true, false) {
+			time.Sleep(300 * time.Millisecond)
+		}
+		return false
+	})
+	slow.Store(true)
+	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Millisecond)
+	defer cancel()
+	var b Batch
+	b.Incr("k", time.Hour, t0, 1)
+	start := time.Now()
+	err := s.Do(ctx, &b)
+	if !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("Do = %v, want a deadline error", err)
+	}
+	if took := time.Since(start); took > 200*time.Millisecond {
+		t.Errorf("Do took %v, want about the 20ms deadline", took)
+	}
+	for count(t, s, "k", time.Hour, t0) != 1 {
+		if time.Since(start) > 5*time.Second {
+			t.Fatal("the abandoned write never applied")
+		}
+		time.Sleep(10 * time.Millisecond)
 	}
 }
 
@@ -190,7 +361,7 @@ func TestRedisErrors(t *testing.T) {
 	})
 	t.Run("not a counter", func(t *testing.T) {
 		s, mr, _ := newTestRedis(t, "")
-		mr.Set("catraca:c:{k}:1h0m0s:"+itoa(t0.Unix()/60), "abc")
+		mr.HSet("catraca:c:{k}:1h0m0s", "n", itoa(t0.Unix()/60), "s", "abc")
 		var b Batch
 		b.Count("k", time.Hour, t0)
 		if err := s.Do(context.Background(), &b); err == nil || !strings.Contains(err.Error(), `"abc"`) {
