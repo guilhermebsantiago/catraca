@@ -1,0 +1,254 @@
+# Benchmarks
+
+What a decision costs, measured on one developer machine: the Go benchmarks
+for each piece, then `POST /v1/decide` under load with the memory and the
+Redis store. The Redis numbers come before and after the change that runs
+each decision's store work as one Lua script (see
+[the Redis store](#the-redis-store)). The caveats at the end say what these
+numbers do not show.
+
+## Machine
+
+| | |
+|---|---|
+| CPU | AMD Ryzen 5 7600X, 6 cores, 12 threads |
+| OS | Windows 11 Pro (build 26200) |
+| Go | 1.27.2 |
+| Redis | 7.4.11, the msys2 build from [redis-windows](https://github.com/redis-windows/redis-windows), on 127.0.0.1, no persistence |
+| Redis Cluster | three 7.4.11 primaries on the same machine, no replicas |
+
+The load generator, Catraca and Redis all run on this machine.
+
+## Method
+
+**Go benchmarks** use `testing.B.Loop`. `BenchmarkObserve` records one send
+event (an API key, an IP, a sender domain, three recipients) for 1000
+accounts in turn, so most counters hold a bucket or two.
+`BenchmarkObserveBusy` first sends, for each of 20 accounts, one event in
+every bucket of every window, so every read covers 60 live buckets, as for
+an account that sends all the time. Each runs against the memory store,
+miniredis over loopback (client overhead only), a real Redis
+(`CATRACA_TEST_REDIS_URL`) and a real Redis Cluster
+(`CATRACA_TEST_REDIS_CLUSTER`).
+
+**Redis CPU per event** (`redis-us/op`) is the growth of `used_cpu_user +
+used_cpu_sys` in `INFO cpu` during the benchmark loop, divided by its
+iterations, summed over the primaries of a cluster. It says how many events
+one Redis core can carry, which latency at low load does not.
+
+**HTTP load** uses [`bench/load`](../bench/load), an open-loop generator:
+requests start on schedule whether or not earlier ones have finished, so a
+slow server shows up as latency instead of a lower rate. It sends in
+batches every 5 ms, warms up for 3 s and measures for 20 s. Events are
+sends from 5000 accounts, skewed so a few accounts send most of them, with
+one recipient and one link each. Catraca runs the default ruleset (one rule
+enforced, eight in shadow) with the SQLite audit log, and each run starts a
+fresh server on an empty Redis database.
+
+**Clocks.** Go's monotonic clock ticks about every 0.5 ms on Windows, so the
+generator times requests with the performance counter
+(`QueryPerformanceCounter`) instead. The engine's own time, `latency_us` in
+each decision, is taken by the server with Go's clock and is quantized to
+about 0.5 ms here, so the tables give the round trip.
+
+"Before" is commit 9ed56d5, the store as it was; "after" is this branch.
+Before and after runs were interleaved, so both saw the same machine.
+
+## Go benchmarks
+
+Medians of three to five interleaved runs on a quiet machine.
+
+### Engine and rules
+
+| benchmark | time | allocations |
+|---|---|---|
+| `BenchmarkDecide`: the engine with a canned signal set and the default ruleset | 3.5 µs | 38 |
+| `BenchmarkDecideParallel`: the same from 12 goroutines, per decision | 0.76 µs | 38 |
+| `BenchmarkEvaluateDefault`: the default ruleset alone | 2.2 µs | 31 |
+
+```sh
+go test ./internal/engine ./internal/rules -run '^$' -bench 'Decide|EvaluateDefault'
+```
+
+### Observe
+
+Recording one event and reading all its signals back, per event.
+
+| store | accounts | before | after | Redis CPU before | Redis CPU after | allocations |
+|---|---|---|---|---|---|---|
+| memory | 1000 sparse | 12 µs | 12 µs | | | 129 → 129 |
+| memory | 20 busy | 42 µs | 42 µs | | | 141 → 141 |
+| miniredis | 1000 sparse | 1.48 ms | 0.74 ms | | | 10,315 → 7,212 |
+| miniredis | 20 busy | 2.47 ms | 0.89 ms | | | 14,718 → 7,759 |
+| Redis | 1000 sparse | 1.36 ms | 0.63 ms | 1,344 µs | 628 µs | 2,355 → 583 |
+| Redis | 20 busy | 1.95 ms | 0.69 ms | 1,901 µs | 667 µs | 3,887 → 594 |
+| Redis Cluster | 1000 sparse | 0.94 ms | 0.55 ms | 1,865 µs | 1,172 µs | 2,398 → 1,019 |
+| Redis Cluster | 20 busy | 1.19 ms | 0.56 ms | 2,437 µs | 1,344 µs | 3,928 → 1,030 |
+
+The memory store did not change. miniredis runs in the test process, so its
+own allocations count too; the Lua interpreter it embeds accounts for most
+of the "after" ones. Client memory per event on a real Redis went from
+305 KB to 86 KB.
+
+```sh
+CATRACA_TEST_REDIS_URL=redis://localhost:6379/0 \
+CATRACA_TEST_REDIS_CLUSTER=localhost:7001,localhost:7002,localhost:7003 \
+  go test ./internal/signal -run '^$' -bench Observe -benchtime 3000x
+```
+
+## The Redis store
+
+Before, a send event's batch was about 90 pipelined commands, and every
+count and distinct count named its 60 bucket keys: some 1,700 keys and
+1,900 arguments per event. Commandstats accounted for only a third of the
+1.3 ms of Redis CPU per event; parsing arguments and reading about 100 KB of
+request was most of the rest. One Redis core saturated near 800 events a
+second.
+
+What was measured on sparse accounts against a real Redis:
+
+| variant | Observe | Redis CPU per event | why not |
+|---|---|---|---|
+| pipeline, 60 bucket keys per read (before) | 1.25 ms | 1.28 ms | |
+| a Lua script per count, summing its 60 declared bucket keys | 1.95 ms | | slower: 41 µs per call against 15 µs for MGET, and the 60 keys are still sent |
+| one hash per counter, HGETALL, summed in Go | 0.58 ms | 0.57 ms | old buckets cannot be dropped without a script, so hashes grow; a busy counter's 60-field HGETALL costs 14.5 µs, and the busy benchmark only fell from 1.86 to 1.34 ms |
+| the same, summed in Lua | 0.69 ms | 0.71 ms | slower than summing in Go, and busy counters stay O(60) |
+| pipeline over 6-bucket block keys, at most 15 keys per read | | about half of before | Redis CPU as low as the script's, but four times its client allocations (2,169), O(15) reads and twice the writes |
+| one script per batch over rolling counters (after) | 0.63 ms | 0.63 ms | |
+
+The first four rows were measured at the start of this work with Redis CPU
+taken over the whole test process; the block-key pipeline was only measured
+while another program loaded the machine, so only its ratio to the others
+measured alongside it is given. The chosen design, in
+[`internal/store/redis.go`](../internal/store/redis.go) and
+[`redis_script.go`](../internal/store/redis_script.go):
+
+- **One script call per batch** on a single server: one command, one reply
+  with only the results, and an atomic batch. Inside the script each
+  `redis.call` costs about 0.7 µs (reads) to 1.3 µs (writes) on this build.
+- **A counter is one hash** with a field per bucket, its newest bucket and
+  the sum of the buckets it holds. Buckets that leave the newest window are
+  dropped when a newer bucket is written, so a count ending in the newest
+  bucket reads the sum: O(1). The script caches each counter it touches, so
+  the count that follows an increment costs no call.
+- **A distinct set** keeps its HyperLogLog per bucket plus one per block of
+  6 aligned buckets. A count merges the whole blocks and the buckets at
+  either end, 10 or 15 keys instead of 60, and the estimate is identical,
+  since a HyperLogLog union is a register-wise maximum.
+- **NOSCRIPT** after a restart, a failover or `SCRIPT FLUSH`: a call that
+  fails with it ran nothing, so it is sent again with `EVAL`, which also
+  loads the script.
+
+Counts are the same as before. The contract suite passes on the memory
+store, miniredis, miniredis through a Cluster client, a real Redis and a
+real three-node cluster, and replaying 400 random events gives the same
+signals on the memory store and on both real servers. The one difference is
+in expiry: a counter or block expires w + w/60 after its last write, as each
+bucket did, so only when the wall clock runs ahead of event time (a replay
+slower than real time) can a count keep a bucket whose own TTL would have
+run out.
+
+### Redis Cluster
+
+A script may only touch keys of one hash slot. The store already puts every
+bucket of a counter or distinct set under one hash tag, but a batch spans
+the account, the API key, the IP and the sender domain: about 25 tags for a
+send event. On a Cluster (or Ring) client the batch is split into one script
+call per tag, in batch order within each call, and the calls go out as one
+pipeline that go-redis splits by node and sends concurrently. Each call is
+atomic and holds every operation on its keys, so order within a key holds
+and a NOSCRIPT retry stays exactly-once; a call redirected with MOVED or ASK
+did not run and is resent by go-redis. On three local primaries an event
+costs 0.55 ms against 0.94 ms before. The configuration's `store.redis.url`
+connects to one node; a cluster is used through `store.NewRedis` with a
+Cluster client.
+
+### The deadline
+
+The engine gives the signal lookup 10 ms, but go-redis only honors a context
+while it waits for a free connection, not on the connection itself, unless
+the client sets `ContextTimeoutEnabled`. Under load, decisions therefore
+waited for Redis for 100 ms and more instead of degrading at the deadline.
+Setting `ContextTimeoutEnabled` was worse: a deadline then closes the
+connection mid-reply, and once latency neared the deadline every request
+redialed, which exhausted ephemeral ports here and degraded every decision
+while Redis sat idle. The store now returns at the deadline and lets the
+round trip finish on its own connection, which goes back to the pool.
+
+## HTTP load
+
+`POST /v1/decide` on a quiet machine, before and after interleaved per rate.
+Round trip as the platform sees it (connection, JSON, rules, store, audit),
+in ms. Redis CPU is the share of one core over the run. Degraded is the
+share of decisions made without signals because the store missed the 10 ms
+deadline.
+
+### Redis
+
+| req/s | | p50 | p90 | p99 | p99.9 | Redis CPU | degraded |
+|---|---|---|---|---|---|---|---|
+| 250 | before | 1.68 | 2.49 | 2.90 | 3.73 | 30% | 0 |
+| | after | 0.95 | 1.39 | 1.69 | 2.70 | 15% | 0 |
+| 500 | before | 2.88 | 3.32 | 3.77 | 5.28 | 51% | 0 |
+| | after | 1.41 | 1.80 | 2.09 | 2.74 | 27% | 0 |
+| 1000 | before | 5.07 | 6.95 | 15.0 | 20.0 | 99% | 0 |
+| | after | 2.21 | 2.62 | 2.97 | 3.37 | 45% | 0 |
+| 2000 | before | 102 | 123 | 135 | 159 | 100% | 39% |
+| | after | 4.26 | 4.74 | 10.2 | 10.7 | 84% | 1.2% |
+| 4000 | before | 10.7 | 124 | 144 | 159 | 100% | 72% |
+| | after | 10.5 | 10.8 | 11.3 | 11.8 | 100% | 100% |
+
+Redis CPU per decision went from 1.2 ms to 0.6 ms at 250 req/s (0.45 ms at
+1000), so one core of this Redis build carries about 2,000 decisions a
+second instead of about 800. Near saturation the old store varies a lot
+between runs: an earlier run at 1000 req/s, also at 99% Redis CPU, had a
+p50 of 29 ms.
+
+Past capacity (4000 req/s here) every decision still answers within the
+deadline, but nearly all of them degrade: the round trips that reach Redis
+queue behind each other and miss the deadline too. A smaller pool
+(`?pool_size=8` in the URL) let 19% through instead of none. Shedding load
+before it reaches Redis would take admission control, which Catraca does
+not have yet, so size Redis for the peak. The deadline fix alone, on the old
+pipeline, kept decisions under 12 ms at 1000 req/s (p50 6.7, p99 10.4, 7%
+degraded) but added no capacity.
+
+### Memory
+
+| req/s | p50 | p90 | p99 | p99.9 | degraded |
+|---|---|---|---|---|---|
+| 1000 | 0.24 | 0.27 | 0.56 | 1.41 | 0 |
+| 2000 | 0.26 | 0.48 | 0.73 | 1.93 | 0 |
+| 4000 | 0.31 | 0.43 | 0.88 | 2.09 | 0 |
+| 8000 | 0.49 | 0.65 | 1.27 | 2.82 | 0 |
+
+No decision was dropped from the SQLite audit queue in any run.
+
+```sh
+go run ./bench/load -url http://localhost:8080 -token $CATRACA_API_TOKEN -rps 1000 -duration 20s
+```
+
+## Caveats
+
+- **One machine.** The load generator, Catraca and Redis share six cores,
+  and the round trip includes the generator's own scheduling. On separate
+  machines the network adds its round trip, and Catraca and Redis each get
+  their own cores.
+- **A Windows Redis build.** The msys2 build from redis-windows is not the
+  official Linux Redis: it multiplexes with `select` and spends far more per
+  argument and per call than Redis on Linux, which makes the argument count
+  weigh more here. Read absolute numbers as indicative, and the before and
+  after ratios as the result. A three-node cluster on one machine shows the
+  split into calls, not a cluster's capacity.
+- **Synthetic traffic.** Sends only, one recipient each, from skewed but
+  made-up accounts, and every HTTP run starts on an empty database, so most
+  counters hold a bucket or two, as in `BenchmarkObserve`.
+  `BenchmarkObserveBusy` covers counters with every bucket live, where the
+  new layout gains most. Real traffic adds feedback and account events.
+- **SQLite audit.** Decisions are written to SQLite in the background. With
+  heavier load or Postgres the recorder may cost more, or drop records,
+  which `catraca_records_dropped_total` counts.
+- **Interference.** Part of this work ran while another program used about
+  five of the twelve threads. Those runs served only for comparisons made
+  alongside each other and are not in these tables, except the block-key
+  pipeline row.

@@ -57,7 +57,9 @@ it imports nothing from the module, and `hooks`, `feedback` and
 ## Signals
 
 Signals are computed by `signal.Catalog.Observe`, which records the event and
-reads the values in one store round trip. Counters are sliding windows keyed
+reads the values in one store round trip. With Redis that round trip is one
+Lua script call (one per hash slot on a cluster) that returns only the
+counts; [benchmarks](benchmark.md) has the measurements. Counters are sliding windows keyed
 by event time. Windows are written as suffixes: `_1m`, `_1h`, `_24h`, `_7d`.
 Rates are `float64` in [0, 1]; counts are `int64`; ages are hours as
 `float64`.

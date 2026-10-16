@@ -64,6 +64,7 @@ blocks only keys reported leaked.
 - [Hooks](docs/hooks.md)
 - [Feedback: SES, useSend](docs/feedback.md)
 - [GitHub secret scanning](docs/secret-scanning.md)
+- [Benchmarks](docs/benchmark.md)
 
 ## Examples
 
@@ -79,8 +80,11 @@ go test ./...
 ```
 
 Postgres tests run when `CATRACA_TEST_POSTGRES_URL` is set, and the store's
-contract suite also runs against a real Redis when `CATRACA_TEST_REDIS_URL`
-is set (for example `redis://localhost:6379/0`). CI runs both.
+contract suite, the signal tests and their benchmarks also run against a
+real Redis when `CATRACA_TEST_REDIS_URL` is set (for example
+`redis://localhost:6379/0`) and against a Redis Cluster when
+`CATRACA_TEST_REDIS_CLUSTER` lists some of its nodes
+(`localhost:7001,localhost:7002`). CI runs Postgres and Redis.
 
 ## License
 
