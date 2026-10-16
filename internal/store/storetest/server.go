@@ -5,6 +5,7 @@ import (
 	"crypto/rand"
 	"os"
 	"slices"
+	"strconv"
 	"strings"
 	"sync"
 	"testing"
@@ -76,16 +77,65 @@ func connect(tb testing.TB, client redis.UniversalClient, env string) string {
 	tb.Cleanup(func() {
 		ctx, cancel := context.WithTimeout(context.Background(), time.Minute)
 		defer cancel()
-		// One key per command, so a cluster client routes each to its node.
-		for _, k := range ScanKeys(tb, ctx, client, prefix) {
-			if err := client.Unlink(ctx, k).Err(); err != nil {
-				tb.Errorf("clean up %s: %v", k, err)
+		// One key per command, so a cluster client routes each to its node,
+		// pipelined.
+		keys := ScanKeys(tb, ctx, client, prefix)
+		for len(keys) > 0 {
+			n := min(len(keys), 1000)
+			pipe := client.Pipeline()
+			for _, k := range keys[:n] {
+				pipe.Unlink(ctx, k)
+			}
+			if _, err := pipe.Exec(ctx); err != nil {
+				tb.Errorf("clean up %s*: %v", prefix, err)
 				break
 			}
+			keys = keys[n:]
 		}
 		client.Close()
 	})
 	return prefix
+}
+
+// CPU returns the CPU time Redis has used, user and system, in seconds,
+// summed over the primaries of a cluster. Benchmarks read it before and after
+// their loop to report Redis's work per operation.
+func CPU(tb testing.TB, client redis.UniversalClient) float64 {
+	tb.Helper()
+	ctx := context.Background()
+	var (
+		mu  sync.Mutex
+		sum float64
+	)
+	read := func(ctx context.Context, node redis.Cmdable) error {
+		info, err := node.Info(ctx, "cpu").Result()
+		if err != nil {
+			return err
+		}
+		for line := range strings.Lines(info) {
+			name, val, ok := strings.Cut(strings.TrimSpace(line), ":")
+			if ok && (name == "used_cpu_user" || name == "used_cpu_sys") {
+				f, err := strconv.ParseFloat(val, 64)
+				if err != nil {
+					return err
+				}
+				mu.Lock()
+				sum += f
+				mu.Unlock()
+			}
+		}
+		return nil
+	}
+	var err error
+	if c, ok := client.(*redis.ClusterClient); ok {
+		err = c.ForEachMaster(ctx, func(ctx context.Context, node *redis.Client) error { return read(ctx, node) })
+	} else {
+		err = read(ctx, client)
+	}
+	if err != nil {
+		tb.Fatalf("INFO cpu: %v", err)
+	}
+	return sum
 }
 
 // ScanKeys returns the keys under prefix, on every primary of a cluster, each

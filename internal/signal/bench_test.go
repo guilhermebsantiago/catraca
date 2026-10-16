@@ -14,7 +14,10 @@ import (
 // domain and three recipients, spread over 1000 accounts. The redis case runs
 // against miniredis over loopback TCP, so it shows client and round trip
 // overhead rather than what a real Redis server would sustain; redis-server
-// runs against the real server at CATRACA_TEST_REDIS_URL, when it is set.
+// and redis-cluster-server run against the real server at
+// CATRACA_TEST_REDIS_URL and the cluster at CATRACA_TEST_REDIS_CLUSTER, when
+// they are set, and also report redis-us/op: the CPU time Redis spent per
+// event during the loop, which bounds how many events one Redis core can take.
 func BenchmarkObserve(b *testing.B) {
 	const accounts = 1000
 	events := make([]event.Event, accounts)
@@ -36,16 +39,18 @@ func BenchmarkObserve(b *testing.B) {
 			c := signal.NewCatalog(be.new(b), signal.Options{})
 			defer c.Close()
 			ctx := context.Background()
+			done := measureRedis(b, i)
 			b.ReportAllocs()
-			i := 0
+			n := 0
 			for b.Loop() {
-				ev := events[i%accounts]
-				ev.Time = t0.Add(time.Duration(i) * time.Millisecond)
+				ev := events[n%accounts]
+				ev.Time = t0.Add(time.Duration(n) * time.Millisecond)
 				if _, err := c.Observe(ctx, ev); err != nil {
 					b.Fatal(err)
 				}
-				i++
+				n++
 			}
+			done()
 		})
 	}
 }
@@ -87,16 +92,32 @@ func BenchmarkObserveBusy(b *testing.B) {
 					}
 				}
 			}
+			done := measureRedis(b, i)
 			b.ReportAllocs()
-			i := 0
+			n := 0
 			for b.Loop() {
-				ev := events[i%accounts]
-				ev.Time = start.Add(time.Duration(i) * time.Microsecond)
+				ev := events[n%accounts]
+				ev.Time = start.Add(time.Duration(n) * time.Microsecond)
 				if _, err := c.Observe(ctx, ev); err != nil {
 					b.Fatal(err)
 				}
-				i++
+				n++
 			}
+			done()
 		})
+	}
+}
+
+// measureRedis reads the CPU time of backend i's server, when it has one, and
+// returns a function to call after the loop, which reports the CPU time per
+// iteration as redis-us/op.
+func measureRedis(b *testing.B, i int) func() {
+	if backends[i].cpu == nil {
+		return func() {}
+	}
+	cpu := backends[i].cpu(b)
+	before := cpu()
+	return func() {
+		b.ReportMetric((cpu()-before)*1e6/float64(b.N), "redis-us/op")
 	}
 }

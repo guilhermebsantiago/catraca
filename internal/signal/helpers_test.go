@@ -32,6 +32,9 @@ var backends = []struct {
 	new  func(tb testing.TB) store.Store
 	// skip, when set, says why the backend cannot run here, or returns "".
 	skip func() string
+	// cpu, when set, returns a reader of the CPU time the server has used,
+	// in seconds.
+	cpu func(tb testing.TB) func() float64
 }{
 	{name: "memory", new: func(testing.TB) store.Store { return store.NewMemory() }},
 	{name: "redis", new: func(tb testing.TB) store.Store {
@@ -43,10 +46,16 @@ var backends = []struct {
 	{name: "redis-server", skip: storetest.RedisServerSkip, new: func(tb testing.TB) store.Store {
 		client, prefix := storetest.RedisServer(tb)
 		return store.NewRedis(client, store.RedisOptions{Prefix: prefix})
+	}, cpu: func(tb testing.TB) func() float64 {
+		client, _ := storetest.RedisServer(tb)
+		return func() float64 { return storetest.CPU(tb, client) }
 	}},
 	{name: "redis-cluster-server", skip: storetest.RedisClusterSkip, new: func(tb testing.TB) store.Store {
 		client, prefix := storetest.RedisCluster(tb)
 		return store.NewRedis(client, store.RedisOptions{Prefix: prefix})
+	}, cpu: func(tb testing.TB) func() float64 {
+		client, _ := storetest.RedisCluster(tb)
+		return func() float64 { return storetest.CPU(tb, client) }
 	}},
 }
 
