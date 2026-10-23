@@ -56,6 +56,14 @@ updates:
     groups:
       examples:
         update-types: [minor, patch]
+    ignore:
+      # The examples type-check against the Node versions CI runs them on
+      # (22 and 24), so @types/node follows those by hand. TypeScript majors
+      # change the compiler itself and are taken on purpose, not weekly.
+      - dependency-name: "@types/node"
+        update-types: ["version-update:semver-major"]
+      - dependency-name: typescript
+        update-types: ["version-update:semver-major"]
 
   # The Remotion project that renders the launch video. CI does not build
   # it, so check a render before merging an update.
@@ -68,3 +76,7 @@ updates:
     groups:
       media:
         update-types: [minor, patch]
+    ignore:
+      # A TypeScript major changes the compiler Remotion's tooling expects.
+      - dependency-name: typescript
+        update-types: ["version-update:semver-major"]

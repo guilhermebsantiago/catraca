@@ -541,10 +541,12 @@ func (a *App) httpServer(h http.Handler) *http.Server {
 // instance reconnect, and the new connections go where the load balancer
 // sends them. A second SIGINT or SIGTERM ends the wait early.
 func (a *App) drain(servers ...*http.Server) {
-	a.draining.Store(true)
+	// Keep-alives go first, so a client that sees /readyz report draining
+	// already gets its connection closed with the next response.
 	for _, s := range servers {
 		s.SetKeepAlivesEnabled(false)
 	}
+	a.draining.Store(true)
 	delay := a.cfg.Server.DrainDelay
 	if delay <= 0 {
 		return
