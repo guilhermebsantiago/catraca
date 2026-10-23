@@ -3,6 +3,7 @@ package audit
 import (
 	"context"
 	"database/sql"
+	"errors"
 	"fmt"
 	"log/slog"
 	"strconv"
@@ -31,20 +32,39 @@ type DB struct {
 	flushReq chan chan error
 	done     chan struct{}
 
+	// writeCtx is the parent of every write of the background writer.
+	// Close cancels it with abandon when its context ends, which aborts the
+	// write in flight and makes the writer give up on what is left.
+	writeCtx context.Context
+	abandon  context.CancelFunc
+	// closing is set by Close: from then on each batch gets one attempt.
+	closing atomic.Bool
+
+	// stopPruning ends the retention loop and pruned is closed once it has
+	// returned. Both are nil without a retention.
+	stopPruning context.CancelFunc
+	pruned      chan struct{}
+
+	closeOnce sync.Once
+	closeErr  error
+
 	// pending counts decisions accepted by Record and not yet written or
 	// given up on, so Get and Label know when flushing could help.
 	pending         atomic.Int64
 	recorded        atomic.Uint64
 	dropped         atomic.Uint64
 	failed          atomic.Uint64
+	rejected        atomic.Uint64
 	droppedSinceLog atomic.Uint64
 	lastDropLog     atomic.Int64
-	// closingSince is when Close was called, in unix nanoseconds, or 0.
-	closingSince atomic.Int64
+	rejectLog       limiter
+
+	retention retentionCounters
 }
 
 // Open opens the audit database named by dsn, creating it and applying
-// migrations as needed, and starts the background writer. The DSN is one of:
+// migrations as needed, and starts the background writer and, with a
+// retention, the background deleter. The DSN is one of:
 //
 //	postgres://user:pass@host:5432/catraca?sslmode=disable   (or postgresql://)
 //	sqlite:/var/lib/catraca/audit.db
@@ -84,8 +104,11 @@ func OpenSQLite(ctx context.Context, path string, opts Options) (*DB, error) {
 		return nil, fmt.Errorf("audit: open sqlite: %w", err)
 	}
 	if path == ":memory:" || strings.HasPrefix(path, ":memory:?") {
-		// Each connection to ":memory:" is its own database.
+		// Each connection to ":memory:" is its own database, and closing
+		// it drops the data: keep exactly one, and never expire it.
 		db.SetMaxOpenConns(1)
+	} else {
+		opts.Pool.withDefaults().apply(db)
 	}
 	return open(ctx, db, sqliteDialect, opts)
 }
@@ -97,7 +120,15 @@ func OpenPostgres(ctx context.Context, url string, opts Options) (*DB, error) {
 	if err != nil {
 		return nil, fmt.Errorf("audit: open postgres: %w", err)
 	}
+	opts.Pool.withDefaults().apply(db)
 	return open(ctx, db, postgresDialect, opts)
+}
+
+func (p Pool) apply(db *sql.DB) {
+	db.SetMaxOpenConns(p.MaxOpen)
+	db.SetMaxIdleConns(p.MaxIdle)
+	db.SetConnMaxLifetime(p.MaxLifetime)
+	db.SetConnMaxIdleTime(p.MaxIdleTime)
 }
 
 func open(ctx context.Context, sqlDB *sql.DB, d dialect, opts Options) (*DB, error) {
@@ -114,6 +145,7 @@ func open(ctx context.Context, sqlDB *sql.DB, d dialect, opts Options) (*DB, err
 		sqlDB.Close()
 		return nil, err
 	}
+	writeCtx, abandon := context.WithCancel(context.Background())
 	db := &DB{
 		db:       sqlDB,
 		dialect:  d,
@@ -122,27 +154,82 @@ func open(ctx context.Context, sqlDB *sql.DB, d dialect, opts Options) (*DB, err
 		queue:    make(chan row, opts.BufferSize),
 		flushReq: make(chan chan error),
 		done:     make(chan struct{}),
+		writeCtx: writeCtx,
+		abandon:  abandon,
 	}
 	go db.writer()
+	if opts.Retention > 0 {
+		ctx, stop := context.WithCancel(context.Background())
+		db.stopPruning, db.pruned = stop, make(chan struct{})
+		go func() {
+			defer close(db.pruned)
+			db.pruneLoop(ctx)
+		}()
+	}
 	return db, nil
 }
 
 // Close stops accepting decisions, writes the ones still queued and closes
-// the database. If the database is unreachable, it gives up on the queued
-// decisions after about 30 seconds rather than hang a shutdown. Stop anything
-// using the DB as an Outbox first.
-func (db *DB) Close() error {
+// the database. Stop anything using the DB as an Outbox first.
+//
+// Close writes the queue for as long as ctx allows, and at most 30 seconds
+// when ctx has no deadline. When ctx ends first, Close aborts the write in
+// flight and gives up on every decision still queued: they are counted as
+// failed and logged as one line with their number. It then closes the
+// database and returns an error wrapping ctx's. Close is safe to call more
+// than once; later calls return the first one's result.
+func (db *DB) Close(ctx context.Context) error {
+	db.closeOnce.Do(func() { db.closeErr = db.close(ctx) })
+	return db.closeErr
+}
+
+func (db *DB) close(ctx context.Context) error {
 	db.mu.Lock()
-	if db.closed {
-		db.mu.Unlock()
-		return nil
-	}
 	db.closed = true
-	db.closingSince.Store(time.Now().UnixNano())
+	db.closing.Store(true)
 	close(db.queue)
 	db.mu.Unlock()
-	<-db.done
-	return db.db.Close()
+	if db.stopPruning != nil {
+		db.stopPruning()
+	}
+	if _, ok := ctx.Deadline(); !ok {
+		// A database that hangs must not hang the shutdown with it.
+		var cancel context.CancelFunc
+		ctx, cancel = context.WithTimeout(ctx, drainTimeout)
+		defer cancel()
+	}
+
+	var errs []error
+	select {
+	case <-db.done:
+	case <-ctx.Done():
+	}
+	select {
+	case <-db.done:
+	default:
+		db.abandon()
+		// pending still counts the batch whose write was just aborted,
+		// which may have committed a moment before: an upper bound.
+		if n := db.pending.Load(); n > 0 {
+			db.log.Error("audit: closed before every queued decision was written", "unwritten", n, "error", ctx.Err())
+			errs = append(errs, fmt.Errorf("audit: close: gave up on %d queued decisions: %w", n, ctx.Err()))
+		}
+	}
+	if db.pruned != nil {
+		// Pruning checks for the stop between statements and the stop
+		// aborts the statement in flight.
+		select {
+		case <-db.pruned:
+		case <-ctx.Done():
+		}
+	}
+	// After an abandon the writer may still be running, but its writes fail
+	// at once, and sql.DB.Close does not wait for them.
+	if err := db.db.Close(); err != nil {
+		errs = append(errs, fmt.Errorf("audit: close: %w", err))
+	}
+	db.abandon()
+	return errors.Join(errs...)
 }
 
 // SQL returns the underlying database handle, for health checks and ad-hoc
@@ -166,14 +253,19 @@ type dialect struct {
 	// migration transaction. SQLite needs none: an immediate transaction
 	// already holds the write lock.
 	lockMigrations string
-	// skipLocked lets concurrent outbox workers claim different rows.
+	// skipLocked lets concurrent outbox workers claim different rows, and
+	// concurrent retention runs delete different rows.
 	skipLocked string
+	// refused reports whether a write failed because the database refused
+	// the values in it, rather than because it cannot take writes.
+	refused func(error) bool
 }
 
 var (
 	sqliteDialect = dialect{
 		name:       "sqlite",
 		migrations: "migrations/sqlite",
+		refused:    sqliteRefused,
 	}
 	postgresDialect = dialect{
 		name:       "postgres",
@@ -183,6 +275,7 @@ var (
 		// Catraca process.
 		lockMigrations: "SELECT pg_advisory_xact_lock(4708204391077625121)",
 		skipLocked:     " FOR UPDATE SKIP LOCKED",
+		refused:        postgresRefused,
 	}
 )
 

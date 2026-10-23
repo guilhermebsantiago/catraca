@@ -234,8 +234,10 @@ coming back from an outage from getting every retry at the same moment. A
 `Retry-After` header (seconds or an HTTP date) on the response is honored when
 it asks for longer, up to `MaxBackoff`.
 
-Dead deliveries stay in the outbox with the last status code and error. To
-list them, and to send one again after fixing the receiver:
+Dead deliveries stay in the outbox with the last status code and error, until
+[`audit.retention`](audit.md#retention), when set, deletes them along with
+delivered ones. To list them, and to send one again after fixing the
+receiver:
 
 ```sql
 SELECT id, decision_id, effect, attempts, last_status_code, last_error

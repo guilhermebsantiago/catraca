@@ -18,6 +18,12 @@ store:
 
 audit:
   dsn: ${CATRACA_AUDIT_DSN:-postgres://catraca:catraca@postgres:5432/catraca?sslmode=disable}
+  # Connections per instance: keep this times the number of instances under
+  # Postgres's max_connections (100 by default).
+  max_open_conns: 10
+  # Delete unlabeled decisions and finished webhook deliveries after this
+  # long; left out, nothing is deleted (docs/audit.md#retention).
+  # retention: 2160h
 
 feedback:
   generic:

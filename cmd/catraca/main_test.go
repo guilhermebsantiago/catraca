@@ -160,7 +160,7 @@ func auditDB(t *testing.T, rule string, mode decision.Mode, n int) string {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer db.Close()
+	defer db.Close(ctx)
 	now := time.Now()
 	for i := range n {
 		id := fmt.Sprintf("dec_%03d", i)

@@ -205,6 +205,12 @@ hash of the subject): no message content. Labels attach to a decision:
 reviewer's verdict on a shadow match), with who, why and when. Labels are
 per decision and rule.
 
+The writer inserts decisions in batches; a batch the database refuses is
+written one decision at a time, so a decision it cannot store loses only
+itself. An optional retention deletes unlabeled decisions and finished
+deliveries in small batches, and keeps labeled decisions longer (forever by
+default), because the precision gate counts them.
+
 ## Precision gate
 
 For each rule and window: matches, labeled matches, true positives, false

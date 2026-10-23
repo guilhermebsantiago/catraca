@@ -785,7 +785,12 @@ func TestMetrics(t *testing.T) {
 		`catraca_secret_scanning_outcomes_total{outcome="leaked"} 0`,
 		`catraca_audit_recorded_total 3`,
 		`catraca_audit_dropped_total 0`,
+		`catraca_audit_rejected_total 0`,
 		`catraca_audit_queued 0`,
+		`catraca_audit_retention_deleted_total{table="decisions"} 0`,
+		`catraca_audit_retention_deleted_total{table="outbox"} 0`,
+		`catraca_audit_retention_errors_total 0`,
+		`go_sql_max_open_connections{db_name="audit"} 10`,
 		`catraca_hooks_delivered_total 0`,
 		`catraca_hooks_dead_total 0`,
 		`catraca_ruleset_rules{mode="enforce"} 5`,
@@ -875,7 +880,7 @@ func TestServeShutsDownInOrder(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer db.Close()
+	defer db.Close(context.Background())
 	for _, id := range ids {
 		if _, err := db.Get(context.Background(), id); err != nil {
 			t.Errorf("decision %s: %v", id, err)

@@ -4,6 +4,7 @@ import (
 	"runtime"
 
 	"github.com/prometheus/client_golang/prometheus"
+	"github.com/prometheus/client_golang/prometheus/collectors"
 
 	"github.com/guilhermebsantiago/catraca/internal/decision"
 	"github.com/guilhermebsantiago/catraca/internal/hooks"
@@ -31,10 +32,19 @@ func (a *App) registerStats() {
 			func() uint64 { return db.RecorderStats().Dropped }),
 		counter("catraca_audit_failed_total", "Decisions queued for the audit log that could not be written.",
 			func() uint64 { return db.RecorderStats().Failed }),
+		counter("catraca_audit_rejected_total", "Decisions the audit database refused one at a time while it wrote the rest of their batch; also counted as failed.",
+			func() uint64 { return db.RecorderStats().Rejected }),
 		prometheus.NewGaugeFunc(prometheus.GaugeOpts{
 			Name: "catraca_audit_queued",
 			Help: "Decisions waiting to be written to the audit log.",
 		}, func() float64 { return float64(db.RecorderStats().Queued) }),
+		retentionDeleted("decisions", func() uint64 { return db.RetentionStats().Decisions }),
+		retentionDeleted("outbox", func() uint64 { return db.RetentionStats().Deliveries }),
+		counter("catraca_audit_retention_errors_total", "Audit retention runs that failed to delete expired rows.",
+			func() uint64 { return db.RetentionStats().Errors }),
+		// go_sql_* with db_name="audit": connections open, in use and idle,
+		// and how often and how long callers waited for one.
+		collectors.NewDBStatsCollector(db.SQL(), "audit"),
 
 		counter("catraca_hooks_enqueued_total", "Effect webhook deliveries written to the outbox.",
 			func() uint64 { return hookStats().Enqueued }),
@@ -59,6 +69,15 @@ func (a *App) registerStats() {
 	}
 	build.WithLabelValues(version, runtime.Version()).Set(1)
 	a.registry.MustRegister(build)
+}
+
+// retentionDeleted counts the rows audit retention deleted from one table.
+func retentionDeleted(table string, f func() uint64) prometheus.Collector {
+	return prometheus.NewCounterFunc(prometheus.CounterOpts{
+		Name:        "catraca_audit_retention_deleted_total",
+		Help:        "Rows deleted by audit retention, by table: decisions (with their matches and labels) and outbox.",
+		ConstLabels: prometheus.Labels{"table": table},
+	}, func() float64 { return float64(f()) })
 }
 
 var (

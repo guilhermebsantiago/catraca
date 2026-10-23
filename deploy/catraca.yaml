@@ -18,6 +18,10 @@ store:
 
 audit:
   dsn: ${CATRACA_AUDIT_DSN:-sqlite:/var/lib/catraca/catraca.db}
+  # Delete unlabeled decisions and finished webhook deliveries after this
+  # long, so the volume does not fill up; left out, nothing is deleted
+  # (docs/audit.md#retention).
+  # retention: 2160h
 
 feedback:
   generic:

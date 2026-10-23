@@ -1,6 +1,7 @@
 package audit
 
 import (
+	"bytes"
 	"context"
 	"crypto/sha256"
 	"database/sql"
@@ -78,7 +79,7 @@ func runContract(t *testing.T, newDSN func(t *testing.T) string) {
 		if err != nil {
 			t.Fatalf("Open: %v", err)
 		}
-		t.Cleanup(func() { db.Close() })
+		t.Cleanup(func() { db.Close(context.Background()) })
 		return db
 	}
 	fresh := func(t *testing.T) *DB { return open(t, newDSN(t), Options{}) }
@@ -101,6 +102,98 @@ func runContract(t *testing.T, newDSN func(t *testing.T) string) {
 		dsn := newDSN(t)
 		testCloseDrainsAndReopen(t, dsn, func(opts Options) *DB { return open(t, dsn, opts) })
 	})
+	t.Run("RefusedRow", func(t *testing.T) {
+		logs := &logBuffer{}
+		testRefusedRow(t, open(t, newDSN(t), Options{FlushInterval: time.Hour, Logger: logs.logger()}), logs)
+	})
+	t.Run("CloseHonorsContext", func(t *testing.T) {
+		dsn := newDSN(t)
+		testCloseHonorsContext(t, dsn, func(opts Options) *DB { return open(t, dsn, opts) })
+	})
+	t.Run("FlushHonorsContext", func(t *testing.T) {
+		dsn := newDSN(t)
+		testFlushHonorsContext(t, dsn, open(t, dsn, Options{FlushInterval: time.Hour}))
+	})
+	t.Run("Pool", func(t *testing.T) {
+		db := open(t, newDSN(t), Options{Pool: Pool{MaxOpen: 3, MaxIdle: 5}})
+		if got := db.SQL().Stats().MaxOpenConnections; got != 3 {
+			t.Errorf("MaxOpenConnections = %d, want 3", got)
+		}
+		if got := fresh(t).SQL().Stats().MaxOpenConnections; got != DefaultPoolMaxOpen {
+			t.Errorf("default MaxOpenConnections = %d, want %d", got, DefaultPoolMaxOpen)
+		}
+	})
+	t.Run("Retention", func(t *testing.T) {
+		db := open(t, newDSN(t), Options{Retention: 48 * time.Hour, LabeledRetention: 7 * 24 * time.Hour})
+		testRetention(t, db)
+	})
+}
+
+// logBuffer collects log lines from the writer goroutine for a test to read.
+type logBuffer struct {
+	mu sync.Mutex
+	b  bytes.Buffer
+}
+
+func (l *logBuffer) Write(p []byte) (int, error) {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	return l.b.Write(p)
+}
+
+func (l *logBuffer) String() string {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	return l.b.String()
+}
+
+func (l *logBuffer) logger() *slog.Logger { return slog.New(slog.NewTextHandler(l, nil)) }
+
+// lockWrites makes every insert into decisions wait, from another
+// connection, until the returned function is called.
+func lockWrites(t *testing.T, db *DB, dsn string) (release func()) {
+	t.Helper()
+	ctx := context.Background()
+	driver, source, lock := "pgx", dsn, []string{"BEGIN", "LOCK TABLE decisions IN EXCLUSIVE MODE"}
+	if db.Backend() == "sqlite" {
+		driver, source, lock = "sqlite", strings.TrimPrefix(dsn, "sqlite:"), []string{"BEGIN IMMEDIATE"}
+	}
+	other, err := sql.Open(driver, source)
+	if err != nil {
+		t.Fatal(err)
+	}
+	conn, err := other.Conn(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, q := range lock {
+		if _, err := conn.ExecContext(ctx, q); err != nil {
+			t.Fatalf("%s: %v", q, err)
+		}
+	}
+	var once sync.Once
+	release = func() {
+		once.Do(func() {
+			if _, err := conn.ExecContext(ctx, "ROLLBACK"); err != nil {
+				t.Errorf("ROLLBACK: %v", err)
+			}
+			conn.Close()
+			other.Close()
+		})
+	}
+	t.Cleanup(release)
+	return release
+}
+
+// waitWriter waits for the background writer to exit after Close, so the
+// database files are no longer in use when the test ends.
+func waitWriter(t *testing.T, db *DB) {
+	t.Helper()
+	select {
+	case <-db.done:
+	case <-time.After(15 * time.Second):
+		t.Fatal("the writer did not exit")
+	}
 }
 
 func sendEvent(id string) event.Event {
@@ -590,10 +683,10 @@ func testCloseDrainsAndReopen(t *testing.T, dsn string, open func(Options) *DB) 
 		id := fmt.Sprintf("d%d", i)
 		db.Record(ctx, sendEvent(id), newDecision(id, t0, []string{"a"}, nil))
 	}
-	if err := db.Close(); err != nil {
+	if err := db.Close(ctx); err != nil {
 		t.Fatalf("Close: %v", err)
 	}
-	if err := db.Close(); err != nil {
+	if err := db.Close(ctx); err != nil {
 		t.Errorf("second Close: %v", err)
 	}
 	db.Record(ctx, sendEvent("late"), newDecision("late", t0, nil, nil))
@@ -613,8 +706,261 @@ func testCloseDrainsAndReopen(t *testing.T, dsn string, open func(Options) *DB) 
 	if err := db2.SQL().QueryRow("SELECT COUNT(*) FROM schema_migrations").Scan(&versions); err != nil {
 		t.Fatal(err)
 	}
-	if versions != 1 {
-		t.Errorf("schema_migrations has %d rows, want 1", versions)
+	ms, err := loadMigrations(db2.dialect.migrations)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if versions != len(ms) {
+		t.Errorf("schema_migrations has %d rows, want %d", versions, len(ms))
+	}
+}
+
+// testRefusedRow checks that a decision the database cannot store costs
+// only itself: the rest of its batch is written, and it is counted and
+// logged with its id.
+func testRefusedRow(t *testing.T, db *DB, logs *logBuffer) {
+	ctx := context.Background()
+	if db.Backend() == "sqlite" {
+		// SQLite stores a NUL byte, so a trigger refuses the row instead.
+		if _, err := db.SQL().ExecContext(ctx, `CREATE TRIGGER refuse_poison BEFORE INSERT ON decisions
+WHEN NEW.account_id LIKE 'poison%' BEGIN SELECT RAISE(ABORT, 'poison row'); END`); err != nil {
+			t.Fatal(err)
+		}
+	}
+	// Postgres text and jsonb cannot hold a NUL byte, so either poison row
+	// makes the whole multi-row insert fail.
+	poison := func(id string) {
+		ev := sendEvent(id)
+		ev.AccountID = "poison\x00" + id
+		db.Record(ctx, ev, newDecision(id, t0, []string{"a"}, nil))
+	}
+	good := func(id string) {
+		db.Record(ctx, sendEvent(id), newDecision(id, t0, []string{"a"}, nil))
+	}
+	good("first")
+	poison("poison-1")
+	good("middle")
+	poison("poison-2")
+	good("last")
+	if err := db.Flush(ctx); err == nil || !strings.Contains(err.Error(), "refused 2 of 5") {
+		t.Errorf("Flush = %v, want the 2 refused decisions reported", err)
+	}
+
+	for _, id := range []string{"first", "middle", "last"} {
+		if _, err := db.Get(ctx, id); err != nil {
+			t.Errorf("Get(%s) after a refused row in its batch: %v", id, err)
+		}
+	}
+	for _, id := range []string{"poison-1", "poison-2"} {
+		if _, err := db.Get(ctx, id); !errors.Is(err, ErrNotFound) {
+			t.Errorf("Get(%s) = %v, want ErrNotFound", id, err)
+		}
+	}
+	if s := db.RecorderStats(); s.Recorded != 3 || s.Failed != 2 || s.Rejected != 2 || s.Queued != 0 {
+		t.Errorf("RecorderStats = %+v, want 3 recorded, 2 failed and rejected", s)
+	}
+	if got := statsByKey(t, db, time.Time{})["a/enforce"].Matches; got != 3 {
+		t.Errorf("matches = %d, want 3", got)
+	}
+	// One line for the first refused row; the second, in the same second,
+	// is only counted.
+	out := logs.String()
+	if n := strings.Count(out, "the database refused a decision"); n != 1 {
+		t.Errorf("logged %d refused rows, want 1 (rate-limited):\n%s", n, out)
+	}
+	if !strings.Contains(out, "decision_id=poison-1") {
+		t.Errorf("the refused decision's id was not logged:\n%s", out)
+	}
+	if strings.Contains(out, "writing decisions failed") {
+		t.Errorf("a refused row was reported as a write failure:\n%s", out)
+	}
+
+	// The next batch is written as one again.
+	record(t, db, newDecision("after", t0, []string{"a"}, nil))
+	if s := db.RecorderStats(); s.Recorded != 4 || s.Rejected != 2 {
+		t.Errorf("RecorderStats = %+v, want 4 recorded", s)
+	}
+}
+
+func testCloseHonorsContext(t *testing.T, dsn string, open func(Options) *DB) {
+	logs := &logBuffer{}
+	db := open(Options{FlushInterval: time.Hour, Logger: logs.logger()})
+	release := lockWrites(t, db, dsn)
+	ctx := context.Background()
+	for i := range 5 {
+		id := fmt.Sprintf("d%d", i)
+		db.Record(ctx, sendEvent(id), newDecision(id, t0, []string{"a"}, nil))
+	}
+
+	cctx, cancel := context.WithTimeout(ctx, 300*time.Millisecond)
+	defer cancel()
+	start := time.Now()
+	err := db.Close(cctx)
+	if elapsed := time.Since(start); elapsed > 3*time.Second {
+		t.Errorf("Close took %v with a 300ms deadline", elapsed)
+	}
+	if !errors.Is(err, context.DeadlineExceeded) || !strings.Contains(err.Error(), "gave up on 5 queued decisions") {
+		t.Errorf("Close = %v, want the 5 queued decisions given up on a deadline", err)
+	}
+	if again := db.Close(ctx); again == nil || again.Error() != err.Error() {
+		t.Errorf("second Close = %v, want the first one's error", again)
+	}
+	waitWriter(t, db)
+	if s := db.RecorderStats(); s.Recorded != 0 || s.Failed != 5 || s.Queued != 0 {
+		t.Errorf("RecorderStats = %+v, want 5 failed", s)
+	}
+	if out := logs.String(); !strings.Contains(out, "closed before every queued decision was written") ||
+		!strings.Contains(out, "unwritten=5") {
+		t.Errorf("the decisions given up were not logged:\n%s", out)
+	}
+
+	release()
+	db2 := open(Options{})
+	if _, err := db2.Get(ctx, "d0"); !errors.Is(err, ErrNotFound) {
+		t.Errorf("a decision given up on was written: %v", err)
+	}
+}
+
+func testFlushHonorsContext(t *testing.T, dsn string, db *DB) {
+	ctx := context.Background()
+	release := lockWrites(t, db, dsn)
+	for i := range 3 {
+		id := fmt.Sprintf("d%d", i)
+		db.Record(ctx, sendEvent(id), newDecision(id, t0, []string{"a"}, nil))
+	}
+	fctx, cancel := context.WithTimeout(ctx, 200*time.Millisecond)
+	defer cancel()
+	start := time.Now()
+	if err := db.Flush(fctx); !errors.Is(err, context.DeadlineExceeded) {
+		t.Errorf("Flush with writes blocked = %v, want DeadlineExceeded", err)
+	}
+	if elapsed := time.Since(start); elapsed > 2*time.Second {
+		t.Errorf("Flush took %v with a 200ms deadline", elapsed)
+	}
+	// Nothing is lost: once the database is free, the same decisions are
+	// written.
+	release()
+	if err := db.Flush(ctx); err != nil {
+		t.Fatalf("Flush: %v", err)
+	}
+	for i := range 3 {
+		if _, err := db.Get(ctx, fmt.Sprintf("d%d", i)); err != nil {
+			t.Errorf("Get(d%d): %v", i, err)
+		}
+	}
+	if s := db.RecorderStats(); s.Recorded != 3 || s.Failed != 0 {
+		t.Errorf("RecorderStats = %+v, want 3 recorded", s)
+	}
+}
+
+// testRetention runs retention by hand on a DB that keeps unlabeled
+// decisions for 48h and labeled ones for 7 days.
+func testRetention(t *testing.T, db *DB) {
+	ctx := context.Background()
+	// The background loop uses the real clock; this test sets its own.
+	db.stopPruning()
+	<-db.pruned
+
+	// More old decisions than one batch deletes, with labeled ones among
+	// them, which every batch must step over.
+	const old = pruneBatch*2 + 100
+	var ds []decision.Decision
+	for i := range old {
+		ds = append(ds, newDecision(fmt.Sprintf("old%04d", i), t0.Add(time.Duration(i)*time.Second), []string{"a"}, nil))
+	}
+	ds = append(ds, newDecision("recent", t0.Add(4*24*time.Hour), []string{"a"}, nil))
+	record(t, db, ds...)
+	for _, id := range []string{"old0000", fmt.Sprintf("old%04d", pruneBatch+3)} {
+		label(t, db, id, Label{Verdict: TruePositive, By: "ana", Time: t0.Add(time.Hour)})
+	}
+
+	deliver := func(id string, status DeliveryStatus, at time.Time) {
+		t.Helper()
+		if _, err := db.Enqueue(ctx, []Delivery{{DecisionID: id, Effect: "notify", Payload: []byte(`{}`), CreatedAt: t0}}); err != nil {
+			t.Fatal(err)
+		}
+		ds, err := db.Deliveries(ctx, id)
+		if err != nil || len(ds) != 1 {
+			t.Fatalf("Deliveries(%s) = %v, %v", id, ds, err)
+		}
+		var mark error
+		switch status {
+		case DeliveryDelivered:
+			mark = db.MarkDelivered(ctx, ds[0].ID, Attempt{At: at, StatusCode: 200})
+		case DeliveryDead:
+			mark = db.MarkDead(ctx, ds[0].ID, Attempt{At: at, Error: "HTTP 500"})
+		}
+		if mark != nil {
+			t.Fatal(mark)
+		}
+	}
+	deliver("delivered-old", DeliveryDelivered, t0)
+	deliver("dead-old", DeliveryDead, t0)
+	deliver("pending-old", DeliveryPending, t0)
+	deliver("delivered-recent", DeliveryDelivered, t0.Add(4*24*time.Hour))
+
+	count := func(q string) int {
+		t.Helper()
+		var n int
+		if err := db.SQL().QueryRowContext(ctx, q).Scan(&n); err != nil {
+			t.Fatal(err)
+		}
+		return n
+	}
+	deliveries := func() string {
+		t.Helper()
+		var out []string
+		for _, id := range []string{"delivered-old", "dead-old", "pending-old", "delivered-recent"} {
+			ds, err := db.Deliveries(ctx, id)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if len(ds) == 1 {
+				out = append(out, id)
+			}
+		}
+		return strings.Join(out, ",")
+	}
+
+	// Five days in: unlabeled decisions from day 0 are past 48h, labeled
+	// ones are within 7 days.
+	if err := db.prune(ctx, t0.Add(5*24*time.Hour)); err != nil {
+		t.Fatalf("prune: %v", err)
+	}
+	if got := count("SELECT COUNT(*) FROM decisions"); got != 3 {
+		t.Errorf("after the first run: %d decisions, want the 2 labeled and the recent one", got)
+	}
+	for _, id := range []string{"old0000", fmt.Sprintf("old%04d", pruneBatch+3), "recent"} {
+		if _, err := db.Get(ctx, id); err != nil {
+			t.Errorf("Get(%s): %v", id, err)
+		}
+	}
+	if got := statsByKey(t, db, time.Time{})["a/enforce"]; got.Matches != 3 || got.Labeled != 2 || got.TruePositives != 2 {
+		t.Errorf("RuleStats after the first run = %+v, want 3 matches, the 2 labeled ones kept", got)
+	}
+	if got := deliveries(); got != "pending-old,delivered-recent" {
+		t.Errorf("deliveries left = %s, want the pending one and the recent one", got)
+	}
+	if s := db.RetentionStats(); s.Decisions != old-2 || s.Deliveries != 2 || s.Errors != 0 {
+		t.Errorf("RetentionStats = %+v, want %d decisions and 2 deliveries", s, old-2)
+	}
+
+	// Eight days in: the recent decision is past 48h, and the labeled ones
+	// past 7 days go with their labels.
+	if err := db.prune(ctx, t0.Add(8*24*time.Hour)); err != nil {
+		t.Fatalf("prune: %v", err)
+	}
+	if got := count("SELECT COUNT(*) FROM decisions"); got != 0 {
+		t.Errorf("after the second run: %d decisions, want 0", got)
+	}
+	if got := count("SELECT COUNT(*) FROM labels") + count("SELECT COUNT(*) FROM matches"); got != 0 {
+		t.Errorf("after the second run: %d labels and matches left, want 0", got)
+	}
+	if got := deliveries(); got != "pending-old" {
+		t.Errorf("deliveries left = %s, want only the pending one", got)
+	}
+	if s := db.RetentionStats(); s.Decisions != old+1 || s.Deliveries != 3 {
+		t.Errorf("RetentionStats = %+v, want %d decisions and 3 deliveries", s, old+1)
 	}
 }
 

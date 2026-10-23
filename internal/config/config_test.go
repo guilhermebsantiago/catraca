@@ -10,6 +10,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/guilhermebsantiago/catraca/internal/audit"
 )
 
 const (
@@ -116,6 +118,12 @@ func TestDefaults(t *testing.T) {
 		{"store.backend", cfg.Store.Backend, "memory"},
 		{"audit.dsn", cfg.Audit.DSN.Value(), "sqlite:catraca.db"},
 		{"audit.event_detail", cfg.Audit.EventDetail, "minimal"},
+		{"audit.retention", cfg.Audit.Retention, time.Duration(0)},
+		{"audit.labeled_retention", cfg.Audit.LabeledRetention, time.Duration(0)},
+		{"audit.max_open_conns", cfg.Audit.MaxOpenConns, 10},
+		{"audit.max_idle_conns", cfg.Audit.MaxIdleConns, 10},
+		{"audit.conn_max_lifetime", cfg.Audit.ConnMaxLifetime, 30 * time.Minute},
+		{"audit.conn_max_idle_time", cfg.Audit.ConnMaxIdleTime, 5 * time.Minute},
 		{"engine.deadline", cfg.Engine.Deadline, 10 * time.Millisecond},
 		{"gate.min_labeled", cfg.Gate.MinLabeled, 30},
 		{"gate.min_precision", cfg.Gate.MinPrecision, 0.9},
@@ -154,6 +162,11 @@ store:
 audit:
   dsn: postgres://catraca:pw@db:5432/catraca
   event_detail: full
+  retention: 2160h
+  labeled_retention: 17520h
+  max_open_conns: 20
+  conn_max_lifetime: 1h
+  conn_max_idle_time: 1m
 engine:
   deadline: 25ms
 gate:
@@ -209,6 +222,12 @@ logging:
 	}
 	if cfg.Audit.IsSQLite() || cfg.Audit.EventDetail != "full" {
 		t.Errorf("audit = %#v", cfg.Audit)
+	}
+	opts := cfg.Audit.Options()
+	wantPool := audit.Pool{MaxOpen: 20, MaxIdle: 20, MaxLifetime: time.Hour, MaxIdleTime: time.Minute}
+	if opts.EventMode != audit.EventFull || opts.Retention != 90*24*time.Hour || opts.LabeledRetention != 2*365*24*time.Hour ||
+		opts.Pool != wantPool {
+		t.Errorf("audit options = %+v", opts)
 	}
 	if cfg.Engine.Deadline != 25*time.Millisecond || cfg.Gate.MinLabeled != 50 || cfg.Gate.MinPrecision != 0.95 {
 		t.Errorf("engine/gate = %#v %#v", cfg.Engine, cfg.Gate)
@@ -449,6 +468,15 @@ func TestValidation(t *testing.T) {
 		{"redis without backend", "store: {redis: {url: 'redis://x'}}", "store.redis.url: is set but store.backend is memory"},
 		{"event detail", "audit: {event_detail: some}", `audit.event_detail: want minimal or full, got "some"`},
 		{"sqlite path", "audit: {dsn: 'sqlite:'}", "audit.dsn: the SQLite path is empty"},
+		{"retention", "audit: {retention: 0s}", "audit.retention: must be a positive duration"},
+		{"short retention", "audit: {retention: 12h}", "audit.retention: must be at least 24h, so decisions stay long enough to be reviewed and labeled; got 12h"},
+		{"labeled without retention", "audit: {labeled_retention: 720h}", "audit.labeled_retention: needs audit.retention"},
+		{"labeled shorter", "audit: {retention: 720h, labeled_retention: 168h}", "audit.labeled_retention: must be at least audit.retention (720h), got 168h"},
+		{"max open conns", "audit: {max_open_conns: 0}", "audit.max_open_conns: must be at least 1, got 0"},
+		{"max idle conns", "audit: {max_idle_conns: -1}", "audit.max_idle_conns: must be at least 1, got -1"},
+		{"idle above open", "audit: {max_open_conns: 4, max_idle_conns: 8}", "audit.max_idle_conns: must be at most max_open_conns (4), got 8"},
+		{"conn lifetime", "audit: {conn_max_lifetime: 0s}", "audit.conn_max_lifetime: must be a positive duration"},
+		{"conn idle time", "audit: {conn_max_idle_time: -1s}", "audit.conn_max_idle_time: must be a positive duration"},
 		{"hook name", "hooks: [{name: Revoke-Key, url: 'https://x', secret: " + testSecret + "}]", "hooks[0].name: must be lowercase letters"},
 		{"hook name required", "hooks: [{url: 'https://x', secret: " + testSecret + "}]", "hooks[0].name: is required"},
 		{"hook duplicate", "hooks: [{name: a, url: 'https://x', secret: " + testSecret + "}, {name: a, url: 'https://y', secret: " + testSecret + "}]", "hooks[1].name: another hook already carries out a"},

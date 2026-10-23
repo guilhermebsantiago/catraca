@@ -39,8 +39,8 @@ type Store interface {
 	// ReviewQueue returns the most recent unlabeled matches of a rule in a
 	// mode, newest first. An empty ruleID or mode matches any.
 	ReviewQueue(ctx context.Context, ruleID string, mode decision.Mode, limit int) ([]ReviewItem, error)
-	// Close flushes queued decisions and closes the database.
-	Close() error
+	// Close writes queued decisions, until ctx ends, and closes the database.
+	Close(ctx context.Context) error
 }
 
 var (
@@ -157,8 +157,65 @@ type Options struct {
 	// FlushInterval is the longest a decision waits in the buffer.
 	// Default 200ms.
 	FlushInterval time.Duration
+	// Pool bounds the connections to the database.
+	Pool Pool
+	// Retention is how long decisions without a label and finished webhook
+	// deliveries are kept; older ones are deleted in the background. Zero
+	// keeps everything.
+	Retention time.Duration
+	// LabeledRetention is how long labeled decisions are kept, with their
+	// labels. Zero keeps them forever: the precision gate and backtests
+	// need them. When set, it must be at least Retention.
+	LabeledRetention time.Duration
 	// Logger receives drop and write-failure reports. Default slog.Default().
 	Logger *slog.Logger
+}
+
+// Pool bounds the connections to the audit database, so a slow database
+// makes callers wait for a connection instead of opening more until the
+// server refuses them. Zero values take the defaults. An in-memory SQLite
+// database ignores it and keeps its one connection forever, since that
+// connection is the database.
+type Pool struct {
+	// MaxOpen is the most connections open at once. Default 10.
+	MaxOpen int
+	// MaxIdle is the most idle connections kept for reuse. Default MaxOpen,
+	// so a burst does not close and reopen connections; values above
+	// MaxOpen are lowered to it.
+	MaxIdle int
+	// MaxLifetime closes connections this long after they opened, so they
+	// follow a failover or a DNS change. Default 30m.
+	MaxLifetime time.Duration
+	// MaxIdleTime closes connections idle this long. Default 5m.
+	MaxIdleTime time.Duration
+}
+
+// Defaults for Pool.
+const (
+	DefaultPoolMaxOpen     = 10
+	DefaultPoolMaxLifetime = 30 * time.Minute
+	DefaultPoolMaxIdleTime = 5 * time.Minute
+)
+
+// MinRetention is the shortest Retention accepted: decisions have to stay
+// long enough to be reviewed and labeled.
+const MinRetention = 24 * time.Hour
+
+func (p Pool) withDefaults() Pool {
+	if p.MaxOpen <= 0 {
+		p.MaxOpen = DefaultPoolMaxOpen
+	}
+	if p.MaxIdle <= 0 {
+		p.MaxIdle = p.MaxOpen
+	}
+	p.MaxIdle = min(p.MaxIdle, p.MaxOpen)
+	if p.MaxLifetime <= 0 {
+		p.MaxLifetime = DefaultPoolMaxLifetime
+	}
+	if p.MaxIdleTime <= 0 {
+		p.MaxIdleTime = DefaultPoolMaxIdleTime
+	}
+	return p
 }
 
 func (o Options) withDefaults() Options {
@@ -174,6 +231,7 @@ func (o Options) withDefaults() Options {
 	if o.FlushInterval <= 0 {
 		o.FlushInterval = 200 * time.Millisecond
 	}
+	o.Pool = o.Pool.withDefaults()
 	if o.Logger == nil {
 		o.Logger = slog.Default()
 	}
@@ -183,6 +241,22 @@ func (o Options) withDefaults() Options {
 func (o Options) validate() error {
 	if _, err := ParseEventMode(string(o.EventMode)); err != nil {
 		return err
+	}
+	return validateRetention(o.Retention, o.LabeledRetention)
+}
+
+// validateRetention checks a pair of retention settings: zero or at least
+// MinRetention, and labeled decisions kept at least as long as the others.
+func validateRetention(retention, labeled time.Duration) error {
+	switch {
+	case retention < 0 || labeled < 0:
+		return errors.New("audit: retention cannot be negative")
+	case retention > 0 && retention < MinRetention:
+		return fmt.Errorf("audit: retention must be at least %s, got %s", MinRetention, retention)
+	case labeled > 0 && retention == 0:
+		return errors.New("audit: labeled retention needs a retention for unlabeled decisions too")
+	case labeled > 0 && labeled < retention:
+		return fmt.Errorf("audit: labeled retention (%s) must be at least the retention (%s)", labeled, retention)
 	}
 	return nil
 }
