@@ -75,9 +75,10 @@ type Options struct {
 	Recorder Recorder
 	// Dispatcher, when set, receives decisions with enforced effects.
 	Dispatcher Dispatcher
-	// Deadline bounds Catalog.Observe; zero means DefaultDeadline. When it
-	// expires the decision is degraded and rules run on the signals Observe
-	// returned.
+	// Deadline bounds Catalog.Observe and, for key_leak events,
+	// Catalog.MarkLeaked, each; zero means DefaultDeadline. When it expires
+	// during Observe the decision is degraded and rules run on the signals
+	// Observe returned; during MarkLeaked, Decide returns an error.
 	Deadline time.Duration
 	// RecordQueue is how many decisions may wait for the Recorder; zero
 	// means DefaultRecordQueue.
@@ -152,7 +153,7 @@ func New(opts Options) (*Engine, error) {
 //
 //  1. validate and normalize it and assign its id (an id the platform sent
 //     is kept);
-//  2. for key_leak events, mark the key leaked;
+//  2. for key_leak events, mark the key leaked, under the deadline;
 //  3. observe the signals under the deadline, marking the decision degraded
 //     when the catalog fails;
 //  4. evaluate every rule: the most severe enforced match is the action,
@@ -181,9 +182,16 @@ func (e *Engine) Decide(ctx context.Context, ev event.Event) (decision.Decision,
 	}
 
 	// The key is marked before Observe so that this event's own signals,
-	// and every later one, see key.leaked.
+	// and every later one, see key.leaked. The write has the deadline
+	// Observe has: with the store unreachable, the client's own dial and
+	// read timeouts would hold the request for seconds. The catalog
+	// remembers the key either way, and the error tells the caller to send
+	// the event again.
 	if ev.Type == event.KeyLeak {
-		if err := e.catalog.MarkLeaked(ctx, ev.APIKeyID); err != nil {
+		mctx, cancel := context.WithTimeout(ctx, e.deadline)
+		err := e.catalog.MarkLeaked(mctx, ev.APIKeyID)
+		cancel()
+		if err != nil {
 			return decision.Decision{}, fmt.Errorf("engine: mark key %s leaked: %w", ev.APIKeyID, err)
 		}
 	}

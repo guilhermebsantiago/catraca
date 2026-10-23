@@ -182,7 +182,7 @@ starting.
 
 | field | default | |
 |---|---|---|
-| `deadline` | `10ms` | time budget for the signal lookup of one decision. When it runs out, the decision is made without the missing signals and marked `degraded`; each rule's `on_error` decides what that means |
+| `deadline` | `10ms` | time budget for the signal lookup of one decision. When it runs out, the decision is made without the missing signals and marked `degraded`; each rule's `on_error` decides what that means. A `key_leak` event's write of the leak gets the same budget first, and the event answers `503` when it runs out, so the platform sends it again |
 
 ### gate
 

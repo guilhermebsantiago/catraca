@@ -239,6 +239,10 @@ curl -s -X POST "$CATRACA/v1/events" -H "Authorization: Bearer $TOKEN" \
   -d '{"type": "key_leak", "account_id": "acct_42", "api_key_id": "key_7d3e", "leak": {"source": "support-ticket"}}'
 ```
 
+The leak is written to the store before the event is decided, within
+`engine.deadline`. If the store does not take it in time, the answer is
+`503 unavailable`: send the event again until it is accepted.
+
 ## Decisions and labels
 
 ### GET /v1/decisions/{id}

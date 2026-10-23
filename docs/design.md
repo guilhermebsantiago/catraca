@@ -190,7 +190,10 @@ and the expected matches, so a rule change comes with a test like code does.
    for every event.
 4. The action is the most severe enforced match; Throttle carries the largest
    retry_after among enforced throttles.
-5. For key_leak events, call `Catalog.MarkLeaked` before evaluating.
+5. For key_leak events, call `Catalog.MarkLeaked` before evaluating, under
+   the same deadline as `Observe`. When it fails, the catalog still holds
+   the key in memory, and `Decide` returns an error so the caller sends the
+   event again.
 6. Hand the decision to the Recorder (non-blocking) and, when enforced
    matches that are not `Errored` have effects, to the Dispatcher.
 7. Metrics: decisions by action, matches by rule and mode, errors by rule,
