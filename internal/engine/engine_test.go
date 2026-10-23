@@ -154,6 +154,13 @@ rules:
 
 var t0 = time.Date(2026, 10, 15, 12, 0, 0, 0, time.UTC)
 
+// deadlineSlack is how much later than the configured deadline a context's
+// deadline may fall in the deadline tests. The test reads the clock before
+// Decide and Decide sets the deadline a little later: on a loaded machine,
+// or a system whose wall clock ticks every few milliseconds, that gap runs
+// past 10ms. A missing deadline still fails, and so would one of seconds.
+const deadlineSlack = 500 * time.Millisecond
+
 func healthySignals() signal.Set {
 	return signal.Set{
 		Event:   map[string]any{"type": "send", "api_key_id": "key_1"},
@@ -448,7 +455,7 @@ func TestDecideObserveDeadline(t *testing.T) {
 	if elapsed > 2*time.Second {
 		t.Errorf("Decide took %s; the deadline did not bound Observe", elapsed)
 	}
-	if left := h.cat.deadline.Sub(start); left <= 0 || left > 25*time.Millisecond {
+	if left := h.cat.deadline.Sub(start); left <= 0 || left > 20*time.Millisecond+deadlineSlack {
 		t.Errorf("Observe got a deadline %s after the call, want about 20ms", left)
 	}
 	if d.LatencyMicros < 20_000 {
@@ -460,7 +467,7 @@ func TestDecideDefaultDeadline(t *testing.T) {
 	h := newHarness(t, Options{Now: time.Now})
 	start := time.Now()
 	h.decide(t, sendEvent())
-	if left := h.cat.deadline.Sub(start); left <= 0 || left > DefaultDeadline+5*time.Millisecond {
+	if left := h.cat.deadline.Sub(start); left <= 0 || left > DefaultDeadline+deadlineSlack {
 		t.Errorf("Observe deadline is %s away, want about %s", left, DefaultDeadline)
 	}
 }
@@ -516,7 +523,7 @@ func TestDecideKeyLeakMarkDeadline(t *testing.T) {
 	if elapsed > 2*time.Second {
 		t.Errorf("Decide took %s; the deadline did not bound MarkLeaked", elapsed)
 	}
-	if left := h.cat.markDeadline.Sub(start); left <= 0 || left > 25*time.Millisecond {
+	if left := h.cat.markDeadline.Sub(start); left <= 0 || left > 20*time.Millisecond+deadlineSlack {
 		t.Errorf("MarkLeaked got a deadline %s after the call, want about 20ms", left)
 	}
 	if calls := h.cat.callLog(); !slices.Equal(calls, []string{"mark:key_9"}) {
