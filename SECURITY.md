@@ -22,4 +22,28 @@ token and belong on an internal network.
 
 ## Supported versions
 
-Catraca has no tagged release yet; fixes land on `main`.
+Catraca has no tagged release yet; fixes land on `main`. Once releases
+start, fixes go to `main` and ship in a new release of the latest minor
+version; before 1.0 older versions get no backports.
+
+Releases build with the newest Go patch release (the `toolchain` line in
+`go.mod`). CI runs govulncheck on every change and weekly, so a known
+vulnerability in the toolchain or a dependency that the code can reach
+fails the build.
+
+## Verifying a release
+
+Each release has `checksums.txt`, an SPDX SBOM per archive and GitHub
+build provenance for every file in `checksums.txt`; the image on
+`ghcr.io/guilhermebsantiago/catraca` carries an SBOM attestation, build
+provenance and a keyless cosign signature, all tied to the release
+workflow of this repository. For `v0.1.0`:
+
+```sh
+sha256sum --ignore-missing -c checksums.txt
+gh attestation verify catraca_0.1.0_linux_amd64.tar.gz --repo guilhermebsantiago/catraca
+gh attestation verify oci://ghcr.io/guilhermebsantiago/catraca:v0.1.0 --repo guilhermebsantiago/catraca
+cosign verify ghcr.io/guilhermebsantiago/catraca:v0.1.0 \
+  --certificate-identity https://github.com/guilhermebsantiago/catraca/.github/workflows/release.yml@refs/tags/v0.1.0 \
+  --certificate-oidc-issuer https://token.actions.githubusercontent.com
+```

@@ -7,6 +7,7 @@
 
 <p align="center">
   <a href="https://github.com/guilhermebsantiago/catraca/actions/workflows/ci.yml"><img alt="CI" src="https://github.com/guilhermebsantiago/catraca/actions/workflows/ci.yml/badge.svg"></a>
+  <a href="https://scorecard.dev/viewer/?uri=github.com/guilhermebsantiago/catraca"><img alt="OpenSSF Scorecard" src="https://api.scorecard.dev/projects/github.com/guilhermebsantiago/catraca/badge"></a>
   <a href="LICENSE"><img alt="License: Apache-2.0" src="https://img.shields.io/badge/license-Apache--2.0-12181D"></a>
   <a href="go.mod"><img alt="Go 1.26+" src="https://img.shields.io/badge/go-1.26%2B-12181D"></a>
   <a href="https://catraca.guilhermebs.com.br"><img alt="Website" src="https://img.shields.io/badge/site-catraca.guilhermebs.com.br-04A177"></a>
@@ -160,6 +161,11 @@ Early: everything above works and is tested (unit, contract, end-to-end, and
 CI against real Redis, Postgres and Docker), but the API and configuration
 may still change before a first tagged release.
 
+Releases will be cut from `v*` tags: binaries for Linux, macOS and Windows
+(amd64 and arm64) with checksums, SBOMs and build provenance, and a signed
+multi-arch image at `ghcr.io/guilhermebsantiago/catraca`.
+[SECURITY.md](SECURITY.md#verifying-a-release) shows how to verify them.
+
 ## Development
 
 ```sh
@@ -171,7 +177,8 @@ contract suite, the signal tests and their benchmarks also run against a
 real Redis when `CATRACA_TEST_REDIS_URL` is set (for example
 `redis://localhost:6379/0`) and against a Redis Cluster when
 `CATRACA_TEST_REDIS_CLUSTER` lists some of its nodes
-(`localhost:7001,localhost:7002`). CI runs Postgres and Redis. See
+(`localhost:7001,localhost:7002`). CI runs Postgres and Redis, and also
+govulncheck, CodeQL, the OpenSSF Scorecard and a dry run of the release. See
 [CONTRIBUTING.md](CONTRIBUTING.md), and report vulnerabilities as described
 in [SECURITY.md](SECURITY.md).
 
