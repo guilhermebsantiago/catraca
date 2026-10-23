@@ -120,6 +120,9 @@ func (c *cli) summary(cfg *config.Config, rs *rules.Ruleset) {
 	}
 
 	row("listen", "%s", cfg.Server.Listen)
+	if cfg.Server.AdminAddr != "" {
+		row("admin", "%s (health and metrics)", cfg.Server.AdminAddr)
+	}
 	row("shutdown", "drain %s, then up to %s", cfg.Server.DrainDelay, cfg.Server.ShutdownTimeout)
 	var names []string
 	for _, t := range cfg.Auth.Tokens {

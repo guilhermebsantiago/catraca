@@ -105,6 +105,9 @@ type options struct {
 	drainDelay string
 	// auditDSN replaces the SQLite audit database in the test's directory.
 	auditDSN string
+	// admin sets server.admin_addr, so health and metrics leave the API's
+	// handler.
+	admin bool
 }
 
 func newHarness(t *testing.T, opts options) *harness {
@@ -168,6 +171,10 @@ logging:
 `, opts.drainDelay, token, filepath.ToSlash(h.rulesPath), opts.auditDSN, h.hook.URL, secret, secret, keys.URL, resolver.URL, secret)
 	if opts.redisURL != "" {
 		yaml += fmt.Sprintf("store:\n  backend: redis\n  redis:\n    url: '%s'\n", opts.redisURL)
+	}
+	if opts.admin {
+		// Tests pass their own listener; the address only turns it on.
+		yaml = strings.Replace(yaml, "server:\n", "server:\n  admin_addr: 127.0.0.1:0\n", 1)
 	}
 	cfg, err := config.Parse([]byte(yaml), "", func(string) (string, bool) { return "", false })
 	if err != nil {
@@ -983,7 +990,7 @@ func TestServeShutsDownInOrder(t *testing.T) {
 	}
 	ctx, cancel := context.WithCancel(context.Background())
 	done := make(chan error, 1)
-	go func() { done <- h.app.Serve(ctx, ln) }()
+	go func() { done <- h.app.Serve(ctx, ln, nil) }()
 
 	h.srv.URL = "http://" + ln.Addr().String()
 	var ids []string
@@ -1028,7 +1035,7 @@ func (h *harness) serveOn() (stop context.CancelFunc, done <-chan error) {
 	}
 	ctx, cancel := context.WithCancel(context.Background())
 	errc := make(chan error, 1)
-	go func() { errc <- h.app.Serve(ctx, ln) }()
+	go func() { errc <- h.app.Serve(ctx, ln, nil) }()
 	h.srv.URL = "http://" + ln.Addr().String()
 	h.t.Cleanup(cancel)
 	return cancel, errc
@@ -1087,6 +1094,61 @@ func TestServeDrains(t *testing.T) {
 	waitServe(t, done)
 	if !strings.Contains(h.logs.String(), `"msg":"stopped"`) {
 		t.Error("no stopped log line")
+	}
+}
+
+// TestAdminListener checks server.admin_addr: health and metrics move to the
+// admin listener, take no token there, and leave the API listener, which
+// keeps every other route.
+func TestAdminListener(t *testing.T) {
+	t.Parallel()
+	h := newHarness(t, options{admin: true})
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	admin, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan error, 1)
+	go func() { done <- h.app.Serve(ctx, ln, admin) }()
+
+	apiURL, adminURL := "http://"+ln.Addr().String(), "http://"+admin.Addr().String()
+	for _, path := range []string{"/healthz", "/readyz", "/metrics"} {
+		h.srv.URL = adminURL
+		if r := h.do("GET", path, "", nil); r.status != http.StatusOK {
+			t.Errorf("admin GET %s: %d %s", path, r.status, r.body)
+		}
+		h.srv.URL = apiURL
+		if r := h.do("GET", path, "", nil); r.status != http.StatusNotFound {
+			t.Errorf("API GET %s: %d, want 404", path, r.status)
+		}
+	}
+	h.srv.URL = adminURL
+	if r := h.do("POST", "/v1/decide", token, send("acct", "a@shop.example")); r.status != http.StatusNotFound {
+		t.Errorf("admin POST /v1/decide: %d, want 404", r.status)
+	}
+	h.srv.URL = apiURL
+	h.decide(send("acct", "a@shop.example"))
+	if !strings.Contains(h.logs.String(), `"admin_addr":"`+admin.Addr().String()+`"`) {
+		t.Error("the listening log line lacks the admin address")
+	}
+
+	cancel()
+	waitServe(t, done)
+	if _, err := net.Dial("tcp", admin.Addr().String()); err == nil {
+		t.Error("the admin listener is still open after Serve returned")
+	}
+
+	// Serve refuses a listener the configuration does not expect, and the
+	// lack of one it does.
+	other := newHarness(t, options{})
+	ln2, _ := net.Listen("tcp", "127.0.0.1:0")
+	admin2, _ := net.Listen("tcp", "127.0.0.1:0")
+	if err := other.app.Serve(context.Background(), ln2, admin2); err == nil {
+		t.Error("Serve accepted an admin listener without server.admin_addr")
 	}
 }
 

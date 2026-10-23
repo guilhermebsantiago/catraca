@@ -129,6 +129,7 @@ func TestDefaults(t *testing.T) {
 		{"server.max_body_bytes", cfg.Server.MaxBodyBytes, int64(1 << 20)},
 		{"server.shutdown_timeout", cfg.Server.ShutdownTimeout, 30 * time.Second},
 		{"server.drain_delay", cfg.Server.DrainDelay, 5 * time.Second},
+		{"server.admin_addr", cfg.Server.AdminAddr, ""},
 		{"rules.path", cfg.Rules.Path, "rules/default.yaml"},
 		{"store.backend", cfg.Store.Backend, "memory"},
 		{"audit.dsn", cfg.Audit.DSN.Value(), "sqlite:catraca.db"},
@@ -154,6 +155,8 @@ func TestFullConfig(t *testing.T) {
 	cfg := mustParse(t, `
 server:
   listen: 127.0.0.1:9090
+  admin_addr: 127.0.0.1:9091
+  drain_delay: 10s
   max_body_bytes: 2_097_152
   shutdown_timeout: 1m
 auth:
@@ -215,7 +218,7 @@ logging:
 		"HOOK_SECRET": testSecret,
 		"HOOK_AUTH":   "abc",
 	})
-	if cfg.Server.Listen != "127.0.0.1:9090" || cfg.Server.MaxBodyBytes != 2<<20 || cfg.Server.ShutdownTimeout != time.Minute {
+	if cfg.Server.Listen != "127.0.0.1:9090" || cfg.Server.AdminAddr != "127.0.0.1:9091" || cfg.Server.DrainDelay != 10*time.Second || cfg.Server.MaxBodyBytes != 2<<20 || cfg.Server.ShutdownTimeout != time.Minute {
 		t.Errorf("server = %#v", cfg.Server)
 	}
 	if len(cfg.Auth.Tokens) != 2 || cfg.Auth.Tokens[1].Name != "ops.cli" {
@@ -458,6 +461,9 @@ func TestValidation(t *testing.T) {
 		{"body size", "server: {max_body_bytes: 0}", "server.max_body_bytes: must be at least 1024 bytes, got 0"},
 		{"shutdown", "server: {shutdown_timeout: 0s}", "server.shutdown_timeout: must be a positive duration"},
 		{"drain", "server: {drain_delay: -1s}", "server.drain_delay: must not be negative, got -1s"},
+		{"admin addr", "server: {admin_addr: '9090'}", `server.admin_addr: want host:port, such as :9090 or 127.0.0.1:9090, got "9090"`},
+		{"admin addr port", "server: {admin_addr: 'localhost:'}", "server.admin_addr: the port is missing"},
+		{"admin addr same", "server: {listen: ':8080', admin_addr: ':8080'}", "server.admin_addr: is the same address as server.listen"},
 		{"deadline", "engine: {deadline: -1ms}", "engine.deadline: must be a positive duration, got -1ms"},
 		{"min labeled", "gate: {min_labeled: 0}", "gate.min_labeled: must be at least 1, got 0"},
 		{"min precision", "gate: {min_precision: 1.5}", "gate.min_precision: must be greater than 0 and at most 1, got 1.5"},

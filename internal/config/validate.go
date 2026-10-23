@@ -117,15 +117,29 @@ func (v *validator) config(c *Config) {
 }
 
 func (v *validator) server(s Server) {
-	host, port, err := net.SplitHostPort(s.Listen)
+	v.address("server.listen", s.Listen, ":8080 or 127.0.0.1:8080")
+	if s.AdminAddr == "" {
+		return
+	}
+	if v.address("server.admin_addr", s.AdminAddr, ":9090 or 127.0.0.1:9090") && s.AdminAddr == s.Listen {
+		v.add("server.admin_addr", "is the same address as server.listen; use another port, or leave admin_addr out to serve health and metrics on listen")
+	}
+}
+
+// address checks a host:port to listen on and reports whether it is valid.
+func (v *validator) address(path, addr, example string) bool {
+	host, port, err := net.SplitHostPort(addr)
 	switch {
 	case err != nil:
-		v.add("server.listen", "want host:port, such as :8080 or 127.0.0.1:8080, got %q", s.Listen)
+		v.add(path, "want host:port, such as %s, got %q", example, addr)
 	case port == "":
-		v.add("server.listen", "the port is missing in %q", s.Listen)
+		v.add(path, "the port is missing in %q", addr)
 	case strings.ContainsAny(host, "/ "):
-		v.add("server.listen", "invalid host %q", host)
+		v.add(path, "invalid host %q", host)
+	default:
+		return true
 	}
+	return false
 }
 
 func (v *validator) auth(a Auth) {

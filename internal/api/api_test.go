@@ -205,6 +205,30 @@ func TestReadyzVerbose(t *testing.T) {
 	}
 }
 
+func TestSeparateAdmin(t *testing.T) {
+	for _, separate := range []bool{false, true} {
+		s := newTestServer(t, deciderFunc(nil), nil, func(o *Options) { o.SeparateAdmin = separate })
+		for _, path := range []string{"/healthz", "/readyz"} {
+			if rec := serve(s.Admin(), "GET", path, ""); rec.Code != 200 || rec.Header().Get(RequestIDHeader) == "" {
+				t.Errorf("separate %t: admin GET %s: %d %v", separate, path, rec.Code, rec.Header())
+			}
+			want := 200
+			if separate {
+				want = 404
+			}
+			if rec := serve(s, "GET", path, ""); rec.Code != want {
+				t.Errorf("separate %t: API GET %s: %d, want %d", separate, path, rec.Code, want)
+			}
+		}
+		if rec := serve(s.Admin(), "POST", "/v1/decide", "{}"); rec.Code != 404 {
+			t.Errorf("separate %t: the admin handler serves /v1: %d", separate, rec.Code)
+		}
+		if rec := serve(s.Admin(), "POST", "/readyz", ""); rec.Code != 405 || rec.Header().Get("Allow") != "GET" {
+			t.Errorf("separate %t: admin POST /readyz: %d %v", separate, rec.Code, rec.Header())
+		}
+	}
+}
+
 func TestRetryAfterSeconds(t *testing.T) {
 	for d, want := range map[time.Duration]string{
 		0:                       "1",

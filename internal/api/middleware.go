@@ -48,6 +48,11 @@ func annotate(r *http.Request, attrs ...slog.Attr) {
 // ServeHTTP assigns the request id, recovers panics, routes the request, and
 // logs and measures it.
 func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
+	s.serve(w, r, s.mux)
+}
+
+// serve is ServeHTTP for the routes of mux.
+func (s *Server) serve(w http.ResponseWriter, r *http.Request, mux *http.ServeMux) {
 	start := s.now()
 	ri := &reqInfo{id: requestID(r.Header.Get(RequestIDHeader)), route: "unmatched"}
 	rw := &responseWriter{ResponseWriter: w}
@@ -68,7 +73,7 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			panic(v)
 		}
 	}()
-	s.mux.ServeHTTP(rw, r)
+	mux.ServeHTTP(rw, r)
 }
 
 // quietRoutes are polled by probes and scrapers; their access logs are

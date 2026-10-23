@@ -40,8 +40,9 @@ configured in `auth.tokens`; the token's name appears in access logs as
 `WWW-Authenticate: Bearer realm="catraca"`.
 
 `/healthz`, `/readyz` and `/metrics` take no token. Keep them off the
-public internet, for example by exposing only `/v1` through the load
-balancer.
+public internet: serve them on a port of their own with
+[`server.admin_addr`](config.md#server), or expose only `/v1` through the
+load balancer.
 
 **Request ids.** Every response carries `X-Request-Id`. Send your own (up
 to 128 letters, digits, `-`, `_`, `.` or `:`) to follow a request across
@@ -631,6 +632,32 @@ when it took that value. Only Redis is listed as `store`; the memory store is no
 dependency. The reason for a failure is in the log, once when a dependency
 goes down and once when it is back. The same checks feed
 `catraca_dependency_up` and the other metrics below.
+
+**In Kubernetes**, with the image's configuration (`deploy/catraca.yaml`),
+which reads `CATRACA_ADMIN_ADDR` and `CATRACA_DRAIN_DELAY`, the probes go to
+the admin port, and the Service exposes only the API's:
+
+```yaml
+spec:
+  # At least server.drain_delay + server.shutdown_timeout (5s + 30s).
+  terminationGracePeriodSeconds: 40
+  containers:
+    - name: catraca
+      env:
+        - {name: CATRACA_ADMIN_ADDR, value: ":9090"}
+      ports:
+        - {name: http, containerPort: 8080}
+        - {name: admin, containerPort: 9090}
+      livenessProbe:
+        httpGet: {path: /healthz, port: admin}
+      readinessProbe:
+        httpGet: {path: /readyz, port: admin}
+```
+
+No `preStop` hook is needed: on SIGTERM the server drains for
+`server.drain_delay` by itself, still serving while the endpoint is
+removed. Health checks of a load balancer outside the cluster should use
+`/readyz` too, so they see the drain.
 
 ### GET /metrics
 

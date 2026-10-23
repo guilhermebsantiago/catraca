@@ -68,6 +68,10 @@ type Config struct {
 type Server struct {
 	// Listen is the address to listen on, host:port. Default ":8080".
 	Listen string `yaml:"listen"`
+	// AdminAddr, when set, is a second address, host:port, that serves
+	// /healthz, /readyz and /metrics in place of Listen, so they can stay off
+	// the network the API is reachable from. Unset, Listen serves them.
+	AdminAddr string `yaml:"admin_addr"`
 	// MaxBodyBytes limits request bodies on the /v1 JSON routes. Default
 	// 1 MiB. Feedback and secret scanning routes have their own limits.
 	MaxBodyBytes int64 `yaml:"max_body_bytes"`

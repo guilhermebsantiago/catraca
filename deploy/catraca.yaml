@@ -4,6 +4,9 @@
 # Postgres. Secrets come from the environment; see docs/config.md.
 server:
   listen: ${CATRACA_LISTEN:-:8080}
+  # Set to :9090, say, to serve /healthz, /readyz and /metrics there instead
+  # of on the API's port (docs/config.md).
+  admin_addr: ${CATRACA_ADMIN_ADDR:-}
   # After SIGTERM, keep serving this long while reporting not ready, so load
   # balancers move traffic away first (docs/config.md). 0s when nothing
   # balances in front.

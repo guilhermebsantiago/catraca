@@ -122,6 +122,10 @@ type Options struct {
 	Dependencies func() map[string]DependencyStatus
 	// Gatherer is served on GET /metrics. Nil answers 404.
 	Gatherer prometheus.Gatherer
+	// SeparateAdmin serves GET /healthz, /readyz and /metrics from Admin
+	// only, for a listener of their own; the Server's own handler then
+	// answers 404 for them.
+	SeparateAdmin bool
 	// Registerer receives the HTTP request duration histogram. Nil keeps
 	// it unregistered.
 	Registerer prometheus.Registerer
@@ -136,7 +140,10 @@ type Options struct {
 // Server is the HTTP handler for every route. It is safe for concurrent
 // use.
 type Server struct {
-	mux          *http.ServeMux
+	mux *http.ServeMux
+	// admin serves health and metrics, which mux serves too unless
+	// Options.SeparateAdmin is set.
+	admin        *http.ServeMux
 	decider      Decider
 	rules        RuleSource
 	reloadFn     func() (*rules.Ruleset, error)
@@ -170,6 +177,7 @@ func New(opts Options) (*Server, error) {
 	}
 	s := &Server{
 		mux:          http.NewServeMux(),
+		admin:        http.NewServeMux(),
 		decider:      opts.Decider,
 		rules:        opts.Rules,
 		reloadFn:     opts.Reload,
@@ -207,35 +215,57 @@ func New(opts Options) (*Server, error) {
 		}
 	}
 
-	s.handle("POST /v1/decide", s.authed(s.decide(http.StatusOK)))
-	s.handle("POST /v1/events", s.authed(s.decide(http.StatusAccepted)))
-	s.handle("GET /v1/decisions/{id}", s.authed(s.getDecision))
-	s.handle("POST /v1/decisions/{id}/labels", s.authed(s.label))
-	s.handle("GET /v1/rules", s.authed(s.getRules))
-	s.handle("POST /v1/rules/reload", s.authed(s.reload))
-	s.handle("GET /v1/rules/{id}/review", s.authed(s.review))
-	s.handle("GET /v1/stats/rules", s.authed(s.ruleStats))
+	s.handle(s.mux, "POST /v1/decide", s.authed(s.decide(http.StatusOK)))
+	s.handle(s.mux, "POST /v1/events", s.authed(s.decide(http.StatusAccepted)))
+	s.handle(s.mux, "GET /v1/decisions/{id}", s.authed(s.getDecision))
+	s.handle(s.mux, "POST /v1/decisions/{id}/labels", s.authed(s.label))
+	s.handle(s.mux, "GET /v1/rules", s.authed(s.getRules))
+	s.handle(s.mux, "POST /v1/rules/reload", s.authed(s.reload))
+	s.handle(s.mux, "GET /v1/rules/{id}/review", s.authed(s.review))
+	s.handle(s.mux, "GET /v1/stats/rules", s.authed(s.ruleStats))
 
-	s.handle("POST /v1/feedback", provider("generic feedback", "feedback.generic", opts.GenericFeedback))
-	s.handle("POST /v1/feedback/ses", provider("SES feedback", "feedback.ses", opts.SESFeedback))
-	s.handle("POST /v1/feedback/usesend", provider("useSend feedback", "feedback.usesend", opts.UseSendFeedback))
-	s.handle("POST /v1/secret-scanning/github", provider("GitHub secret scanning", "secret_scanning.github", opts.GitHubSecretScanning))
+	s.handle(s.mux, "POST /v1/feedback", provider("generic feedback", "feedback.generic", opts.GenericFeedback))
+	s.handle(s.mux, "POST /v1/feedback/ses", provider("SES feedback", "feedback.ses", opts.SESFeedback))
+	s.handle(s.mux, "POST /v1/feedback/usesend", provider("useSend feedback", "feedback.usesend", opts.UseSendFeedback))
+	s.handle(s.mux, "POST /v1/secret-scanning/github", provider("GitHub secret scanning", "secret_scanning.github", opts.GitHubSecretScanning))
 
-	s.handle("GET /healthz", http.HandlerFunc(s.healthz))
-	s.handle("GET /readyz", http.HandlerFunc(s.readyz))
 	var metrics http.Handler = provider("metrics", "a Prometheus registry", nil)
 	if opts.Gatherer != nil {
 		metrics = promhttp.HandlerFor(opts.Gatherer, promhttp.HandlerOpts{})
 	}
-	s.handle("GET /metrics", metrics)
-	s.mux.HandleFunc("/", s.fallback)
+	for _, route := range []struct {
+		pattern string
+		h       http.Handler
+	}{
+		{"GET /healthz", http.HandlerFunc(s.healthz)},
+		{"GET /readyz", http.HandlerFunc(s.readyz)},
+		{"GET /metrics", metrics},
+	} {
+		s.handle(s.admin, route.pattern, route.h)
+		if !opts.SeparateAdmin {
+			s.handle(s.mux, route.pattern, route.h)
+		}
+	}
+	s.mux.HandleFunc("/", s.fallback(s.mux))
+	s.admin.HandleFunc("/", s.fallback(s.admin))
 	return s, nil
 }
 
-// handle registers h for pattern and labels its requests with the pattern,
-// so logs and metrics name routes, not paths full of ids.
-func (s *Server) handle(pattern string, h http.Handler) {
-	s.mux.Handle(pattern, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+// Admin returns the handler for GET /healthz, /readyz and /metrics alone,
+// with the request ids, logs and metrics of the Server's own handler. With
+// Options.SeparateAdmin, it is the only one that serves them.
+func (s *Server) Admin() http.Handler { return adminHandler{s} }
+
+type adminHandler struct{ s *Server }
+
+func (h adminHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
+	h.s.serve(w, r, h.s.admin)
+}
+
+// handle registers h on mux for pattern and labels its requests with the
+// pattern, so logs and metrics name routes, not paths full of ids.
+func (s *Server) handle(mux *http.ServeMux, pattern string, h http.Handler) {
+	mux.Handle(pattern, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if ri := infoFrom(r.Context()); ri != nil {
 			ri.route = pattern
 		}
@@ -253,27 +283,29 @@ func provider(name, section string, h http.Handler) http.Handler {
 	})
 }
 
-// fallback answers requests no route matches: 405 with Allow when the path
-// exists for another method, 404 otherwise.
-func (s *Server) fallback(w http.ResponseWriter, r *http.Request) {
-	var allowed []string
-	for _, m := range []string{http.MethodGet, http.MethodPost} {
-		if m == r.Method {
-			continue
+// fallback answers requests no route of mux matches: 405 with Allow when
+// the path exists for another method, 404 otherwise.
+func (s *Server) fallback(mux *http.ServeMux) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		var allowed []string
+		for _, m := range []string{http.MethodGet, http.MethodPost} {
+			if m == r.Method {
+				continue
+			}
+			probe := *r
+			probe.Method = m
+			if _, pattern := mux.Handler(&probe); pattern != "/" && pattern != "" {
+				allowed = append(allowed, m)
+			}
 		}
-		probe := *r
-		probe.Method = m
-		if _, pattern := s.mux.Handler(&probe); pattern != "/" && pattern != "" {
-			allowed = append(allowed, m)
+		if len(allowed) > 0 {
+			w.Header().Set("Allow", strings.Join(allowed, ", "))
+			writeError(w, http.StatusMethodNotAllowed, "method_not_allowed",
+				fmt.Sprintf("%s is not allowed on %s; use %s", r.Method, r.URL.Path, strings.Join(allowed, " or ")))
+			return
 		}
+		writeError(w, http.StatusNotFound, "not_found", fmt.Sprintf("no route for %s %s", r.Method, r.URL.Path))
 	}
-	if len(allowed) > 0 {
-		w.Header().Set("Allow", strings.Join(allowed, ", "))
-		writeError(w, http.StatusMethodNotAllowed, "method_not_allowed",
-			fmt.Sprintf("%s is not allowed on %s; use %s", r.Method, r.URL.Path, strings.Join(allowed, " or ")))
-		return
-	}
-	writeError(w, http.StatusNotFound, "not_found", fmt.Sprintf("no route for %s %s", r.Method, r.URL.Path))
 }
 
 func (s *Server) healthz(w http.ResponseWriter, _ *http.Request) {

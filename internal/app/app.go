@@ -175,17 +175,18 @@ func New(ctx context.Context, cfg *config.Config, opts Options) (_ *App, err err
 	a.deps.start()
 
 	aopts := api.Options{
-		Decider:      a.engine,
-		Rules:        a.holder,
-		Reload:       a.Reload,
-		Audit:        a.audit,
-		Gate:         cfg.Gate.Precision(),
-		Checks:       a.checks(),
-		Dependencies: a.deps.statuses,
-		Gatherer:     a.registry,
-		Registerer:   a.registry,
-		Logger:       log,
-		MaxBodyBytes: cfg.Server.MaxBodyBytes,
+		Decider:       a.engine,
+		Rules:         a.holder,
+		Reload:        a.Reload,
+		Audit:         a.audit,
+		Gate:          cfg.Gate.Precision(),
+		Checks:        a.checks(),
+		Dependencies:  a.deps.statuses,
+		Gatherer:      a.registry,
+		SeparateAdmin: cfg.Server.AdminAddr != "",
+		Registerer:    a.registry,
+		Logger:        log,
+		MaxBodyBytes:  cfg.Server.MaxBodyBytes,
 	}
 	for _, t := range cfg.Auth.Tokens {
 		aopts.Tokens = append(aopts.Tokens, api.Token{Name: t.Name, Value: t.Token.Value()})
@@ -338,9 +339,14 @@ func (a *App) secretScanning(opts *api.Options) error {
 	return nil
 }
 
-// Handler returns the HTTP handler for every route. To serve it with your own
+// Handler returns the HTTP handler for every route, except health and
+// metrics when server.admin_addr is set. To serve it with your own
 // http.Server, stop that server before calling Close.
 func (a *App) Handler() http.Handler { return a.api }
+
+// AdminHandler returns the HTTP handler for health and metrics alone, the
+// routes server.admin_addr serves.
+func (a *App) AdminHandler() http.Handler { return a.api.Admin() }
 
 // Ruleset returns the ruleset decisions are made with, or nil when none is
 // loaded.
@@ -434,41 +440,62 @@ func (a *App) dependencies() []dependency {
 	return deps
 }
 
-// Run listens on the configured address and serves until ctx ends, then
-// shuts down. See Serve.
+// Run listens on the configured addresses, server.listen and, when it is
+// set, server.admin_addr, and serves until ctx ends, then shuts down. See
+// Serve.
 func (a *App) Run(ctx context.Context) error {
 	ln, err := net.Listen("tcp", a.cfg.Server.Listen)
 	if err != nil {
 		_ = a.Close(context.Background())
 		return fmt.Errorf("listen on %s: %w", a.cfg.Server.Listen, err)
 	}
-	return a.Serve(ctx, ln)
+	var admin net.Listener
+	if addr := a.cfg.Server.AdminAddr; addr != "" {
+		if admin, err = net.Listen("tcp", addr); err != nil {
+			ln.Close()
+			_ = a.Close(context.Background())
+			return fmt.Errorf("listen on %s (server.admin_addr): %w", addr, err)
+		}
+	}
+	return a.Serve(ctx, ln, admin)
 }
 
-// Serve serves HTTP on ln until ctx ends or the server fails. When ctx ends
+// Serve serves the API on ln, and health and metrics on admin when
+// server.admin_addr is set, until ctx ends or a server fails. When ctx ends
 // it drains first (see drain), then shuts down within the configured
 // shutdown timeout: it stops accepting requests and waits for those in
 // flight, then closes the rest (see Close). On Unix, SIGHUP reloads the
-// ruleset while it serves.
-func (a *App) Serve(ctx context.Context, ln net.Listener) error {
-	srv := &http.Server{
-		Handler:           a.api,
-		ReadHeaderTimeout: readHeaderTimeout,
-		ReadTimeout:       readTimeout,
-		WriteTimeout:      writeTimeout,
-		IdleTimeout:       idleTimeout,
-		ErrorLog:          slog.NewLogLogger(a.log.Handler(), slog.LevelWarn),
+// ruleset while it serves. admin must be nil when server.admin_addr is not
+// set, and not nil when it is.
+func (a *App) Serve(ctx context.Context, ln, admin net.Listener) error {
+	if (admin != nil) != (a.cfg.Server.AdminAddr != "") {
+		ln.Close()
+		if admin != nil {
+			admin.Close()
+		}
+		_ = a.Close(context.Background())
+		return errors.New("serve: pass an admin listener exactly when server.admin_addr is set")
 	}
-	errc := make(chan error, 1)
-	go func() { errc <- srv.Serve(ln) }()
+	servers := []*http.Server{a.httpServer(a.api)}
+	listeners := []net.Listener{ln}
+	attrs := []any{"addr", ln.Addr().String()}
+	if admin != nil {
+		servers = append(servers, a.httpServer(a.api.Admin()))
+		listeners = append(listeners, admin)
+		attrs = append(attrs, "admin_addr", admin.Addr().String())
+	}
+	errc := make(chan error, len(servers))
+	for i, srv := range servers {
+		go func() { errc <- srv.Serve(listeners[i]) }()
+	}
 	stopReloads := a.reloadOnSignal()
 	defer stopReloads()
-	a.log.Info("catraca is listening", "addr", ln.Addr().String(), "version", a.version)
+	a.log.Info("catraca is listening", append(attrs, "version", a.version)...)
 
 	var serveErr error
 	select {
 	case <-ctx.Done():
-		a.drain(srv)
+		a.drain(servers...)
 	case err := <-errc:
 		serveErr = fmt.Errorf("serve HTTP: %w", err)
 	case err := <-a.audit.failed():
@@ -478,14 +505,28 @@ func (a *App) Serve(ctx context.Context, ln net.Listener) error {
 	a.log.Info("shutting down", "timeout", a.cfg.Server.ShutdownTimeout)
 	sctx, cancel := context.WithTimeout(context.Background(), a.cfg.Server.ShutdownTimeout)
 	defer cancel()
-	if err := srv.Shutdown(sctx); err != nil {
-		serveErr = errors.Join(serveErr, fmt.Errorf("stop the HTTP server: %w", err))
+	// The admin server stops last, so probes see the API server go.
+	for _, srv := range servers {
+		if err := srv.Shutdown(sctx); err != nil {
+			serveErr = errors.Join(serveErr, fmt.Errorf("stop the HTTP server: %w", err))
+		}
 	}
 	if err := a.Close(sctx); err != nil {
 		serveErr = errors.Join(serveErr, err)
 	}
 	a.log.Info("stopped")
 	return serveErr
+}
+
+func (a *App) httpServer(h http.Handler) *http.Server {
+	return &http.Server{
+		Handler:           h,
+		ReadHeaderTimeout: readHeaderTimeout,
+		ReadTimeout:       readTimeout,
+		WriteTimeout:      writeTimeout,
+		IdleTimeout:       idleTimeout,
+		ErrorLog:          slog.NewLogLogger(a.log.Handler(), slog.LevelWarn),
+	}
 }
 
 // drain reports not ready on /readyz and keeps serving for

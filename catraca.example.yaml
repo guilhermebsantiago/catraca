@@ -14,6 +14,10 @@ server:
   # host:port to listen on. Put Catraca behind TLS (a load balancer or a
   # reverse proxy) when it is reachable from outside the platform's network.
   listen: ${CATRACA_LISTEN:-:8080}
+  # Serve /healthz, /readyz and /metrics, which take no token, on a port of
+  # their own that the load balancer does not expose. Left out, the listen
+  # address serves them.
+  # admin_addr: :9090
   # Largest JSON body accepted on the /v1 routes, in bytes.
   max_body_bytes: 1048576
   # On SIGTERM, keep serving this long while /readyz reports not ready, so

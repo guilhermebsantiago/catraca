@@ -271,7 +271,7 @@ scanning routes, which authenticate by signature.
 | GET /v1/stats/rules?since=720h | precision per rule |
 | POST /v1/feedback, /v1/feedback/ses, /v1/feedback/usesend | feedback |
 | POST /v1/secret-scanning/github | GitHub partner endpoint |
-| GET /healthz, /readyz, /metrics | health and Prometheus metrics |
+| GET /healthz, /readyz, /metrics | health and Prometheus metrics, on `server.admin_addr` when it is set |
 
 `/readyz` depends on the server's own state only: a ruleset is loaded and
 the server is not draining. Redis and the audit database are shared by

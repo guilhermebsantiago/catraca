@@ -73,12 +73,22 @@ is logged or dumped. `config check` shows URLs without their passwords.
 | field | default | |
 |---|---|---|
 | `listen` | `:8080` | `host:port` to listen on. `:8080` listens on every interface; use `127.0.0.1:8080` to listen locally only |
+| `admin_addr` | | a second `host:port` that serves `/healthz`, `/readyz` and `/metrics` in place of `listen`, such as `:9090`. Unset, `listen` serves them |
 | `max_body_bytes` | `1048576` | largest JSON body on the `/v1` routes, at least 1024. Feedback and secret scanning routes have their own limits (1 MiB and 10 MiB) |
 | `shutdown_timeout` | `30s` | how long a graceful shutdown may take: finishing requests in flight and accepted leaked-key batches, writing queued decisions |
 | `drain_delay` | `5s` | how long the server keeps serving after SIGTERM or SIGINT, reporting not ready on `/readyz`, before the shutdown starts. `0s` turns it off |
 
 Catraca serves plain HTTP. Put it behind TLS (a load balancer, an ingress or
 a reverse proxy) when traffic leaves the host or a private network.
+
+**Health and metrics.** `/healthz`, `/readyz` and `/metrics` take no token,
+so they should not be reachable from where the API is. Without
+`admin_addr` they share the API's listener, and keeping them private is up
+to whatever is in front (expose only `/v1` through the load balancer). With
+`admin_addr` they move to a listener of their own and the API listener
+answers `404` for them: point probes and Prometheus at that port and leave
+it out of the Service or load balancer that carries the API. Every other
+route stays on `listen`. Both listeners drain and stop together.
 
 **Stopping.** On SIGTERM or SIGINT the server first drains: `/readyz`
 answers `503` (`"shutdown": "draining"`), every response closes its
