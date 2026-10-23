@@ -127,6 +127,13 @@ type Engine struct {
 	// Deadline bounds the signal lookup of one decision. When it expires
 	// the decision is made without the missing signals. Default 10ms.
 	Deadline time.Duration `yaml:"deadline"`
+	// MaxFutureSkew is how far ahead of the server's clock an event's time
+	// may be; a later time is replaced by the clock's. Default 5s.
+	MaxFutureSkew time.Duration `yaml:"max_future_skew"`
+	// MaxEventAge is how far behind the server's clock an event's time may
+	// be; an older event is rejected. Default 168h, the longest counter
+	// window.
+	MaxEventAge time.Duration `yaml:"max_event_age"`
 }
 
 // Gate is the precision gate a rule must clear before it enforces.
@@ -301,6 +308,12 @@ func (c *Config) applyDefaults() {
 	}
 	if c.Engine.Deadline == 0 {
 		c.Engine.Deadline = engine.DefaultDeadline
+	}
+	if c.Engine.MaxFutureSkew == 0 {
+		c.Engine.MaxFutureSkew = engine.DefaultMaxFutureSkew
+	}
+	if c.Engine.MaxEventAge == 0 {
+		c.Engine.MaxEventAge = engine.DefaultMaxEventAge
 	}
 	if c.Gate.MinLabeled == 0 {
 		c.Gate.MinLabeled = precision.DefaultMinLabeled

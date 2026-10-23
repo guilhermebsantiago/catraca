@@ -2,6 +2,7 @@ package feedback
 
 import (
 	"net/http"
+	"strings"
 	"testing"
 	"time"
 
@@ -279,6 +280,28 @@ func TestSESDecideFailures(t *testing.T) {
 		}
 		if len(dec.got()) != 1 {
 			t.Errorf("decided %d events, want 1", len(dec.got()))
+		}
+	})
+	t.Run("all refused: no retry that would be refused again", func(t *testing.T) {
+		dec := &recorder{refuse: func(event.Event) bool { return true }}
+		var out outcomes
+		h := newTestSES(t, SESConfig{Decider: dec, FetchCert: (&fetcher{}).fetch, AccountHeader: "X-Catraca-Account", OnOutcome: out.add})
+		rec := postJSON(t, h, notification(t, classicBounce))
+		if rec.Code != http.StatusOK {
+			t.Fatalf("status %d, want 200", rec.Code)
+		}
+		if !out.has(OutcomeMalformed) || out.has(OutcomeDecideFailed) {
+			t.Errorf("outcomes %v, want malformed and no decide_failed", out.list)
+		}
+	})
+	t.Run("one refused, one failed: SNS retries", func(t *testing.T) {
+		dec := &recorder{
+			refuse: func(ev event.Event) bool { return strings.EqualFold(ev.Feedback.Recipient, "recipient1@example.com") },
+			fail:   func(ev event.Event) bool { return ev.Feedback.Recipient == "recipient2@example.com" },
+		}
+		h := newTestSES(t, SESConfig{Decider: dec, FetchCert: (&fetcher{}).fetch, AccountHeader: "X-Catraca-Account"})
+		if rec := postJSON(t, h, notification(t, classicBounce)); rec.Code != http.StatusInternalServerError {
+			t.Fatalf("status %d, want 500", rec.Code)
 		}
 	})
 }

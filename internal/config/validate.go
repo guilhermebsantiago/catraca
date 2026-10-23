@@ -80,6 +80,8 @@ func (v *validator) explicit(c *Config) {
 	}
 	v.positive("server.shutdown_timeout", c.Server.ShutdownTimeout)
 	v.positive("engine.deadline", c.Engine.Deadline)
+	v.positive("engine.max_future_skew", c.Engine.MaxFutureSkew)
+	v.positive("engine.max_event_age", c.Engine.MaxEventAge)
 	if v.isSet("gate.min_labeled") && c.Gate.MinLabeled < 1 {
 		v.add("gate.min_labeled", "must be at least 1, got %d", c.Gate.MinLabeled)
 	}

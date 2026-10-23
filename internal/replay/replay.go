@@ -78,6 +78,9 @@ func Run(ctx context.Context, rs *rules.Ruleset, newCatalog CatalogFactory, r io
 		Catalog:  cat,
 		Rules:    rules.NewHolder(rs),
 		Deadline: observeDeadline,
+		// Replayed events are historical: bounding their times by the wall
+		// clock would refuse them all.
+		TrustEventTime: true,
 	})
 	if err != nil {
 		return nil, fmt.Errorf("replay: %w", err)

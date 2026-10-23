@@ -183,8 +183,7 @@ func (h *useSendHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		writeOK(w)
 		return
 	}
-	decided, _ := h.decideAll(r, "usesend", evs)
-	answerDecided(w, decided, len(evs))
+	answerDecided(w, h.decideAll(r, "usesend", evs))
 }
 
 func (h *useSendHandler) events(hook *useSendWebhook, email *useSendEmail, kind event.FeedbackKind) ([]event.Event, Outcome) {

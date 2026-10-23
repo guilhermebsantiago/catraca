@@ -142,6 +142,12 @@ starting.
 | field | default | |
 |---|---|---|
 | `deadline` | `10ms` | time budget for the signal lookup of one decision. When it runs out, the decision is made without the missing signals and marked `degraded`; each rule's `on_error` decides what that means |
+| `max_future_skew` | `5s` | how far ahead of Catraca's clock an event's `time` may be. A later time is replaced by the clock's, since an event cannot come from the future and, counted there, would empty the windows it touches until the clock caught up. Keep it well under a minute, the shortest window |
+| `max_event_age` | `168h` | how far behind Catraca's clock an event's `time` may be. An older event is answered `400 invalid_event`, and the feedback endpoints acknowledge it so the provider does not retry; a `key_leak` takes the clock's time instead. The default is the longest counter window, so nothing a counter could still use is refused. A lower value also stops late feedback from counting; a higher one lets an event move an account's first-seen time further back |
+
+Both bounds apply to every route that brings events in. `catraca replay`
+ignores them, since it decides historical events. See
+[limits](api.md#limits) for why and for the other limits on an event.
 
 ### gate
 

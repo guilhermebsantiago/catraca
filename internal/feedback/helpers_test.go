@@ -14,6 +14,7 @@ import (
 	"encoding/json"
 	"encoding/pem"
 	"errors"
+	"fmt"
 	"math/big"
 	"net/http"
 	"net/http/httptest"
@@ -30,11 +31,19 @@ import (
 type recorder struct {
 	mu     sync.Mutex
 	events []event.Event
-	// fail, when set, decides whether Decide returns an error.
+	// fail, when set, decides whether Decide fails as a broken store would.
 	fail func(event.Event) bool
+	// refuse, when set, decides whether Decide refuses the event as the
+	// engine refuses one it does not accept, with errRefused.
+	refuse func(event.Event) bool
 }
 
+var errRefused = fmt.Errorf("%w: event: time 1970-01-01T00:00:00Z is more than 168h0m0s in the past", event.ErrInvalid)
+
 func (r *recorder) Decide(_ context.Context, ev event.Event) (decision.Decision, error) {
+	if r.refuse != nil && r.refuse(ev) {
+		return decision.Decision{}, errRefused
+	}
 	if r.fail != nil && r.fail(ev) {
 		return decision.Decision{}, errors.New("store exploded")
 	}

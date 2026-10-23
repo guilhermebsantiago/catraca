@@ -8,6 +8,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/guilhermebsantiago/catraca/internal/decision"
 	"github.com/guilhermebsantiago/catraca/internal/event"
@@ -16,10 +17,11 @@ import (
 )
 
 // countingCatalog is a tiny in-memory catalog: it counts sends per account
-// and remembers leaked keys.
+// and remembers leaked keys and the time of every event it observed.
 type countingCatalog struct {
 	sends  map[string]int64
 	leaked map[string]bool
+	times  []time.Time
 	closed bool
 }
 
@@ -28,6 +30,7 @@ func newCountingCatalog() (signal.Catalog, error) {
 }
 
 func (c *countingCatalog) Observe(_ context.Context, ev event.Event) (signal.Set, error) {
+	c.times = append(c.times, ev.Time)
 	if ev.Type == event.Send {
 		c.sends[ev.AccountID]++
 	}
@@ -241,6 +244,38 @@ func TestReportText(t *testing.T) {
 	}
 	if strings.Contains(out, "warning") {
 		t.Errorf("unexpected warning in:\n%s", out)
+	}
+}
+
+// A replay decides historical events, so the server's bounds on how far an
+// event time may be from the clock do not apply.
+func TestRunKeepsEventTimes(t *testing.T) {
+	rs, err := rules.Parse([]byte(replayRuleset))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var cat *countingCatalog
+	factory := func() (signal.Catalog, error) {
+		c, err := newCountingCatalog()
+		cat = c.(*countingCatalog)
+		return c, err
+	}
+	times := []string{"2019-03-01T10:00:00Z", "2019-03-01T10:00:30Z", "2099-03-01T10:00:00Z"}
+	var in strings.Builder
+	for _, ts := range times {
+		in.WriteString(`{"event": {"type": "send", "account_id": "a", "time": "` + ts + `"}, "label": "legit"}` + "\n")
+	}
+	r, err := Run(context.Background(), rs, factory, strings.NewReader(in.String()))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if r.Events != len(times) || len(cat.times) != len(times) {
+		t.Fatalf("decided %d events, observed %d, want %d", r.Events, len(cat.times), len(times))
+	}
+	for i, ts := range times {
+		if got := cat.times[i].Format(time.RFC3339); got != ts {
+			t.Errorf("event %d observed at %s, want its own time %s", i, got, ts)
+		}
 	}
 }
 

@@ -542,7 +542,8 @@ func leakSource(githubSource string) string {
 }
 
 // retry calls f up to three times with backoff, each call bounded by
-// ResolveTimeout. ErrNotFound and shutdown end it early.
+// ResolveTimeout. ErrNotFound, an event refused as invalid (a key id from
+// the resolver with control characters, say) and shutdown end it early.
 func (h *Handler) retry(f func(ctx context.Context) error) error {
 	var err error
 	backoff := h.retryBackoff
@@ -558,7 +559,7 @@ func (h *Handler) retry(f func(ctx context.Context) error) error {
 		ctx, cancel := context.WithTimeout(h.base, h.resolveTimeout)
 		err = f(ctx)
 		cancel()
-		if err == nil || errors.Is(err, ErrNotFound) || h.base.Err() != nil {
+		if err == nil || errors.Is(err, ErrNotFound) || errors.Is(err, event.ErrInvalid) || h.base.Err() != nil {
 			return err
 		}
 	}

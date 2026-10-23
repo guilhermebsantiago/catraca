@@ -249,6 +249,17 @@ func TestUseSendErrors(t *testing.T) {
 			t.Errorf("status %d, want 500", rec.Code)
 		}
 	})
+	t.Run("event refused: no retry that would be refused again", func(t *testing.T) {
+		var out outcomes
+		h := newTestUseSend(t, UseSendConfig{Decider: &recorder{refuse: func(event.Event) bool { return true }}, OnOutcome: out.add})
+		b := []byte(useSendBounce)
+		if rec := post(t, h, b, useSendHeaders(useSendSecret, time.Now(), b)); rec.Code != http.StatusOK {
+			t.Errorf("status %d, want 200", rec.Code)
+		}
+		if !out.has(OutcomeMalformed) || out.has(OutcomeDecideFailed) {
+			t.Errorf("outcomes %v, want malformed and no decide_failed", out.list)
+		}
+	})
 	t.Run("config", func(t *testing.T) {
 		if _, err := NewUseSendHandler(UseSendConfig{Decider: &recorder{}}); err == nil {
 			t.Error("no secret: want an error")

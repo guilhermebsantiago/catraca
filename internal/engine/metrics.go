@@ -16,13 +16,20 @@ var latencyBuckets = []float64{
 }
 
 type metrics struct {
-	decisions *prometheus.CounterVec
-	matches   *prometheus.CounterVec
-	errors    *prometheus.CounterVec
-	degraded  prometheus.Counter
-	latency   prometheus.Histogram
-	dropped   prometheus.Counter
+	decisions   *prometheus.CounterVec
+	matches     *prometheus.CounterVec
+	errors      *prometheus.CounterVec
+	degraded    prometheus.Counter
+	latency     prometheus.Histogram
+	dropped     prometheus.Counter
+	outOfBounds *prometheus.CounterVec
 }
+
+// Values of the bound label of catraca_event_times_out_of_bounds_total.
+const (
+	boundFuture = "future"
+	boundPast   = "past"
+)
 
 func newMetrics(reg prometheus.Registerer) (*metrics, error) {
 	m := &metrics{
@@ -51,16 +58,22 @@ func newMetrics(reg prometheus.Registerer) (*metrics, error) {
 			Name: "catraca_records_dropped_total",
 			Help: "Decisions not handed to the recorder because its queue was full.",
 		}),
+		outOfBounds: prometheus.NewCounterVec(prometheus.CounterOpts{
+			Name: "catraca_event_times_out_of_bounds_total",
+			Help: "Events whose time was too far ahead of the server's clock (future: the clock's time was used) or behind it (past: rejected, or the clock's time for key_leak).",
+		}, []string{"bound"}),
 	}
 	// Every action starts at zero so dashboards and alerts see the series
 	// before the first block happens.
 	for _, a := range []decision.Action{decision.Allow, decision.Flag, decision.Throttle, decision.Hold, decision.Block} {
 		m.decisions.WithLabelValues(string(a))
 	}
+	m.outOfBounds.WithLabelValues(boundFuture)
+	m.outOfBounds.WithLabelValues(boundPast)
 	if reg == nil {
 		return m, nil
 	}
-	for _, c := range []prometheus.Collector{m.decisions, m.matches, m.errors, m.degraded, m.latency, m.dropped} {
+	for _, c := range []prometheus.Collector{m.decisions, m.matches, m.errors, m.degraded, m.latency, m.dropped, m.outOfBounds} {
 		if err := reg.Register(c); err != nil {
 			var already prometheus.AlreadyRegisteredError
 			if errors.As(err, &already) {

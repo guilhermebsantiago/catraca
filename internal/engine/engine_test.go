@@ -3,6 +3,7 @@ package engine
 import (
 	"context"
 	"errors"
+	"fmt"
 	"slices"
 	"strings"
 	"sync"
@@ -279,20 +280,118 @@ func TestDecideNormalizesWithoutTouchingTheCaller(t *testing.T) {
 
 func TestDecideRejectsInvalidEvents(t *testing.T) {
 	h := newHarness(t, Options{})
+	wide := sendEvent()
+	wide.To = make([]string, event.MaxRecipients+1)
+	for i := range wide.To {
+		wide.To[i] = fmt.Sprintf("u@d%d.example", i)
+	}
 	for _, ev := range []event.Event{
 		{},
 		{Type: "teleport", AccountID: "a"},
 		{Type: event.Send},
 		{Type: event.Feedback, AccountID: "a"},
 		{Type: event.KeyLeak},
+		{Type: event.Send, AccountID: "acct\x00"},
+		wide,
+		{Type: event.Send, AccountID: "a", Time: time.Unix(0, 0)},
 	} {
 		_, err := h.eng.Decide(context.Background(), ev)
-		if !errors.Is(err, ErrInvalidEvent) {
-			t.Errorf("Decide(%+v) error = %v, want ErrInvalidEvent", ev, err)
+		if !errors.Is(err, ErrInvalidEvent) || !errors.Is(err, event.ErrInvalid) {
+			t.Errorf("Decide(%.80v) error = %v, want ErrInvalidEvent", ev, err)
 		}
 	}
 	if calls := h.cat.callLog(); len(calls) != 0 {
 		t.Errorf("catalog was called for invalid events: %v", calls)
+	}
+}
+
+func TestDecideBoundsEventTime(t *testing.T) {
+	atTime := func(at time.Time) event.Event {
+		ev := sendEvent()
+		ev.Time = at
+		return ev
+	}
+	at := func(d time.Duration) event.Event { return atTime(t0.Add(d)) }
+	tests := []struct {
+		name string
+		ev   event.Event
+		want time.Time // the time observed; zero when the event is rejected
+	}{
+		{"no time takes the clock's", sendEvent(), t0},
+		{"slightly ahead is kept", at(DefaultMaxFutureSkew), t0.Add(DefaultMaxFutureSkew)},
+		{"further ahead takes the clock's", at(DefaultMaxFutureSkew + time.Millisecond), t0},
+		{"a month ahead takes the clock's", at(30 * 24 * time.Hour), t0},
+		{"centuries ahead takes the clock's", atTime(time.Date(9999, 12, 31, 0, 0, 0, 0, time.UTC)), t0},
+		{"in another zone", atTime(t0.Add(-time.Hour).In(time.FixedZone("BRT", -3*60*60))), t0.Add(-time.Hour)},
+		{"hours late is kept", at(-5 * time.Hour), t0.Add(-5 * time.Hour)},
+		{"as old as allowed is kept", at(-DefaultMaxEventAge), t0.Add(-DefaultMaxEventAge)},
+		{"older is rejected", at(-DefaultMaxEventAge - time.Millisecond), time.Time{}},
+		{"1970 is rejected", event.Event{Type: event.Send, AccountID: "a", Time: time.Unix(0, 0)}, time.Time{}},
+		{"an old leak report takes the clock's", event.Event{Type: event.KeyLeak, APIKeyID: "key_9", Time: time.Unix(0, 0)}, t0},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			// A clock that stands still, so the observed time is exact.
+			h := newHarness(t, Options{Now: func() time.Time { return t0 }})
+			_, err := h.eng.Decide(context.Background(), tt.ev)
+			if tt.want.IsZero() {
+				if !errors.Is(err, ErrInvalidEvent) || !strings.Contains(err.Error(), "in the past") {
+					t.Fatalf("error = %v, want an event rejected for its age", err)
+				}
+				if len(h.cat.observed) != 0 {
+					t.Error("a rejected event was observed")
+				}
+				return
+			}
+			if err != nil {
+				t.Fatal(err)
+			}
+			if got := h.cat.observed[0].Time; !got.Equal(tt.want) || got.Location() != time.UTC {
+				t.Errorf("observed time = %s, want %s in UTC", got, tt.want)
+			}
+		})
+	}
+}
+
+func TestDecideCountsEventTimesOutOfBounds(t *testing.T) {
+	h := newHarness(t, Options{MaxFutureSkew: time.Minute, MaxEventAge: time.Hour})
+	ahead, late := sendEvent(), sendEvent()
+	ahead.Time = t0.Add(2 * time.Minute)
+	late.Time = t0.Add(-2 * time.Hour)
+	h.decide(t, ahead)
+	if _, err := h.eng.Decide(context.Background(), late); !errors.Is(err, ErrInvalidEvent) {
+		t.Fatalf("late event: error = %v", err)
+	}
+	within := sendEvent()
+	within.Time = t0.Add(-30 * time.Minute)
+	h.decide(t, within)
+	for bound, want := range map[string]float64{"future": 1, "past": 1} {
+		if got := counter(t, h.reg, "catraca_event_times_out_of_bounds_total", map[string]string{"bound": bound}); got != want {
+			t.Errorf("out of bounds {bound=%s} = %v, want %v", bound, got, want)
+		}
+	}
+}
+
+func TestDecideTrustEventTime(t *testing.T) {
+	h := newHarness(t, Options{TrustEventTime: true})
+	past, future := sendEvent(), sendEvent()
+	past.Time = time.Date(2020, 1, 1, 0, 0, 0, 0, time.UTC)
+	future.Time = t0.Add(365 * 24 * time.Hour)
+	h.decide(t, past)
+	h.decide(t, future)
+	if got := h.cat.observed; !got[0].Time.Equal(past.Time) || !got[1].Time.Equal(future.Time) {
+		t.Errorf("observed times %s and %s, want the events' own", got[0].Time, got[1].Time)
+	}
+}
+
+func TestDecideKeyLeakWithAnOldTime(t *testing.T) {
+	h := newHarness(t, Options{})
+	d := h.decide(t, event.Event{Type: event.KeyLeak, APIKeyID: "key_9", Time: time.Unix(0, 0)})
+	if calls := h.cat.callLog(); len(calls) != 2 || calls[0] != "mark:key_9" {
+		t.Errorf("catalog calls %v, want the key marked leaked, then observed", calls)
+	}
+	if d.ID == "" {
+		t.Errorf("decision %+v", d)
 	}
 }
 
@@ -663,6 +762,12 @@ func TestNew(t *testing.T) {
 	}
 	if _, err := New(Options{Catalog: cat, Rules: holder, Deadline: -time.Second}); err == nil {
 		t.Error("New with a negative deadline succeeded")
+	}
+	if _, err := New(Options{Catalog: cat, Rules: holder, MaxFutureSkew: -time.Second}); err == nil {
+		t.Error("New with a negative MaxFutureSkew succeeded")
+	}
+	if _, err := New(Options{Catalog: cat, Rules: holder, MaxEventAge: -time.Second}); err == nil {
+		t.Error("New with a negative MaxEventAge succeeded")
 	}
 	if _, err := New(Options{Catalog: cat, Rules: holder}); err != nil {
 		t.Errorf("New without a registerer: %v", err)

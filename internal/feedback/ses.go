@@ -216,8 +216,7 @@ func (h *sesHandler) notification(w http.ResponseWriter, r *http.Request, msg *s
 		writeOK(w)
 		return
 	}
-	decided, _ := h.decideAll(r, "ses", evs)
-	answerDecided(w, decided, len(evs))
+	answerDecided(w, h.decideAll(r, "ses", evs))
 }
 
 // sesNotification is an SES notification. Identity notifications name their

@@ -20,6 +20,13 @@ reports, not the time Catraca processed the event. Replaying old events in
 order therefore reproduces the values they had. The window is the suffix:
 `_1m`, `_1h`, `_24h`, `_7d`.
 
+The server bounds event times by its clock, so one wrong time cannot move
+the windows of everyone after it: a time more than `engine.max_future_skew`
+(5 s) ahead counts as the time the event arrived, and an event more than
+`engine.max_event_age` (7 days, the longest window) old is rejected. A late
+event within those bounds keeps its time and lands in the windows it belongs
+to. See [limits](api.md#limits).
+
 Every count includes the event being decided. The first send of an account
 sees `account.sends_1m == 1`.
 
@@ -151,7 +158,9 @@ account.sends_24h)` for the uncapped value.
 
 The creation time comes from `account.created_at` on any event; the latest one
 sent wins. The first-seen time is the earliest event time seen for the
-account, whatever the order events arrived in. Both are kept for a year after
+account, whatever the order events arrived in; since older events are
+rejected, it is at most `engine.max_event_age` before the account's first
+event reached Catraca. Both are kept for a year after
 the account's last event (configurable), so an account idle for longer looks
 new again. Ages are never negative: a creation time in the future gives 0.
 

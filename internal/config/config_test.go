@@ -117,6 +117,8 @@ func TestDefaults(t *testing.T) {
 		{"audit.dsn", cfg.Audit.DSN.Value(), "sqlite:catraca.db"},
 		{"audit.event_detail", cfg.Audit.EventDetail, "minimal"},
 		{"engine.deadline", cfg.Engine.Deadline, 10 * time.Millisecond},
+		{"engine.max_future_skew", cfg.Engine.MaxFutureSkew, 5 * time.Second},
+		{"engine.max_event_age", cfg.Engine.MaxEventAge, 168 * time.Hour},
 		{"gate.min_labeled", cfg.Gate.MinLabeled, 30},
 		{"gate.min_precision", cfg.Gate.MinPrecision, 0.9},
 		{"logging.level", cfg.Logging.Level, "info"},
@@ -156,6 +158,8 @@ audit:
   event_detail: full
 engine:
   deadline: 25ms
+  max_future_skew: 30s
+  max_event_age: 72h
 gate:
   min_labeled: 50
   min_precision: 0.95
@@ -210,7 +214,8 @@ logging:
 	if cfg.Audit.IsSQLite() || cfg.Audit.EventDetail != "full" {
 		t.Errorf("audit = %#v", cfg.Audit)
 	}
-	if cfg.Engine.Deadline != 25*time.Millisecond || cfg.Gate.MinLabeled != 50 || cfg.Gate.MinPrecision != 0.95 {
+	if cfg.Engine.Deadline != 25*time.Millisecond || cfg.Engine.MaxFutureSkew != 30*time.Second || cfg.Engine.MaxEventAge != 72*time.Hour ||
+		cfg.Gate.MinLabeled != 50 || cfg.Gate.MinPrecision != 0.95 {
 		t.Errorf("engine/gate = %#v %#v", cfg.Engine, cfg.Gate)
 	}
 	if g := cfg.Gate.Precision(); g.MinLabeled != 50 || g.MinPrecision != 0.95 {
@@ -441,6 +446,8 @@ func TestValidation(t *testing.T) {
 		{"body size", "server: {max_body_bytes: 0}", "server.max_body_bytes: must be at least 1024 bytes, got 0"},
 		{"shutdown", "server: {shutdown_timeout: 0s}", "server.shutdown_timeout: must be a positive duration"},
 		{"deadline", "engine: {deadline: -1ms}", "engine.deadline: must be a positive duration, got -1ms"},
+		{"max future skew", "engine: {max_future_skew: 0s}", "engine.max_future_skew: must be a positive duration, got 0s"},
+		{"max event age", "engine: {max_event_age: -1h}", "engine.max_event_age: must be a positive duration, got -1h0m0s"},
 		{"min labeled", "gate: {min_labeled: 0}", "gate.min_labeled: must be at least 1, got 0"},
 		{"min precision", "gate: {min_precision: 1.5}", "gate.min_precision: must be greater than 0 and at most 1, got 1.5"},
 		{"store backend", "store: {backend: etcd}", `store.backend: want memory or redis, got "etcd"`},

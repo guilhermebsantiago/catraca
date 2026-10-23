@@ -30,12 +30,21 @@ const (
 	// DefaultRecordQueue is the number of decisions that may wait for the
 	// Recorder when Options.RecordQueue is zero.
 	DefaultRecordQueue = 4096
+	// DefaultMaxFutureSkew is Options.MaxFutureSkew when it is zero: room for
+	// ordinary drift between the platform's clocks and Catraca's, yet a time
+	// this far ahead pushes only a few seconds out of the 1 minute window.
+	DefaultMaxFutureSkew = 5 * time.Second
+	// DefaultMaxEventAge is Options.MaxEventAge when it is zero: the longest
+	// counter window, so every event a counter can still use is accepted,
+	// however late it arrives.
+	DefaultMaxEventAge = 7 * 24 * time.Hour
 )
 
 var (
 	// ErrInvalidEvent wraps the reason an event was rejected. Nothing was
-	// observed for it.
-	ErrInvalidEvent = errors.New("invalid event")
+	// observed for it. It is event.ErrInvalid, so packages that do not import
+	// the engine can recognize it.
+	ErrInvalidEvent = event.ErrInvalid
 	// ErrNoRuleset means the rule source has no ruleset loaded.
 	ErrNoRuleset = errors.New("engine: no ruleset loaded")
 )
@@ -85,10 +94,27 @@ type Options struct {
 	// Registerer receives the engine's metrics. When nil the metrics are
 	// kept but not registered anywhere.
 	Registerer prometheus.Registerer
+	// MaxFutureSkew is how far ahead of the clock (Now) an event's time may
+	// be. A later time is replaced by the clock's: the event cannot have
+	// happened yet, and counted in the future it would push every window it
+	// touches past the events that arrive next, hiding them until the clock
+	// catches up. Zero means DefaultMaxFutureSkew.
+	MaxFutureSkew time.Duration
+	// MaxEventAge is how far behind the clock an event's time may be. An
+	// older event is rejected with ErrInvalidEvent: no counter reaches back
+	// to it, and all it could still change are first-seen times, making an
+	// account or key look older than it is. A key_leak event is never
+	// refused for its age; it takes the clock's time instead. Zero means
+	// DefaultMaxEventAge.
+	MaxEventAge time.Duration
+	// TrustEventTime turns both bounds off, so event times are used as sent.
+	// Replays set it: their events are historical, and the clock that
+	// matters is the events' own.
+	TrustEventTime bool
 	// Now returns the current time; nil means time.Now.
 	Now func() time.Time
-	// Logger receives store failures and dropped records, at most once per
-	// second each. Nil discards them.
+	// Logger receives store failures, dropped records and event times ahead
+	// of the clock, at most once per second each. Nil discards them.
 	Logger *slog.Logger
 }
 
@@ -98,7 +124,10 @@ type Engine struct {
 	rules      RuleSource
 	dispatcher Dispatcher
 	deadline   time.Duration
-	now        func() time.Time
+	// maxFuture and maxAge bound event times; trustTime turns the bounds off.
+	maxFuture, maxAge time.Duration
+	trustTime         bool
+	now               func() time.Time
 	// fakeClock is set when Options.Now is, so tests that control the
 	// clock also control the measured latency.
 	fakeClock bool
@@ -107,7 +136,7 @@ type Engine struct {
 	records   *recordQueue
 	ids       idSource
 
-	observeLog, dropLog limiter
+	observeLog, dropLog, futureLog limiter
 }
 
 // New returns an Engine. When a Recorder is set it starts the goroutine that
@@ -119,8 +148,8 @@ func New(opts Options) (*Engine, error) {
 	if opts.Rules == nil {
 		return nil, errors.New("engine: Options.Rules is required")
 	}
-	if opts.Deadline < 0 || opts.RecordQueue < 0 {
-		return nil, errors.New("engine: Options.Deadline and Options.RecordQueue must not be negative")
+	if opts.Deadline < 0 || opts.RecordQueue < 0 || opts.MaxFutureSkew < 0 || opts.MaxEventAge < 0 {
+		return nil, errors.New("engine: Options.Deadline, RecordQueue, MaxFutureSkew and MaxEventAge must not be negative")
 	}
 	m, err := newMetrics(opts.Registerer)
 	if err != nil {
@@ -131,6 +160,9 @@ func New(opts Options) (*Engine, error) {
 		rules:      opts.Rules,
 		dispatcher: opts.Dispatcher,
 		deadline:   cmp.Or(opts.Deadline, DefaultDeadline),
+		maxFuture:  cmp.Or(opts.MaxFutureSkew, DefaultMaxFutureSkew),
+		maxAge:     cmp.Or(opts.MaxEventAge, DefaultMaxEventAge),
+		trustTime:  opts.TrustEventTime,
 		now:        opts.Now,
 		fakeClock:  opts.Now != nil,
 		log:        opts.Logger,
@@ -150,8 +182,9 @@ func New(opts Options) (*Engine, error) {
 
 // Decide decides one event:
 //
-//  1. validate and normalize it and assign its id (an id the platform sent
-//     is kept);
+//  1. validate and normalize it, bound its time to the clock (see
+//     Options.MaxFutureSkew and Options.MaxEventAge) and assign its id (an
+//     id the platform sent is kept);
 //  2. for key_leak events, mark the key leaked;
 //  3. observe the signals under the deadline, marking the decision degraded
 //     when the catalog fails;
@@ -176,6 +209,9 @@ func (e *Engine) Decide(ctx context.Context, ev event.Event) (decision.Decision,
 	}
 	ev = detach(ev)
 	ev.Normalize(start)
+	if err := e.boundTime(&ev, start); err != nil {
+		return decision.Decision{}, fmt.Errorf("%w: %w", ErrInvalidEvent, err)
+	}
 	if ev.ID == "" {
 		ev.ID = e.ids.next(start)
 	}
@@ -236,6 +272,38 @@ func (e *Engine) Close(ctx context.Context) error {
 		return nil
 	}
 	return e.records.close(ctx)
+}
+
+// boundTime keeps ev's time within reach of the clock, now. Counters slide
+// with event time and first-seen times keep the earliest one, so a single
+// event far off the clock could otherwise empty an account's windows for
+// days, or make it look years old for as long as it keeps sending.
+func (e *Engine) boundTime(ev *event.Event, now time.Time) error {
+	if e.trustTime {
+		return nil
+	}
+	// Sub saturates, so times centuries away compare correctly too.
+	if ahead := ev.Time.Sub(now); ahead > e.maxFuture {
+		e.metrics.outOfBounds.WithLabelValues(boundFuture).Inc()
+		if e.futureLog.allow(now) {
+			e.log.Warn("event time is ahead of the clock; using the clock's",
+				"event_type", ev.Type, "account_id", ev.AccountID, "time", ev.Time, "ahead", ahead)
+		}
+		ev.Time = now.UTC()
+		return nil
+	}
+	if now.Sub(ev.Time) > e.maxAge {
+		e.metrics.outOfBounds.WithLabelValues(boundPast).Inc()
+		if ev.Type == event.KeyLeak {
+			// A key is leaked however long ago it was found: refusing the
+			// report would leave it usable. Its time only feeds first-seen.
+			ev.Time = now.UTC()
+			return nil
+		}
+		return fmt.Errorf("event: time %s is more than %s in the past; no counter reaches back that far",
+			ev.Time.Format(time.RFC3339), e.maxAge)
+	}
+	return nil
 }
 
 // detach copies the parts of ev that Normalize modifies in place, so

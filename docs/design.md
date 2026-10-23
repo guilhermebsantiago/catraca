@@ -180,7 +180,12 @@ and the expected matches, so a rule change comes with a test like code does.
 
 `Decide(ctx, ev)`:
 
-1. Validate and normalize the event, assign IDs.
+1. Validate and normalize the event, assign IDs. Validation enforces the
+   limits on an event (list sizes, string lengths, no control characters in
+   identifiers), and the event time is bounded by the server's clock: a time
+   more than `engine.max_future_skew` ahead takes the clock's, and an event
+   more than `engine.max_event_age` old is rejected, except a key_leak,
+   which takes the clock's. Replays trust event times.
 2. `Observe` signals under the configured deadline (default 10 ms). On error,
    mark the decision degraded and continue with what was returned.
 3. Evaluate every rule. A matching enforced rule contributes its action; a
