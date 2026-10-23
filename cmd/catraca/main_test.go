@@ -85,6 +85,11 @@ func TestUsageAndVersion(t *testing.T) {
 
 	r := runCLI(t, nil, "version")
 	expect(t, r, exitOK, "catraca dev", "go1.")
+
+	oldVersion, oldCommit, oldDate := version, commit, date
+	t.Cleanup(func() { version, commit, date = oldVersion, oldCommit, oldDate })
+	version, commit, date = "v1.2.3", "0123456789abcdef0123456789abcdef01234567", "2026-10-23T12:00:00Z"
+	expect(t, runCLI(t, nil, "version"), exitOK, "catraca v1.2.3 (0123456789ab, 2026-10-23T12:00:00Z) go1.")
 }
 
 const brokenRules = `version: 1

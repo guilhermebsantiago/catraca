@@ -185,13 +185,27 @@ func orNone(items []string) string {
 }
 
 func (c *cli) version() int {
-	fmt.Fprintf(c.stdout, "catraca %s", version)
+	rev, at := commit, date
 	if info, ok := debug.ReadBuildInfo(); ok {
 		for _, s := range info.Settings {
-			if s.Key == "vcs.revision" && len(s.Value) >= 12 {
-				fmt.Fprintf(c.stdout, " (%s)", s.Value[:12])
+			switch {
+			case s.Key == "vcs.revision" && rev == "":
+				rev = s.Value
+			case s.Key == "vcs.time" && at == "":
+				at = s.Value
 			}
 		}
+	}
+	var stamp []string
+	if rev != "" {
+		stamp = append(stamp, rev[:min(len(rev), 12)])
+	}
+	if at != "" {
+		stamp = append(stamp, at)
+	}
+	fmt.Fprintf(c.stdout, "catraca %s", version)
+	if len(stamp) > 0 {
+		fmt.Fprintf(c.stdout, " (%s)", strings.Join(stamp, ", "))
 	}
 	fmt.Fprintf(c.stdout, " %s %s/%s\n", runtime.Version(), runtime.GOOS, runtime.GOARCH)
 	return exitOK

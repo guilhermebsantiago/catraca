@@ -1,0 +1,28 @@
+# The image published with each release, built by GoReleaser (dockers_v2 in
+# .goreleaser.yaml). It copies the binary GoReleaser has already built,
+# checksummed and attested instead of compiling it again, so the image runs
+# the same bytes as the release archives. The build context holds only
+# linux/<arch>/catraca and the extra_files listed in .goreleaser.yaml.
+#
+# The runtime layout matches Dockerfile, which builds from source for docker
+# compose and development; keep the two in step. No RUN step executes on the
+# target platform, so the arm64 image builds on an amd64 runner without
+# emulation.
+
+FROM gcr.io/distroless/static-debian12:nonroot@sha256:afa5c872c891853ca7fcf1f12c3edb23f7eeef36189728842dd51042ff57f7ab AS base
+
+FROM base
+ARG TARGETPLATFORM
+COPY $TARGETPLATFORM/catraca /usr/local/bin/catraca
+# Distroless has no shell to create the data directory, and WORKDIR would
+# create it as root. The nonroot user's home is an empty directory, so a copy
+# of it owned by nonroot gives SQLite somewhere to write.
+COPY --from=base --chown=nonroot:nonroot /home/nonroot /var/lib/catraca
+COPY --chown=nonroot:nonroot rules/default.yaml /etc/catraca/rules/default.yaml
+COPY --chown=nonroot:nonroot deploy/catraca.yaml /etc/catraca/catraca.yaml
+WORKDIR /var/lib/catraca
+USER nonroot
+EXPOSE 8080
+ENV CATRACA_CONFIG=/etc/catraca/catraca.yaml
+ENTRYPOINT ["catraca"]
+CMD ["serve"]
