@@ -13,10 +13,15 @@ func TestAdmissionAndBreakerDefaults(t *testing.T) {
 	if s.MaxInflight != 256 || s.InflightWait != 2*time.Millisecond || s.InflightLimit != "adaptive" {
 		t.Errorf("server admission = %d, %s, %s; want 256, 2ms, adaptive", s.MaxInflight, s.InflightWait, s.InflightLimit)
 	}
-	if b.FailureThreshold != 20 || b.Cooldown != 2*time.Second || b.Probes != 5 {
-		t.Errorf("engine.breaker = %+v, want 20, 2s, 5", b)
+	if b.FailureThreshold != 20 || b.FailureWindow != 500*time.Millisecond || b.Cooldown != 2*time.Second || b.Probes != 5 {
+		t.Errorf("engine.breaker = %+v, want 20, 500ms, 2s, 5", b)
 	}
-	want := engine.BreakerOptions{Failures: engine.DefaultBreakerFailures, Cooldown: engine.DefaultBreakerCooldown, Probes: engine.DefaultBreakerProbes}
+	want := engine.BreakerOptions{
+		Failures: engine.DefaultBreakerFailures,
+		Window:   engine.DefaultBreakerWindow,
+		Cooldown: engine.DefaultBreakerCooldown,
+		Probes:   engine.DefaultBreakerProbes,
+	}
 	if got := b.Options(); got != want {
 		t.Errorf("breaker options = %+v, want the engine's defaults %+v", got, want)
 	}
@@ -31,6 +36,7 @@ server:
 engine:
   breaker:
     failure_threshold: 50
+    failure_window: 1s
     cooldown: 500ms
     probes: 2
 `, nil)
@@ -38,7 +44,7 @@ engine:
 	if s.MaxInflight != 64 || s.InflightWait != 5*time.Millisecond || s.InflightLimit != "static" {
 		t.Errorf("server admission = %d, %s, %s", s.MaxInflight, s.InflightWait, s.InflightLimit)
 	}
-	want := engine.BreakerOptions{Failures: 50, Cooldown: 500 * time.Millisecond, Probes: 2}
+	want := engine.BreakerOptions{Failures: 50, Window: time.Second, Cooldown: 500 * time.Millisecond, Probes: 2}
 	if got := cfg.Engine.Breaker.Options(); got != want {
 		t.Errorf("breaker options = %+v, want %+v", got, want)
 	}
@@ -61,6 +67,7 @@ func TestAdmissionAndBreakerValidation(t *testing.T) {
 		{"inflight wait", "server: {inflight_wait: -1ms}", "server.inflight_wait: must not be negative, got -1ms; 0s sheds at once"},
 		{"inflight limit", "server: {inflight_limit: gradient}", `server.inflight_limit: want adaptive or static, got "gradient"`},
 		{"failure threshold", "engine: {breaker: {failure_threshold: 0}}", "engine.breaker.failure_threshold: must be at least 1, got 0"},
+		{"failure window", "engine: {breaker: {failure_window: -1s}}", "engine.breaker.failure_window: must be a positive duration, got -1s"},
 		{"cooldown", "engine: {breaker: {cooldown: 0s}}", "engine.breaker.cooldown: must be a positive duration, got 0s"},
 		{"probes", "engine: {breaker: {probes: -1}}", "engine.breaker.probes: must be at least 1, got -1"},
 		{"unknown breaker field", "engine: {breaker: {threshold: 3}}", "engine.breaker.threshold: unknown field"},

@@ -7,6 +7,7 @@ import (
 	"strconv"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/guilhermebsantiago/catraca/internal/engine"
 )
@@ -33,11 +34,31 @@ func TestStoreBreakerWithRedisDown(t *testing.T) {
 	}()
 	h := newHarness(t, options{redisURL: "redis://" + ln.Addr().String() + "/0"})
 
-	const decisions = engine.DefaultBreakerFailures + 3
-	for range decisions {
+	const open = `catraca_store_breaker_state{state="open"} 1`
+	decisions := 0
+	decide := func() {
+		t.Helper()
 		if d, _ := h.decide(send("acct", "a@shop.example")); !d.Degraded {
 			t.Fatalf("decision with Redis down is not degraded: %+v", d)
 		}
+		decisions++
+	}
+	// The calls fail at once, so the breaker opens once they have failed
+	// for its window.
+	start := time.Now()
+	for !strings.Contains(string(h.do("GET", "/metrics", "", nil).body), open) {
+		if time.Since(start) > 30*time.Second {
+			t.Fatalf("the breaker did not open after %d failed decisions", decisions)
+		}
+		for range 10 {
+			decide()
+		}
+	}
+	if decisions < engine.DefaultBreakerFailures {
+		t.Errorf("the breaker opened after %d decisions, fewer than its threshold", decisions)
+	}
+	for range 3 {
+		decide()
 	}
 	r := h.do("POST", "/v1/events", token, `{"type":"key_leak","api_key_id":"key_1"}`)
 	if r.status != http.StatusServiceUnavailable || r.header.Get("Retry-After") != "1" || r.errorCode(t) != "unavailable" {
@@ -48,7 +69,7 @@ func TestStoreBreakerWithRedisDown(t *testing.T) {
 	for _, want := range []string{
 		// A probe after a slow moment fails and opens it again, so it is
 		// open either way, and opened from closed once.
-		`catraca_store_breaker_state{state="open"} 1`,
+		open,
 		`catraca_store_breaker_transitions_total{from="closed",to="open"} 1`,
 		`catraca_degraded_decisions_total ` + strconv.Itoa(decisions),
 		`catraca_admission_limit{group="decisions"} 256`,

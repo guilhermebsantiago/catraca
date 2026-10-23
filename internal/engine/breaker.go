@@ -15,11 +15,17 @@ import (
 // Defaults for the fields of BreakerOptions left at zero.
 const (
 	// DefaultBreakerFailures is how many store calls in a row must fail or
-	// miss the deadline before the breaker opens: a stall of a few
-	// milliseconds at a thousand decisions a second, which the deadline
-	// alone absorbs, does not open it, and a store that is down opens it in
-	// a few dozen milliseconds.
+	// miss the deadline, at least, before the breaker opens, so that a few
+	// failures spread over a quiet period do not open it.
 	DefaultBreakerFailures = 20
+	// DefaultBreakerWindow is how long store calls must keep failing, with
+	// none succeeding, before the breaker opens. An overload makes calls
+	// miss the deadline too, but the HTTP layer's adaptive limit brings it
+	// under control within a few rounds of the deadline, after which calls
+	// succeed again; an outage never does. Half a second tells them apart,
+	// and the decisions an outage holds meanwhile wait no longer than the
+	// deadline, most of them shed by that limit anyway.
+	DefaultBreakerWindow = 500 * time.Millisecond
 	// DefaultBreakerCooldown is how long the breaker stays open before it
 	// probes the store. The probes cost a few decisions a deadline each, so
 	// it can be short; a degraded second costs detection.
@@ -47,17 +53,20 @@ var (
 // While the store keeps failing or timing out, every decision would wait
 // its whole deadline only to be degraded, and every round trip that
 // outlives its deadline holds a connection to a store that is already
-// struggling. After Failures calls in a row fail or miss the deadline, the
-// breaker opens: for Cooldown, decisions skip the store and are degraded at
-// once, exactly as when the store misses the deadline (each rule's
-// on_error applies, known leaked keys stay blocked), and key_leak events
-// fail at once with ErrBreakerOpen. Then it lets Probes calls through: when
-// they all succeed it closes, and when one fails it opens for another
-// Cooldown.
+// struggling. Once store calls have failed or missed the deadline for
+// Window, with none succeeding, and at least Failures of them, the breaker
+// opens: for Cooldown, decisions skip the store and are degraded at once,
+// exactly as when the store misses the deadline (each rule's on_error
+// applies, known leaked keys stay blocked), and key_leak events fail at
+// once with ErrBreakerOpen. Then it lets Probes calls through: when they
+// all succeed it closes, and when one fails it opens for another Cooldown.
 type BreakerOptions struct {
-	// Failures is how many store calls in a row must fail or miss the
-	// deadline to open the breaker. Zero means DefaultBreakerFailures.
+	// Failures is the fewest store calls in a row that must fail or miss
+	// the deadline to open the breaker. Zero means DefaultBreakerFailures.
 	Failures int
+	// Window is how long they must keep failing, with none succeeding.
+	// Zero means DefaultBreakerWindow.
+	Window time.Duration
 	// Cooldown is how long the breaker stays open before it probes the
 	// store. Zero means DefaultBreakerCooldown.
 	Cooldown time.Duration
@@ -157,6 +166,7 @@ func (e *Engine) storeDone(ctx context.Context, call storeCall, err error) {
 // lock is taken only to change state and while the breaker is not closed.
 type breaker struct {
 	threshold int64
+	window    time.Duration
 	cooldown  time.Duration
 	probes    int
 	now       func() time.Time
@@ -165,6 +175,9 @@ type breaker struct {
 	state    atomic.Int32
 	gen      atomic.Uint64
 	failures atomic.Int64 // in a row, while closed
+	// runStart is when the first of those failures ended, in Unix
+	// nanoseconds.
+	runStart atomic.Int64
 
 	mu       sync.Mutex
 	openedAt time.Time // when it last opened
@@ -178,11 +191,12 @@ type breaker struct {
 }
 
 func newBreaker(opts BreakerOptions, now func() time.Time, log *slog.Logger, reg prometheus.Registerer) (*breaker, error) {
-	if opts.Failures < 0 || opts.Cooldown < 0 || opts.Probes < 0 {
+	if opts.Failures < 0 || opts.Window < 0 || opts.Cooldown < 0 || opts.Probes < 0 {
 		return nil, errors.New("engine: Options.Breaker fields must not be negative")
 	}
 	b := &breaker{
 		threshold: int64(cmp.Or(opts.Failures, DefaultBreakerFailures)),
+		window:    cmp.Or(opts.Window, DefaultBreakerWindow),
 		cooldown:  cmp.Or(opts.Cooldown, DefaultBreakerCooldown),
 		probes:    cmp.Or(opts.Probes, DefaultBreakerProbes),
 		now:       now,
@@ -254,15 +268,24 @@ func (b *breaker) end(c storeCall, res callResult, err error) {
 		return
 	}
 	if !c.probe {
-		switch {
-		case b.gen.Load() != c.gen || res == callIgnored:
-		case res == callOK:
+		if b.gen.Load() != c.gen || res == callIgnored {
+			return
+		}
+		if res == callOK {
 			if b.failures.Load() != 0 {
 				b.failures.Store(0)
 			}
-		case b.failures.Add(1) >= b.threshold:
+			return
+		}
+		// The clock is read only at the start of a run and once it is long
+		// enough to count, not for every failure.
+		n := b.failures.Add(1)
+		if n == 1 {
+			b.runStart.Store(b.now().UnixNano())
+		}
+		if n >= b.threshold && b.now().UnixNano()-b.runStart.Load() >= int64(b.window) {
 			b.mu.Lock()
-			if breakerState(b.state.Load()) == breakerClosed && b.gen.Load() == c.gen {
+			if breakerState(b.state.Load()) == breakerClosed && b.gen.Load() == c.gen && b.failures.Load() >= b.threshold {
 				b.transition(breakerOpen, err)
 			}
 			b.mu.Unlock()
@@ -306,7 +329,8 @@ func (b *breaker) transition(to breakerState, err error) {
 		if from == breakerClosed {
 			b.since = now
 			b.log.Warn("store breaker opened: store calls keep failing or missing the deadline; deciding degraded without the store",
-				"failures_in_a_row", b.failures.Load(), "cooldown", b.cooldown, "error", err)
+				"failures_in_a_row", b.failures.Load(), "failing_for", now.Sub(time.Unix(0, b.runStart.Load())),
+				"cooldown", b.cooldown, "error", err)
 		} else {
 			b.log.Warn("store breaker opened again: a probe failed",
 				"cooldown", b.cooldown, "open_for", now.Sub(b.since), "error", err)

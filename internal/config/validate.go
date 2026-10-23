@@ -97,6 +97,7 @@ func (v *validator) explicit(c *Config) {
 	if v.isSet("engine.breaker.failure_threshold") && c.Engine.Breaker.FailureThreshold < 1 {
 		v.add("engine.breaker.failure_threshold", "must be at least 1, got %d", c.Engine.Breaker.FailureThreshold)
 	}
+	v.positive("engine.breaker.failure_window", c.Engine.Breaker.FailureWindow)
 	v.positive("engine.breaker.cooldown", c.Engine.Breaker.Cooldown)
 	if v.isSet("engine.breaker.probes") && c.Engine.Breaker.Probes < 1 {
 		v.add("engine.breaker.probes", "must be at least 1, got %d", c.Engine.Breaker.Probes)

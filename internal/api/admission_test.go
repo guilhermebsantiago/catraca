@@ -395,18 +395,23 @@ func TestBreakerOpenAnswersRetry(t *testing.T) {
 }
 
 // TestDecisionLatencyAdaptsTheLimit checks the handler's side of the
-// adaptive limit: a decision that takes the whole deadline lowers it.
+// adaptive limit: a decision that takes half the deadline lowers it.
 func TestDecisionLatencyAdaptsTheLimit(t *testing.T) {
 	f := newShedDecider()
-	f.d.LatencyMicros = 20_000
+	f.d.LatencyMicros = 9_999
 	s := newAdmissionServer(t, f, nil, func(o *Options) {
 		o.Admission = Admission{MaxInflight: 10, Deadline: 20 * time.Millisecond}
 	})
 	serve(s, "POST", "/v1/decide", `{"type":"send","account_id":"a"}`)
-	if got := value(t, s.admission.limit.WithLabelValues("decisions")); got != 8 {
-		t.Errorf("decision limit = %v after a decision took the deadline, want 8", got)
+	if got := value(t, s.admission.limit.WithLabelValues("decisions")); got != 10 {
+		t.Errorf("decision limit = %v after a decision under half the deadline, want 10", got)
 	}
-	f.d.LatencyMicros, f.d.Degraded = 19_999, true
+	f.d.LatencyMicros = 10_000
+	serve(s, "POST", "/v1/decide", `{"type":"send","account_id":"a"}`)
+	if got := value(t, s.admission.limit.WithLabelValues("decisions")); got != 8 {
+		t.Errorf("decision limit = %v after a decision took half the deadline, want 8", got)
+	}
+	f.d.LatencyMicros, f.d.Degraded = 9_999, true
 	serve(s, "POST", "/v1/decide", `{"type":"send","account_id":"a"}`)
 	if got := value(t, s.admission.limit.WithLabelValues("decisions")); got != 8 {
 		t.Errorf("decision limit = %v after a fast degraded decision, want it unchanged", got)

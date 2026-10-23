@@ -184,15 +184,18 @@ func (h *breakerHarness) shortCircuited(t *testing.T) float64 {
 	return counter(t, h.reg, "catraca_short_circuited_decisions_total", nil)
 }
 
-// open fails the store until the breaker opens.
+// open fails the store until the breaker opens: the default number of
+// failures, over the default window.
 func (h *breakerHarness) open(t *testing.T) {
 	t.Helper()
 	h.cat.set(errors.New("redis: connection refused"))
-	for range DefaultBreakerFailures {
+	h.send(t)
+	h.clock.Advance(DefaultBreakerWindow)
+	for range DefaultBreakerFailures - 1 {
 		h.send(t)
 	}
 	if got := h.state(t); got != "open" {
-		t.Fatalf("breaker is %s after %d failures, want open", got, DefaultBreakerFailures)
+		t.Fatalf("breaker is %s after %d failures over %s, want open", got, DefaultBreakerFailures, DefaultBreakerWindow)
 	}
 }
 
@@ -202,7 +205,9 @@ func TestBreakerOpensAfterFailuresInARow(t *testing.T) {
 		t.Fatalf("a new breaker is %s, want closed", got)
 	}
 	h.cat.set(errors.New("redis: connection refused"))
-	for i := range DefaultBreakerFailures - 1 {
+	h.send(t)
+	h.clock.Advance(DefaultBreakerWindow)
+	for i := range DefaultBreakerFailures - 2 {
 		if d := h.send(t); !d.Degraded {
 			t.Fatalf("decision %d is not degraded", i)
 		}
@@ -242,9 +247,11 @@ func TestBreakerOpensAfterFailuresInARow(t *testing.T) {
 func TestBreakerCountsFailuresInARowOnly(t *testing.T) {
 	h := newBreakerHarness(t, BreakerOptions{Failures: 3})
 	fail := errors.New("redis: connection refused")
+	// A second between decisions, so every run outlasts the window.
 	for _, err := range []error{fail, fail, nil, fail, fail, nil, fail, fail} {
 		h.cat.set(err)
 		h.send(t)
+		h.clock.Advance(time.Second)
 	}
 	if got := h.state(t); got != "closed" {
 		t.Fatalf("breaker is %s, want closed: a success ends a run of failures", got)
@@ -255,11 +262,51 @@ func TestBreakerCountsFailuresInARowOnly(t *testing.T) {
 	}
 }
 
+// TestBreakerWaitsForTheWindow checks that a burst of failures, however
+// many, opens the breaker only once it has lasted the window: an overload
+// makes calls miss the deadline in bursts too, and the adaptive limit ends
+// those within a few rounds.
+func TestBreakerWaitsForTheWindow(t *testing.T) {
+	h := newBreakerHarness(t, BreakerOptions{})
+	h.cat.set(errors.New("context deadline exceeded"))
+	for range 10 * DefaultBreakerFailures {
+		h.send(t)
+	}
+	h.clock.Advance(DefaultBreakerWindow - time.Millisecond)
+	h.send(t)
+	if got := h.state(t); got != "closed" {
+		t.Fatalf("breaker is %s before the window ended, want closed", got)
+	}
+	h.clock.Advance(time.Millisecond)
+	h.send(t)
+	if got := h.state(t); got != "open" {
+		t.Fatalf("breaker is %s once the failures lasted the window, want open", got)
+	}
+
+	// A success starts the window over.
+	h = newBreakerHarness(t, BreakerOptions{})
+	h.cat.set(errors.New("context deadline exceeded"))
+	h.send(t)
+	h.clock.Advance(DefaultBreakerWindow / 2)
+	h.cat.set(nil)
+	h.send(t)
+	h.cat.set(errors.New("context deadline exceeded"))
+	for range DefaultBreakerFailures {
+		h.send(t)
+	}
+	h.clock.Advance(DefaultBreakerWindow / 2)
+	h.send(t)
+	if got := h.state(t); got != "closed" {
+		t.Fatalf("breaker is %s, want closed: a success in the window starts it over", got)
+	}
+}
+
 func TestBreakerCountsDeadlineMisses(t *testing.T) {
 	h := newBreakerHarness(t, BreakerOptions{Failures: 2})
 	h.eng.deadline = time.Millisecond
 	h.cat.hang = true
 	h.send(t)
+	h.clock.Advance(DefaultBreakerWindow)
 	h.send(t)
 	if got := h.state(t); got != "open" {
 		t.Fatalf("breaker is %s after two deadline misses, want open", got)
@@ -371,8 +418,14 @@ func TestBreakerLetsProbesThroughOnly(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	c, _ := b.begin()
-	b.end(c, callFailed, errors.New("down"))
+	for range 2 {
+		c, _ := b.begin()
+		b.end(c, callFailed, errors.New("down"))
+		clock.Advance(DefaultBreakerWindow)
+	}
+	if got := breakerState(b.state.Load()); got != breakerOpen {
+		t.Fatalf("breaker is %s, want open", got)
+	}
 	clock.Advance(DefaultBreakerCooldown)
 
 	p1, ok1 := b.begin()
@@ -413,6 +466,7 @@ func TestBreakerIgnoresCallsFromAnEarlierState(t *testing.T) {
 	for range 2 {
 		c, _ := b.begin()
 		b.end(c, callFailed, errors.New("down"))
+		clock.Advance(DefaultBreakerWindow)
 	}
 	b.end(early, callOK, nil)
 	if got := breakerState(b.state.Load()); got != breakerOpen {
@@ -538,7 +592,7 @@ func TestNewRejectsNegativeBreakerOptions(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	for _, opts := range []BreakerOptions{{Failures: -1}, {Cooldown: -time.Second}, {Probes: -1}} {
+	for _, opts := range []BreakerOptions{{Failures: -1}, {Window: -time.Second}, {Cooldown: -time.Second}, {Probes: -1}} {
 		if _, err := New(Options{Catalog: &storeCatalog{}, Rules: rules.NewHolder(rs), Breaker: opts}); err == nil {
 			t.Errorf("New accepted %+v", opts)
 		}

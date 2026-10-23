@@ -53,9 +53,9 @@ type Admission struct {
 	// Static keeps the decision limit at MaxInflight. Otherwise the limit
 	// adapts to how fast decisions finish; see limiter.
 	Static bool
-	// Deadline is the engine's deadline: a decision that takes all of it
-	// means the store is not keeping up, and lowers the adaptive limit. Zero
-	// means engine.DefaultDeadline.
+	// Deadline is the engine's deadline: a decision that takes half of it or
+	// more means the store is falling behind, and lowers the adaptive
+	// limit. Zero means engine.DefaultDeadline.
 	Deadline time.Duration
 }
 
@@ -75,7 +75,7 @@ const (
 	outcomeNone outcome = iota
 	// outcomeOK is a decision made with every signal, in time.
 	outcomeOK
-	// outcomeSlow is a decision that took the whole deadline.
+	// outcomeSlow is a decision that took half the deadline or more.
 	outcomeSlow
 )
 
@@ -86,16 +86,19 @@ const (
 // An adaptive limiter moves its limit between 1 and max, additive increase
 // and multiplicative decrease as in TCP. It starts at max, so it sheds
 // nothing until decisions slow down. When a decision admitted since the
-// last decrease takes the whole deadline, the store (or the server) is not
-// keeping up, and the limit drops by a fifth: fewer decisions at once get
-// their signals in time while the rest are shed without a round trip,
-// instead of every decision waiting out the deadline and degrading anyway.
-// Decreasing once per round, rather than for every slow decision, keeps
-// the burst of timeouts one stall causes from collapsing the limit. While
-// at least half the slots are busy, each decision that finishes in time
-// with its signals raises the limit by 1/limit, about one per limit's worth
-// of decisions, so it climbs back as traffic needs it and stays where it
-// is when traffic is light.
+// last decrease takes half the deadline or more, the store (or the server)
+// is falling behind, and the limit drops by a fifth: fewer decisions at
+// once get their signals in time while the rest are shed without a round
+// trip, instead of every decision waiting out the deadline and degrading
+// anyway. Half the deadline, not all of it, leaves room for the spread of a
+// loaded store's latency, so the decisions let in rarely miss it; past the
+// store's capacity, fewer at once does not lower the rate it serves, only
+// how long each waits. Decreasing once per round, rather than for every
+// slow decision, keeps the burst of timeouts one stall causes from
+// collapsing the limit. While at least half the slots are busy, each
+// decision that finishes in time with its signals raises the limit by
+// 1/limit, about one per limit's worth of decisions, so it climbs back as
+// traffic needs it and stays where it is when traffic is light.
 //
 // A static limit is a backstop for memory and goroutines. It sheds only
 // when the slots are full, and the right number depends on how fast the
@@ -299,7 +302,7 @@ func (s *Server) outcomeOf(d decision.Decision, err error) outcome {
 	switch {
 	case err != nil:
 		return outcomeNone
-	case time.Duration(d.LatencyMicros)*time.Microsecond >= s.deadline:
+	case time.Duration(d.LatencyMicros)*time.Microsecond >= s.deadline/2:
 		return outcomeSlow
 	case d.Degraded:
 		return outcomeNone

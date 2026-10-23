@@ -188,11 +188,13 @@ and the expected matches, so a rule change comes with a test like code does.
    which takes the clock's. Replays trust event times.
 2. `Observe` signals under the configured deadline (default 10 ms). On error,
    mark the decision degraded and continue with what was returned. The
-   store calls go through a circuit breaker: after a run of failures or
-   deadline misses (20 by default) it opens, and for a cooldown decisions
-   skip the store and are degraded at once, the same decision a deadline
-   miss gives, instead of each one waiting out the deadline; then a few
-   probes reach the store, and the breaker closes when they all succeed.
+   store calls go through a circuit breaker: once they have failed or missed
+   the deadline for half a second with none succeeding, it opens, and for a
+   cooldown decisions skip the store and are degraded at once, the same
+   decision a deadline miss gives, instead of each one waiting out the
+   deadline; then a few probes reach the store, and the breaker closes when
+   they all succeed. The half second tells an outage from an overload, which
+   the HTTP layer's adaptive limit ends sooner.
 3. Evaluate every rule. A matching enforced rule contributes its action; a
    matching shadow rule is recorded in `Shadow`. An evaluation error follows
    `on_error`: open skips the rule, closed counts it as matched (`Errored`):
@@ -294,7 +296,7 @@ scanning routes, which authenticate by signature.
 
 Admission control bounds the decisions in flight on `/v1/decide` and
 `/v1/events`, with a limit that adapts to how fast decisions finish (AIMD:
-it drops when decisions take the whole deadline). A request that finds no
+it drops when decisions take half the deadline). A request that finds no
 slot within a short wait is shed to `DecideWithoutStore`: a degraded
 decision, the fail-safe answer before a send, rather than an error that
 would stop good senders or come back as retries. Feedback and key_leak

@@ -31,8 +31,8 @@ server:
   # feedback requests). A request over the limit waits up to inflight_wait,
   # then is shed: decided at once without the store, degraded, or for
   # feedback and key_leak events, answered 503 with Retry-After. adaptive
-  # lowers the limit while decisions run out of engine.deadline; static
-  # keeps it at max_inflight.
+  # lowers the limit while decisions take half of engine.deadline or more;
+  # static keeps it at max_inflight.
   max_inflight: 256
   inflight_wait: 2ms
   inflight_limit: adaptive
@@ -94,11 +94,13 @@ engine:
   # rejected (168h is the longest counter window).
   max_future_skew: 5s
   max_event_age: 168h
-  # When this many store calls in a row fail or miss the deadline, decide
-  # without the store for cooldown, then let probes through to see whether
-  # it is back.
+  # When store calls keep failing or missing the deadline for
+  # failure_window, none succeeding, and at least failure_threshold of them,
+  # decide without the store for cooldown, then let probes through to see
+  # whether it is back.
   breaker:
     failure_threshold: 20
+    failure_window: 500ms
     cooldown: 2s
     probes: 5
 

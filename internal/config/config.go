@@ -210,9 +210,12 @@ type Engine struct {
 // Breaker configures the store's circuit breaker; see
 // engine.BreakerOptions.
 type Breaker struct {
-	// FailureThreshold is how many store calls in a row must fail or miss
-	// the deadline to open the breaker. Default 20.
+	// FailureThreshold is the fewest store calls in a row that must fail or
+	// miss the deadline to open the breaker. Default 20.
 	FailureThreshold int `yaml:"failure_threshold"`
+	// FailureWindow is how long they must keep failing, with none
+	// succeeding, to open it. Default 500ms.
+	FailureWindow time.Duration `yaml:"failure_window"`
 	// Cooldown is how long the breaker stays open, deciding without the
 	// store, before it probes the store. Default 2s.
 	Cooldown time.Duration `yaml:"cooldown"`
@@ -223,7 +226,7 @@ type Breaker struct {
 
 // Options returns the engine's breaker options.
 func (b Breaker) Options() engine.BreakerOptions {
-	return engine.BreakerOptions{Failures: b.FailureThreshold, Cooldown: b.Cooldown, Probes: b.Probes}
+	return engine.BreakerOptions{Failures: b.FailureThreshold, Window: b.FailureWindow, Cooldown: b.Cooldown, Probes: b.Probes}
 }
 
 // Gate is the precision gate a rule must clear before it enforces.
@@ -437,6 +440,9 @@ func (c *Config) applyDefaults(set func(path string) bool) {
 	}
 	if c.Engine.Breaker.FailureThreshold == 0 {
 		c.Engine.Breaker.FailureThreshold = engine.DefaultBreakerFailures
+	}
+	if c.Engine.Breaker.FailureWindow == 0 {
+		c.Engine.Breaker.FailureWindow = engine.DefaultBreakerWindow
 	}
 	if c.Engine.Breaker.Cooldown == 0 {
 		c.Engine.Breaker.Cooldown = engine.DefaultBreakerCooldown

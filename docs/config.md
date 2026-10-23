@@ -79,7 +79,7 @@ is logged or dumped. `config check` shows URLs without their passwords.
 | `drain_delay` | `5s` | how long the server keeps serving after SIGTERM or SIGINT, reporting not ready on `/readyz`, before the shutdown starts. `0s` turns it off |
 | `max_inflight` | `256` | most decisions in flight at once on `/v1/decide` and `/v1/events` together, and apart, most requests on the feedback routes; see [admission](#admission) |
 | `inflight_wait` | `2ms` | how long a request over the limit waits for a slot before it is shed. `0s` sheds at once |
-| `inflight_limit` | `adaptive` | `adaptive`: the decision limit drops while decisions take the whole `engine.deadline` and climbs back as they speed up, never above `max_inflight`. `static` keeps it at `max_inflight` |
+| `inflight_limit` | `adaptive` | `adaptive`: the decision limit drops while decisions take half of `engine.deadline` or more and climbs back as they speed up, never above `max_inflight`. `static` keeps it at `max_inflight` |
 
 Catraca serves plain HTTP. Put it behind TLS (a load balancer, an ingress or
 a reverse proxy) when traffic leaves the host or a private network.
@@ -137,18 +137,21 @@ event is answered `503 overloaded` and a `key_leak` too, both with
 
 With `inflight_limit: adaptive`, the default, the limit starts at
 `max_inflight`, so nothing is shed while decisions are fast. When a
-decision takes the whole deadline, Redis (or the server) is not keeping up,
-and the limit drops by a fifth, at most once per round of decisions so that
-one stall does not collapse it. While at least half the slots are busy,
-each decision that finishes in time with its signals raises it by about one
-per limit's worth of decisions. Past Redis's capacity, the decisions let in
-keep getting their signals in time and the rest are shed without a round
-trip, where without a limit all of them would degrade;
-[benchmarks](benchmark.md#overload-and-outages) has the numbers. Each
-instance finds its own limit, so instances sharing a Redis share it out
-between them. A `static` limit sheds only once `max_inflight` decisions are
-in flight: it bounds memory and goroutines, but the number that protects
-Redis depends on how fast it is and how many instances share it.
+decision takes half the deadline or more, Redis (or the server) is falling
+behind, and the limit drops by a fifth, at most once per round of decisions
+so that one stall does not collapse it. Half the deadline, not all of it,
+leaves room for the spread of a loaded Redis's latency, so the decisions let
+in rarely miss the deadline. While at least half the slots are busy, each
+decision that finishes in time with its signals raises the limit by about
+one per limit's worth of decisions. Past Redis's capacity, the decisions let
+in keep getting their signals in time and the rest are shed without a round
+trip, where without a limit nearly all of them would wait out the deadline
+and degrade; [benchmarks](benchmark.md#overload-and-outages) has the
+numbers. Each instance finds its own limit, so instances sharing a Redis
+share it out between them. A `static` limit sheds only once `max_inflight`
+decisions are in flight: it bounds memory and goroutines, but the number
+that protects Redis depends on how fast it is and how many instances share
+it.
 
 The feedback routes have `max_inflight` slots of their own, never adaptive,
 so a burst of sends never sheds feedback. Beyond them a request is answered
@@ -316,7 +319,8 @@ them and keeps its one connection.
 | `deadline` | `10ms` | time budget for the signal lookup of one decision. When it runs out, the decision is made without the missing signals and marked `degraded`; each rule's `on_error` decides what that means. A `key_leak` event's write of the leak gets the same budget first, and the event answers `503` when it runs out, so the platform sends it again |
 | `max_future_skew` | `5s` | how far ahead of Catraca's clock an event's `time` may be. A later time is replaced by the clock's, since an event cannot come from the future and, counted there, would empty the windows it touches until the clock caught up. Keep it well under a minute, the shortest window |
 | `max_event_age` | `168h` | how far behind Catraca's clock an event's `time` may be. An older event is answered `400 invalid_event`, and the feedback endpoints acknowledge it so the provider does not retry; a `key_leak` takes the clock's time instead. The default is the longest counter window, so nothing a counter could still use is refused. A lower value also stops late feedback from counting; a higher one lets an event move an account's first-seen time further back |
-| `breaker.failure_threshold` | `20` | store calls in a row that fail or miss `deadline` before the store breaker opens |
+| `breaker.failure_threshold` | `20` | the fewest store calls in a row that must fail or miss `deadline` for the store breaker to open |
+| `breaker.failure_window` | `500ms` | how long they must keep failing, with none succeeding, for it to open |
 | `breaker.cooldown` | `2s` | how long the breaker stays open, deciding without the store, before it probes the store |
 | `breaker.probes` | `5` | decisions the half-open breaker lets reach the store: when they all succeed it closes, and when one fails it opens for another `cooldown` |
 
@@ -326,22 +330,31 @@ ignores them, since it decides historical events. See
 
 **The store breaker.** With Redis down or stalled, every decision would
 still wait out its deadline before degrading, and send another round trip
-to a Redis that is struggling. After `breaker.failure_threshold` store
-calls in a row fail or miss the deadline, the breaker opens: for
+to a Redis that is struggling. Once store calls have failed or missed the
+deadline for `breaker.failure_window`, none succeeding, and at least
+`breaker.failure_threshold` of them, the breaker opens: for
 `breaker.cooldown`, decisions skip Redis and are degraded at once, the same
 decision a deadline miss gives, and `key_leak` events answer `503` with
 `Retry-After` at once (the server still blocks the key from memory). Then
 `breaker.probes` decisions go to Redis; when they all succeed the breaker
-closes, and otherwise it opens for another cooldown. The default threshold
-lets the deadline absorb a stall of a few milliseconds and opens within a
-few dozen milliseconds of an outage at a thousand decisions a second; the
-cooldown is short because a probe costs a few decisions a deadline each,
-while a degraded second costs detection. The breaker logs each change of
-state (`store breaker opened`, `half-open`, `closed`, with how long it was
-open) and reports it in `catraca_store_breaker_state`,
-`catraca_store_breaker_transitions_total` and
-`catraca_short_circuited_decisions_total`. The memory store does not fail,
-so its breaker stays closed.
+closes, and otherwise it opens for another cooldown.
+
+The window is what tells an outage from an overload. An overload makes
+decisions miss the deadline in bursts too, and a count alone would open
+the breaker within milliseconds of one, cutting every decision off from
+Redis for the cooldown; but the [adaptive limit](#admission) brings an
+overload under control within a few rounds of the deadline, and calls
+succeed again, while in an outage none does. During the window an outage
+holds the decisions let in for the deadline at most, and the adaptive limit
+sheds most of the others. The threshold keeps a few failures spread over a
+quiet period from opening it. The cooldown is short because a probe costs a
+few decisions a deadline each, while a degraded second costs detection; it
+is also how long the breaker may keep deciding without Redis after Redis is
+back. The breaker logs each change of state (`store breaker opened`,
+`half-open`, `closed`, with how long it was open) and reports it in
+`catraca_store_breaker_state`, `catraca_store_breaker_transitions_total`
+and `catraca_short_circuited_decisions_total`. The memory store does not
+fail, so its breaker stays closed.
 
 ### gate
 
