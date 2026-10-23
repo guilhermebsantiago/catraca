@@ -151,6 +151,8 @@ func TestDefaults(t *testing.T) {
 		{"engine.max_event_age", cfg.Engine.MaxEventAge, 168 * time.Hour},
 		{"gate.min_labeled", cfg.Gate.MinLabeled, 30},
 		{"gate.min_precision", cfg.Gate.MinPrecision, 0.9},
+		{"secret_scanning.github.max_attempts", cfg.SecretScanning.GitHub.MaxAttempts, 1000},
+		{"secret_scanning.github.max_age", cfg.SecretScanning.GitHub.MaxAge, 24 * time.Hour},
 		{"logging.level", cfg.Logging.Level, "info"},
 		{"logging.format", cfg.Logging.Format, "json"},
 		{"slog level", cfg.Logging.SlogLevel(), slog.LevelInfo},
@@ -235,6 +237,8 @@ secret_scanning:
     feedback: true
     github_token: ghp_x
     keys_url: http://127.0.0.1:1/keys
+    max_attempts: 50
+    max_age: 72h
 logging:
   level: DEBUG
   format: text
@@ -290,7 +294,8 @@ logging:
 		t.Errorf("feedback = %#v", cfg.Feedback)
 	}
 	gh := cfg.SecretScanning.GitHub
-	if !gh.Enabled || !gh.Feedback || !gh.Resolver.SendRawToken || gh.KeysURL != "http://127.0.0.1:1/keys" || gh.GitHubToken.Value() != "ghp_x" {
+	if !gh.Enabled || !gh.Feedback || !gh.Resolver.SendRawToken || gh.KeysURL != "http://127.0.0.1:1/keys" || gh.GitHubToken.Value() != "ghp_x" ||
+		gh.MaxAttempts != 50 || gh.MaxAge != 72*time.Hour {
 		t.Errorf("github = %#v", gh)
 	}
 	if cfg.Logging.SlogLevel() != slog.LevelDebug {
@@ -557,6 +562,8 @@ func TestValidation(t *testing.T) {
 		{"github resolver secret", "secret_scanning: {github: {enabled: true, resolver: {url: 'https://r'}}}", "secret_scanning.github.resolver.secret: is required"},
 		{"github raw token", "secret_scanning: {github: {enabled: true, resolver: {url: 'http://r', secret: " + testSecret + ", send_raw_token: true}}}", "secret_scanning.github.resolver.send_raw_token: sends live credentials, so the resolver URL must be https"},
 		{"github keys url", "secret_scanning: {github: {enabled: true, resolver: {url: 'https://r', secret: " + testSecret + "}, keys_url: nope}}", "secret_scanning.github.keys_url: want an absolute http or https URL"},
+		{"github max attempts", "secret_scanning: {github: {max_attempts: 0}}", "secret_scanning.github.max_attempts: must be at least 1, got 0"},
+		{"github max age", "secret_scanning: {github: {max_age: 0s}}", "secret_scanning.github.max_age: must be a positive duration"},
 		{"log level", "logging: {level: loud}", `logging.level: want debug, info, warn or error, got "loud"`},
 		{"log format", "logging: {format: xml}", `logging.format: want json or text, got "xml"`},
 	}

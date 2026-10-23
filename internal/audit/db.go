@@ -16,8 +16,8 @@ import (
 	_ "modernc.org/sqlite"             // registers the "sqlite" database/sql driver
 )
 
-// DB is an audit database on SQLite or Postgres. It implements Store and
-// Outbox. It is safe for concurrent use.
+// DB is an audit database on SQLite or Postgres. It implements Store, Outbox
+// and LeakReports. It is safe for concurrent use.
 type DB struct {
 	db      *sql.DB
 	dialect dialect

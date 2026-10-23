@@ -11,10 +11,12 @@ import (
 	"net/http/httptest"
 	"strconv"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
 
+	"github.com/guilhermebsantiago/catraca/internal/audit"
 	"github.com/guilhermebsantiago/catraca/internal/decision"
 	"github.com/guilhermebsantiago/catraca/internal/event"
 )
@@ -25,10 +27,11 @@ func TestBatchBecomesKeyLeakEvents(t *testing.T) {
 	dec := &recorder{}
 	res := &resolver{keys: map[string]Key{"acme_live_1": {APIKeyID: "key_1", AccountID: "acct_1"}}}
 	var out outcomes
-	h := newTestHandler(t, Config{Decider: dec, Resolver: res, KeysURL: keys.URL, OnOutcome: out.add})
+	h, db := newTestHandler(t, Config{Decider: dec, Resolver: res, KeysURL: keys.URL, OnOutcome: out.add})
 
+	const url = "https://github.com/octo/repo/blob/abc/config.yml"
 	body := batch(t,
-		match{Token: "acme_live_1", Type: "acme_api_key", URL: "https://github.com/octo/repo/blob/abc/config.yml", Source: "content"},
+		match{Token: "acme_live_1", Type: "acme_api_key", URL: url, Source: "content"},
 		match{Token: "acme_live_unknown", Type: "acme_api_key", Source: "commit"},
 	)
 	rec := send(t, h, key, body)
@@ -38,7 +41,7 @@ func TestBatchBecomesKeyLeakEvents(t *testing.T) {
 	if strings.TrimSpace(rec.Body.String()) != "[]" {
 		t.Errorf("body %s, want an empty feedback array", rec.Body)
 	}
-	shutdown(t, h)
+	settled(t, db)
 
 	evs := dec.got()
 	if len(evs) != 1 {
@@ -48,26 +51,35 @@ func TestBatchBecomesKeyLeakEvents(t *testing.T) {
 	if err := ev.Validate(); err != nil {
 		t.Fatal(err)
 	}
-	if ev.Type != event.KeyLeak || ev.APIKeyID != "key_1" || ev.AccountID != "acct_1" || ev.Time.IsZero() {
+	leaked := stored(t, db, "acme_live_1", "acme_api_key", "content", url)
+	if ev.Type != event.KeyLeak || ev.APIKeyID != "key_1" || ev.AccountID != "acct_1" || !ev.Time.Equal(leaked.ReceivedAt) ||
+		ev.ID != "ghss_"+leaked.Key[:32] {
 		t.Errorf("event %+v", ev)
 	}
-	if ev.Leak == nil || ev.Leak.Source != "github:content" || ev.Leak.URL != "https://github.com/octo/repo/blob/abc/config.yml" {
+	if ev.Leak == nil || ev.Leak.Source != "github:content" || ev.Leak.URL != url {
 		t.Errorf("leak %+v", ev.Leak)
 	}
 	if ev.Attributes["secret_type"] != "acme_api_key" {
 		t.Errorf("attributes %v", ev.Attributes)
+	}
+	if leaked.Status != audit.LeakReportDone || leaked.Outcome != "leaked" || leaked.DecisionID != "dec_"+ev.ID ||
+		leaked.APIKeyID != "key_1" || leaked.SealedToken != "" {
+		t.Errorf("leaked report %+v", leaked)
+	}
+	if r := stored(t, db, "acme_live_unknown", "acme_api_key", "commit", ""); r.Status != audit.LeakReportDone || r.Outcome != "not_found" {
+		t.Errorf("unknown report %+v", r)
 	}
 	seen := res.seen()
 	if len(seen) != 2 {
 		t.Fatalf("resolver saw %d tokens", len(seen))
 	}
 	for _, tok := range seen {
-		if tok.SHA256 != hashOf(tok.Raw) {
-			t.Errorf("token %s: sha256 %s, want %s", tok, tok.SHA256, hashOf(tok.Raw))
+		if tok.Raw != "" {
+			t.Errorf("token %s: the resolver got the raw token without RawTokenSecret", tok)
 		}
 	}
 	if out.count(OutcomeAccepted) != 1 || out.count(OutcomeLeaked) != 1 || out.count(OutcomeNotFound) != 1 {
-		t.Errorf("outcomes %v", out.n)
+		t.Errorf("outcomes %v", &out)
 	}
 }
 
@@ -87,18 +99,19 @@ func TestGitHubDocumentedSignature(t *testing.T) {
 	}))
 	defer srv.Close()
 	res := &resolver{}
-	h := newTestHandler(t, Config{Resolver: res, KeysURL: srv.URL})
+	h, db := newTestHandler(t, Config{Resolver: res, KeysURL: srv.URL})
 
 	if rec := sendWith(t, h, []byte(payload), keyID, sig); rec.Code != http.StatusAccepted {
 		t.Fatalf("status %d, body %s", rec.Code, rec.Body)
 	}
-	shutdown(t, h)
+	settled(t, db)
 	seen := res.seen()
-	if len(seen) != 1 || seen[0].Raw != "some_token" || seen[0].Type != "some_type" || seen[0].Source != "commit" || seen[0].URL != "https://example.com/base-repo-url/" {
+	if len(seen) != 1 || seen[0].SHA256 != hashOf("some_token") || seen[0].Type != "some_type" || seen[0].Source != "commit" ||
+		seen[0].URL != "https://example.com/base-repo-url/" {
 		t.Fatalf("resolver saw %+v", seen)
 	}
 
-	h2 := newTestHandler(t, Config{Resolver: &resolver{}, KeysURL: srv.URL})
+	h2, _ := newTestHandler(t, Config{Resolver: &resolver{}, KeysURL: srv.URL})
 	if rec := sendWith(t, h2, []byte(payload+"\n"), keyID, sig); rec.Code != http.StatusUnauthorized {
 		t.Errorf("re-serialized payload: status %d, want 401", rec.Code)
 	}
@@ -128,7 +141,7 @@ func TestRejectsInvalidSignatures(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			res := &resolver{}
 			var out outcomes
-			h := newTestHandler(t, Config{Resolver: res, KeysURL: keys.URL, OnOutcome: out.add})
+			h, db := newTestHandler(t, Config{Resolver: res, KeysURL: keys.URL, OnOutcome: out.add})
 			rec := sendWith(t, h, tt.body, tt.keyID, tt.sig)
 			if rec.Code != http.StatusUnauthorized {
 				t.Fatalf("status %d, want 401", rec.Code)
@@ -136,6 +149,9 @@ func TestRejectsInvalidSignatures(t *testing.T) {
 			shutdown(t, h)
 			if len(res.seen()) != 0 || out.count(OutcomeInvalidSignature) != 1 {
 				t.Error("a forged batch was processed")
+			}
+			if rs, _ := db.ListLeakReports(context.Background(), audit.LeakReportFilter{}); len(rs) != 0 {
+				t.Errorf("a forged batch was stored: %+v", rs)
 			}
 		})
 	}
@@ -145,7 +161,7 @@ func TestRefreshesKeysOnUnknownKeyID(t *testing.T) {
 	old := newTestKey(t, "old")
 	rotated := newTestKey(t, "rotated")
 	keys := newKeysServer(t, old)
-	h := newTestHandler(t, Config{Resolver: &resolver{}, KeysURL: keys.URL})
+	h, _ := newTestHandler(t, Config{Resolver: &resolver{}, KeysURL: keys.URL})
 	body := batch(t, match{Token: "t", Type: "acme_api_key"})
 
 	if rec := send(t, h, old, body); rec.Code != http.StatusAccepted {
@@ -175,7 +191,7 @@ func TestRefreshesKeysOnUnknownKeyID(t *testing.T) {
 func TestUnknownKeyRefreshIsRateLimited(t *testing.T) {
 	known := newTestKey(t, "known")
 	keys := newKeysServer(t, known)
-	h := newTestHandler(t, Config{Resolver: &resolver{}, KeysURL: keys.URL})
+	h, _ := newTestHandler(t, Config{Resolver: &resolver{}, KeysURL: keys.URL})
 	body := batch(t, match{Token: "t", Type: "acme_api_key"})
 	if rec := send(t, h, known, body); rec.Code != http.StatusAccepted {
 		t.Fatalf("status %d", rec.Code)
@@ -196,7 +212,7 @@ func TestKeysUnavailable(t *testing.T) {
 	keys := newKeysServer(t, key)
 	keys.setStatus(http.StatusInternalServerError)
 	var out outcomes
-	h := newTestHandler(t, Config{Resolver: &resolver{}, KeysURL: keys.URL, OnOutcome: out.add})
+	h, _ := newTestHandler(t, Config{Resolver: &resolver{}, KeysURL: keys.URL, OnOutcome: out.add})
 	rec := send(t, h, key, batch(t, match{Token: "t"}))
 	if rec.Code != http.StatusServiceUnavailable || rec.Header().Get("Retry-After") == "" {
 		t.Fatalf("status %d, Retry-After %q; want 503 with Retry-After", rec.Code, rec.Header().Get("Retry-After"))
@@ -205,7 +221,7 @@ func TestKeysUnavailable(t *testing.T) {
 		t.Errorf("response leaks the upstream error: %s", rec.Body)
 	}
 	if out.count(OutcomeKeysUnavailable) != 1 {
-		t.Errorf("outcomes %v", out.n)
+		t.Errorf("outcomes %v", &out)
 	}
 }
 
@@ -214,7 +230,7 @@ func TestMalformedBatch(t *testing.T) {
 	keys := newKeysServer(t, key)
 	for _, body := range []string{`not json`, `{"token":"t"}`, `[{"token":{"nested":true}}]`} {
 		res := &resolver{}
-		h := newTestHandler(t, Config{Resolver: res, KeysURL: keys.URL})
+		h, _ := newTestHandler(t, Config{Resolver: res, KeysURL: keys.URL})
 		if rec := send(t, h, key, []byte(body)); rec.Code != http.StatusBadRequest {
 			t.Errorf("%s: status %d, want 400", body, rec.Code)
 		}
@@ -228,8 +244,9 @@ func TestMalformedBatch(t *testing.T) {
 func TestBatchEdgeCases(t *testing.T) {
 	key := newTestKey(t, "k1")
 	keys := newKeysServer(t, key)
-	res := &resolver{}
-	h := newTestHandler(t, Config{Resolver: res, KeysURL: keys.URL})
+	res := &resolver{keys: map[string]Key{"odd": {APIKeyID: "key_odd"}}}
+	dec := &recorder{}
+	h, db := newTestHandler(t, Config{Decider: dec, Resolver: res, KeysURL: keys.URL})
 
 	if rec := send(t, h, key, []byte(`[]`)); rec.Code != http.StatusAccepted {
 		t.Errorf("empty batch: status %d", rec.Code)
@@ -238,16 +255,29 @@ func TestBatchEdgeCases(t *testing.T) {
 	if rec := send(t, h, key, []byte(`[{"token":12345,"type":"pin"},{"token":"","type":"x"}]`)); rec.Code != http.StatusAccepted {
 		t.Errorf("status %d", rec.Code)
 	}
-	shutdown(t, h)
-	if seen := res.seen(); len(seen) != 1 || seen[0].Raw != "12345" {
-		t.Errorf("resolver saw %+v", seen)
+	// A NUL byte or an oversized value would make the event invalid, and
+	// refuse its report at every attempt.
+	odd := fmt.Sprintf(`[{"token":"odd","type":%q,"url":"https://github.com/\u0000octo","source":"commit"}]`, strings.Repeat("t", 300))
+	if rec := send(t, h, key, []byte(odd)); rec.Code != http.StatusAccepted {
+		t.Errorf("status %d", rec.Code)
+	}
+	settled(t, db)
+	if seen := res.seen(); len(seen) != 2 || res.callsFor("12345") != 1 {
+		t.Errorf("resolver saw %+v, want the numeric token and the odd one", seen)
+	}
+	evs := dec.got()
+	if len(evs) != 1 || evs[0].Leak.URL != "https://github.com/octo" || len(evs[0].Attributes["secret_type"]) != event.MaxIDBytes {
+		t.Fatalf("events %+v", evs)
+	}
+	if err := evs[0].Validate(); err != nil {
+		t.Error(err)
 	}
 }
 
 func TestRequestLimits(t *testing.T) {
 	key := newTestKey(t, "k1")
 	keys := newKeysServer(t, key)
-	h := newTestHandler(t, Config{Resolver: &resolver{}, KeysURL: keys.URL, MaxBodyBytes: 64})
+	h, _ := newTestHandler(t, Config{Resolver: &resolver{}, KeysURL: keys.URL, MaxBodyBytes: 64})
 
 	if rec := send(t, h, key, batch(t, match{Token: strings.Repeat("x", 100)})); rec.Code != http.StatusRequestEntityTooLarge {
 		t.Errorf("large body: status %d, want 413", rec.Code)
@@ -266,14 +296,28 @@ type feedbackJSON struct {
 	Label     string  `json:"label"`
 }
 
+func feedbackOf(t *testing.T, rec *httptest.ResponseRecorder) []feedbackJSON {
+	t.Helper()
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status %d, body %s", rec.Code, rec.Body)
+	}
+	var got []feedbackJSON
+	if err := json.Unmarshal(rec.Body.Bytes(), &got); err != nil {
+		t.Fatal(err)
+	}
+	return got
+}
+
 func TestFeedback(t *testing.T) {
 	key := newTestKey(t, "k1")
 	keys := newKeysServer(t, key)
 	res := &resolver{
 		keys:     map[string]Key{"real": {APIKeyID: "key_1", AccountID: "acct_1"}},
-		failures: map[string]int{"flaky": attempts},
+		failures: map[string]int{"flaky": 1000},
 	}
-	h := newTestHandler(t, Config{Resolver: res, KeysURL: keys.URL, Feedback: true})
+	// The flaky token dies at its second attempt, which ends the wait for
+	// it well before the feedback timeout.
+	h, _ := newTestHandler(t, Config{Resolver: res, KeysURL: keys.URL, Feedback: true, MaxAttempts: 2, FeedbackTimeout: time.Minute})
 
 	body := batch(t,
 		match{Token: "real", Type: "acme_api_key", Source: "commit"},
@@ -281,21 +325,14 @@ func TestFeedback(t *testing.T) {
 		match{Token: "flaky", Type: "acme_api_key", Source: "content"},
 	)
 	rec := send(t, h, key, body)
-	if rec.Code != http.StatusOK {
-		t.Fatalf("status %d, body %s", rec.Code, rec.Body)
-	}
 	if strings.Contains(rec.Body.String(), `"real"`) || strings.Contains(rec.Body.String(), "token_raw") {
 		t.Errorf("feedback carries a raw token: %s", rec.Body)
-	}
-	var got []feedbackJSON
-	if err := json.Unmarshal(rec.Body.Bytes(), &got); err != nil {
-		t.Fatal(err)
 	}
 	want := []feedbackJSON{
 		{TokenHash: hashOf("real"), TokenType: "acme_api_key", Label: "true_positive"},
 		{TokenHash: hashOf("fake"), TokenType: "acme_api_key", Label: "false_positive"},
 	}
-	if fmt.Sprint(got) != fmt.Sprint(want) {
+	if got := feedbackOf(t, rec); fmt.Sprint(got) != fmt.Sprint(want) {
 		t.Errorf("feedback\n%+v\nwant\n%+v", got, want)
 	}
 }
@@ -306,33 +343,26 @@ func TestFeedbackDeadline(t *testing.T) {
 	dec := &recorder{}
 	res := &slowResolver{
 		resolver: resolver{keys: map[string]Key{"fast": {APIKeyID: "key_fast"}, "slow": {APIKeyID: "key_slow"}}},
-		slow:     "slow",
+		slow:     hashOf("slow"),
 		release:  make(chan struct{}),
 	}
-	h := newTestHandler(t, Config{Decider: dec, Resolver: res, KeysURL: keys.URL, Feedback: true, FeedbackTimeout: 200 * time.Millisecond})
+	h, db := newTestHandler(t, Config{Decider: dec, Resolver: res, KeysURL: keys.URL, Feedback: true,
+		FeedbackTimeout: 2 * time.Second, ResolveTimeout: time.Minute})
 
-	start := time.Now()
-	rec := send(t, h, key, batch(t, match{Token: "fast", Type: "t"}, match{Token: "slow", Type: "t"}))
-	if elapsed := time.Since(start); elapsed > 5*time.Second {
-		t.Fatalf("answered after %v, want about the feedback timeout", elapsed)
-	}
-	var got []feedbackJSON
-	if err := json.Unmarshal(rec.Body.Bytes(), &got); err != nil {
-		t.Fatal(err)
-	}
+	got := feedbackOf(t, send(t, h, key, batch(t, match{Token: "fast", Type: "t"}, match{Token: "slow", Type: "t"})))
 	if len(got) != 1 || got[0].TokenHash != hashOf("fast") {
 		t.Fatalf("feedback %+v, want only the token resolved in time", got)
 	}
 
 	// The slow token still finishes after the answer.
 	close(res.release)
-	shutdown(t, h)
+	settled(t, db)
 	if n := len(dec.got()); n != 2 {
 		t.Errorf("decided %d leaks, want 2", n)
 	}
 }
 
-// slowResolver blocks one token until release is closed.
+// slowResolver blocks the token with hash slow until release is closed.
 type slowResolver struct {
 	resolver
 	slow    string
@@ -340,7 +370,7 @@ type slowResolver struct {
 }
 
 func (r *slowResolver) Resolve(ctx context.Context, t Token) (Key, error) {
-	if t.Raw == r.slow {
+	if t.SHA256 == r.slow {
 		select {
 		case <-r.release:
 		case <-ctx.Done():
@@ -350,8 +380,8 @@ func (r *slowResolver) Resolve(ctx context.Context, t Token) (Key, error) {
 	return r.resolver.Resolve(ctx, t)
 }
 
-func TestLargeBatchAnswersBeforeProcessing(t *testing.T) {
-	const n = 5000
+func TestLargeBatchIsStoredBeforeTheAnswer(t *testing.T) {
+	const n = 1000
 	const workers = 4
 	key := newTestKey(t, "k1")
 	keys := newKeysServer(t, key)
@@ -366,15 +396,20 @@ func TestLargeBatchAnswersBeforeProcessing(t *testing.T) {
 		}
 	}
 	var out outcomes
-	h := newTestHandler(t, Config{Decider: dec, Resolver: res, KeysURL: keys.URL, Workers: workers, ResolveTimeout: time.Minute, OnOutcome: out.add})
+	h, db := newTestHandler(t, Config{Decider: dec, Resolver: res, KeysURL: keys.URL, Workers: workers,
+		ResolveTimeout: time.Minute, OnOutcome: out.add})
 
-	// The resolver is blocked, so the answer cannot wait for it.
+	// The resolver is blocked, so the answer cannot wait for it, and every
+	// report is stored by the time it comes.
 	rec := send(t, h, key, batch(t, matches...))
 	if rec.Code != http.StatusAccepted {
 		t.Fatalf("status %d", rec.Code)
 	}
+	if s, err := db.LeakReportStats(context.Background()); err != nil || s.Pending != n {
+		t.Fatalf("stats after the answer = %+v, %v; want %d pending", s, err, n)
+	}
 	close(res.gate)
-	shutdown(t, h)
+	settled(t, db)
 
 	if got := len(res.seen()); got != n {
 		t.Errorf("resolved %d tokens, want %d", got, n)
@@ -386,45 +421,42 @@ func TestLargeBatchAnswersBeforeProcessing(t *testing.T) {
 		t.Errorf("%d resolves ran at once, want at most %d", res.maxAlive, workers)
 	}
 	if out.count(OutcomeLeaked)+out.count(OutcomeNotFound) != n {
-		t.Errorf("outcomes %v", out.n)
+		t.Errorf("outcomes %v", &out)
 	}
 }
 
-func TestOverloadedQueue(t *testing.T) {
+// failingReports is a queue that cannot store anything, like an audit
+// database that is not open yet.
+type failingReports struct{ audit.LeakReports }
+
+func (failingReports) AddLeakReports(context.Context, []audit.LeakReport) (int, error) {
+	return 0, errors.New("the audit database is not open yet")
+}
+
+func (failingReports) ClaimLeakReports(ctx context.Context, _ time.Time, _ int, _ time.Duration) ([]audit.LeakReport, error) {
+	<-ctx.Done()
+	return nil, ctx.Err()
+}
+
+// TestAnswers503WhenReportsCannotBeStored checks that a batch is never
+// acknowledged before its reports are stored: GitHub must send it again.
+func TestAnswers503WhenReportsCannotBeStored(t *testing.T) {
 	key := newTestKey(t, "k1")
 	keys := newKeysServer(t, key)
-	res := &resolver{gate: make(chan struct{})}
+	res := &resolver{}
 	var out outcomes
-	h := newTestHandler(t, Config{Resolver: res, KeysURL: keys.URL, Workers: 1, MaxPending: 10, ResolveTimeout: time.Minute, OnOutcome: out.add})
-	tokens := func(prefix string, n int) []byte {
-		ms := make([]match, n)
-		for i := range ms {
-			ms[i] = match{Token: prefix + strconv.Itoa(i), Type: "t"}
+	for _, feedback := range []bool{false, true} {
+		h, _ := newTestHandler(t, Config{Resolver: res, Reports: failingReports{}, KeysURL: keys.URL, Feedback: feedback, OnOutcome: out.add})
+		rec := send(t, h, key, batch(t, match{Token: "t", Type: "acme_api_key"}))
+		if rec.Code != http.StatusServiceUnavailable || rec.Header().Get("Retry-After") == "" {
+			t.Errorf("feedback %t: status %d, Retry-After %q; want 503 with Retry-After", feedback, rec.Code, rec.Header().Get("Retry-After"))
 		}
-		return batch(t, ms...)
+		if strings.Contains(rec.Body.String(), "not open") {
+			t.Errorf("response leaks the error: %s", rec.Body)
+		}
 	}
-
-	if rec := send(t, h, key, tokens("a", 8)); rec.Code != http.StatusAccepted {
-		t.Fatalf("first batch: status %d", rec.Code)
-	}
-	rec := send(t, h, key, tokens("b", 5))
-	if rec.Code != http.StatusServiceUnavailable || rec.Header().Get("Retry-After") == "" {
-		t.Fatalf("batch over the limit: status %d, want 503 with Retry-After", rec.Code)
-	}
-	if rec := send(t, h, key, tokens("c", 2)); rec.Code != http.StatusAccepted {
-		t.Fatalf("batch within the limit: status %d", rec.Code)
-	}
-	close(res.gate)
-	shutdown(t, h)
-	if out.count(OutcomeOverloaded) != 1 || len(res.seen()) != 10 {
-		t.Errorf("outcomes %v, resolved %d", out.n, len(res.seen()))
-	}
-
-	// With nothing pending, a batch larger than the limit is still taken:
-	// refusing it would refuse it forever.
-	h2 := newTestHandler(t, Config{Resolver: &resolver{}, KeysURL: keys.URL, MaxPending: 10})
-	if rec := send(t, h2, key, tokens("d", 25)); rec.Code != http.StatusAccepted {
-		t.Errorf("large batch on an idle handler: status %d", rec.Code)
+	if out.count(OutcomeUnavailable) != 2 || out.count(OutcomeAccepted) != 0 || len(res.seen()) != 0 {
+		t.Errorf("outcomes %v, resolver saw %d tokens", &out, len(res.seen()))
 	}
 }
 
@@ -433,7 +465,7 @@ func TestShutdown(t *testing.T) {
 	keys := newKeysServer(t, key)
 
 	t.Run("refuses new batches", func(t *testing.T) {
-		h := newTestHandler(t, Config{Resolver: &resolver{}, KeysURL: keys.URL})
+		h, _ := newTestHandler(t, Config{Resolver: &resolver{}, KeysURL: keys.URL})
 		shutdown(t, h)
 		if rec := send(t, h, key, batch(t, match{Token: "t"})); rec.Code != http.StatusServiceUnavailable {
 			t.Errorf("status %d, want 503", rec.Code)
@@ -442,24 +474,140 @@ func TestShutdown(t *testing.T) {
 
 	t.Run("aborts work when its context ends", func(t *testing.T) {
 		res := &resolver{gate: make(chan struct{})}
-		h := newTestHandler(t, Config{Resolver: res, KeysURL: keys.URL, Workers: 1, ResolveTimeout: time.Minute})
+		h, db := newTestHandler(t, Config{Resolver: res, KeysURL: keys.URL, Workers: 1, ResolveTimeout: time.Minute})
 		if rec := send(t, h, key, batch(t, match{Token: "a"}, match{Token: "b"}, match{Token: "c"})); rec.Code != http.StatusAccepted {
 			t.Fatalf("status %d", rec.Code)
 		}
-		ctx, cancel := context.WithTimeout(context.Background(), 100*time.Millisecond)
-		defer cancel()
-		if err := h.Shutdown(ctx); !errors.Is(err, context.DeadlineExceeded) {
-			t.Fatalf("Shutdown = %v, want deadline exceeded", err)
+		eventually(t, "a resolve to start", func() bool { return res.running() == 1 })
+		ctx, cancel := context.WithCancel(context.Background())
+		cancel()
+		if err := h.Shutdown(ctx); !errors.Is(err, context.Canceled) {
+			t.Fatalf("Shutdown = %v, want canceled", err)
 		}
-		// Work in flight is cancelled, queued tokens are dropped.
-		deadline := time.Now().Add(5 * time.Second)
-		for h.pending.Load() != 0 {
-			if time.Now().After(deadline) {
-				t.Fatalf("%d tokens still pending after the abort", h.pending.Load())
+		eventually(t, "the attempt to be aborted", func() bool { return res.running() == 0 })
+		// Every report is still pending: the one in flight under its lease,
+		// the others not yet tried.
+		rs, err := db.ListLeakReports(context.Background(), audit.LeakReportFilter{})
+		if err != nil {
+			t.Fatal(err)
+		}
+		attempted := 0
+		for _, r := range rs {
+			if r.Status != audit.LeakReportPending {
+				t.Errorf("report %+v, want pending", r)
 			}
-			time.Sleep(10 * time.Millisecond)
+			attempted += r.Attempts
+		}
+		if len(rs) != 3 || attempted != 1 {
+			t.Errorf("reports %+v, want 3 with one attempt among them", rs)
 		}
 	})
+}
+
+// TestRestartResumesPendingReports stops a handler in the middle of a batch
+// and starts another on the same queue, as a restart or a second instance
+// would: every report is processed exactly once.
+func TestRestartResumesPendingReports(t *testing.T) {
+	key := newTestKey(t, "k1")
+	keys := newKeysServer(t, key)
+	db := openReports(t)
+	known := map[string]Key{"real": {APIKeyID: "key_1", AccountID: "acct_1"}}
+
+	first := &resolver{keys: known, gate: make(chan struct{})}
+	firstDec := &recorder{}
+	h1, _ := newTestHandler(t, Config{Decider: firstDec, Resolver: first, Reports: db, KeysURL: keys.URL, Workers: 1, ResolveTimeout: time.Minute})
+	body := batch(t, match{Token: "real", Type: "acme_api_key", Source: "commit"}, match{Token: "fake", Type: "acme_api_key", Source: "commit"})
+	if rec := send(t, h1, key, body); rec.Code != http.StatusAccepted {
+		t.Fatalf("status %d", rec.Code)
+	}
+	// The first handler dies in the middle of an attempt, with the other
+	// report not yet claimed.
+	eventually(t, "a resolve to start", func() bool { return first.running() == 1 })
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	_ = h1.Shutdown(ctx)
+	eventually(t, "the attempt to be aborted", func() bool { return first.running() == 0 })
+
+	// The second starts after the first one's lease has ended.
+	later := time.Now().Add(time.Hour)
+	second := &resolver{keys: known}
+	secondDec := &recorder{}
+	newTestHandler(t, Config{Decider: secondDec, Resolver: second, Reports: db, KeysURL: keys.URL,
+		now: func() time.Time { return later }})
+	settled(t, db)
+
+	if second.callsFor("real") != 1 || second.callsFor("fake") != 1 {
+		t.Errorf("the second handler resolved real %d and fake %d times, want once each", second.callsFor("real"), second.callsFor("fake"))
+	}
+	if n := len(firstDec.tried()); n != 0 {
+		t.Errorf("the first handler decided %d events after it stopped", n)
+	}
+	if evs := secondDec.got(); len(evs) != 1 || evs[0].APIKeyID != "key_1" {
+		t.Errorf("events %+v, want the one leak", evs)
+	}
+	if r := stored(t, db, "real", "acme_api_key", "commit", ""); r.Status != audit.LeakReportDone || r.Outcome != "leaked" {
+		t.Errorf("real %+v", r)
+	}
+	if r := stored(t, db, "fake", "acme_api_key", "commit", ""); r.Status != audit.LeakReportDone || r.Outcome != "not_found" {
+		t.Errorf("fake %+v", r)
+	}
+}
+
+// TestDuplicateDeliveries sends the same batch several times, at once and
+// after it was processed: each report is resolved and decided once, and a
+// batch sent again is answered with the labels its reports earned.
+func TestDuplicateDeliveries(t *testing.T) {
+	key := newTestKey(t, "k1")
+	keys := newKeysServer(t, key)
+	res := &resolver{keys: map[string]Key{"real": {APIKeyID: "key_1"}}}
+	dec := &recorder{}
+	var out outcomes
+	// A delivery that arrives between a token's resolve and its decision
+	// may miss the label until the timeout; keep it short.
+	h, db := newTestHandler(t, Config{Decider: dec, Resolver: res, KeysURL: keys.URL, Feedback: true,
+		FeedbackTimeout: 2 * time.Second, OnOutcome: out.add})
+	body := batch(t,
+		match{Token: "real", Type: "acme_api_key", Source: "commit", URL: "https://github.com/a"},
+		match{Token: "fake", Type: "acme_api_key", Source: "commit", URL: "https://github.com/a"},
+	)
+
+	const deliveries = 4
+	var wg sync.WaitGroup
+	for range deliveries {
+		wg.Go(func() {
+			if rec := send(t, h, key, body); rec.Code != http.StatusOK {
+				t.Errorf("status %d", rec.Code)
+			}
+		})
+	}
+	wg.Wait()
+	settled(t, db)
+	// Once processed, a batch sent again is labeled from the queue alone.
+	want := []feedbackJSON{
+		{TokenHash: hashOf("real"), TokenType: "acme_api_key", Label: "true_positive"},
+		{TokenHash: hashOf("fake"), TokenType: "acme_api_key", Label: "false_positive"},
+	}
+	if got := feedbackOf(t, send(t, h, key, body)); fmt.Sprint(got) != fmt.Sprint(want) {
+		t.Errorf("feedback for a batch sent again\n%+v\nwant\n%+v", got, want)
+	}
+
+	if res.callsFor("real") != 1 || res.callsFor("fake") != 1 {
+		t.Errorf("resolved real %d and fake %d times, want once each", res.callsFor("real"), res.callsFor("fake"))
+	}
+	if n := len(dec.tried()); n != 1 {
+		t.Errorf("decided %d times, want once", n)
+	}
+	if out.count(OutcomeAccepted) != deliveries+1 || out.count(OutcomeDuplicate) != 2*deliveries {
+		t.Errorf("outcomes %v, want %d accepted batches and %d duplicate reports", &out, deliveries+1, 2*deliveries)
+	}
+
+	// The same token found somewhere else is another report.
+	moved := batch(t, match{Token: "real", Type: "acme_api_key", Source: "commit", URL: "https://github.com/b"})
+	send(t, h, key, moved)
+	settled(t, db)
+	if evs := dec.got(); len(evs) != 2 || evs[0].ID == evs[1].ID {
+		t.Errorf("events %+v, want a second leak with its own id", evs)
+	}
 }
 
 func TestRetriesTransientResolverErrors(t *testing.T) {
@@ -468,37 +616,86 @@ func TestRetriesTransientResolverErrors(t *testing.T) {
 	dec := &recorder{}
 	res := &resolver{
 		keys:     map[string]Key{"recovers": {APIKeyID: "key_1"}, "broken": {APIKeyID: "key_2"}},
-		failures: map[string]int{"recovers": attempts - 1, "broken": attempts},
+		failures: map[string]int{"recovers": 2, "broken": 1000},
 	}
 	var out outcomes
-	h := newTestHandler(t, Config{Decider: dec, Resolver: res, KeysURL: keys.URL, OnOutcome: out.add})
+	h, db := newTestHandler(t, Config{Decider: dec, Resolver: res, KeysURL: keys.URL, MaxAttempts: 3, OnOutcome: out.add})
 	send(t, h, key, batch(t, match{Token: "recovers"}, match{Token: "broken"}))
-	shutdown(t, h)
+	settled(t, db)
 	if evs := dec.got(); len(evs) != 1 || evs[0].APIKeyID != "key_1" {
 		t.Errorf("events %+v", evs)
 	}
-	if res.calls["broken"] != attempts || out.count(OutcomeResolveFailed) != 1 {
-		t.Errorf("broken token: %d calls, outcomes %v", res.calls["broken"], out.n)
+	if res.callsFor("recovers") != 3 || res.callsFor("broken") != 3 {
+		t.Errorf("resolved recovers %d and broken %d times, want 3 each", res.callsFor("recovers"), res.callsFor("broken"))
+	}
+	if out.count(OutcomeRetry) != 4 || out.count(OutcomeResolveFailed) != 1 || out.count(OutcomeLeaked) != 1 {
+		t.Errorf("outcomes %v", &out)
+	}
+	if r := stored(t, db, "broken", "", "", ""); r.Status != audit.LeakReportDead || r.Outcome != "resolve_failed" ||
+		r.Attempts != 3 || r.LastError != "platform unavailable" {
+		t.Errorf("broken %+v, want it dead with its error", r)
+	}
+
+	// Once the resolver is fixed, a dead report requeued by hand goes
+	// through.
+	res.setFailures("broken", 0)
+	r := stored(t, db, "broken", "", "", "")
+	if n, err := db.RequeueLeakReports(context.Background(), time.Now(), []int64{r.ID}); err != nil || n != 1 {
+		t.Fatalf("RequeueLeakReports = %d, %v", n, err)
+	}
+	eventually(t, "the requeued report to be done", func() bool {
+		return stored(t, db, "broken", "", "", "").Status == audit.LeakReportDone
+	})
+	if evs := dec.got(); len(evs) != 2 || evs[1].APIKeyID != "key_2" {
+		t.Errorf("events %+v, want the requeued leak", evs)
 	}
 }
 
-func TestDecideFailure(t *testing.T) {
+// TestRetriesDecideFailures checks that a report whose decision fails, as
+// when the store misses MarkLeaked's deadline, is retried with the same
+// event id and without resolving its token again.
+func TestRetriesDecideFailures(t *testing.T) {
+	key := newTestKey(t, "k1")
+	keys := newKeysServer(t, key)
+	res := &resolver{keys: map[string]Key{"real": {APIKeyID: "key_1", AccountID: "acct_1"}}}
+	dec := &recorder{failures: 2}
+	var out outcomes
+	h, db := newTestHandler(t, Config{Decider: dec, Resolver: res, KeysURL: keys.URL, OnOutcome: out.add})
+	send(t, h, key, batch(t, match{Token: "real", Type: "t"}))
+	settled(t, db)
+
+	tried := dec.tried()
+	if len(tried) != 3 || tried[0].ID != tried[1].ID || tried[1].ID != tried[2].ID || !strings.HasPrefix(tried[0].ID, "ghss_") {
+		t.Errorf("Decide calls %+v, want 3 with one fixed event id", tried)
+	}
+	if res.callsFor("real") != 1 {
+		t.Errorf("resolved %d times, want once: the key was kept", res.callsFor("real"))
+	}
+	if out.count(OutcomeRetry) != 2 || out.count(OutcomeLeaked) != 1 {
+		t.Errorf("outcomes %v", &out)
+	}
+}
+
+func TestDecideFailureFeedback(t *testing.T) {
 	key := newTestKey(t, "k1")
 	keys := newKeysServer(t, key)
 	var out outcomes
-	h := newTestHandler(t, Config{
+	h, db := newTestHandler(t, Config{
 		Decider:  &recorder{fail: true},
 		Resolver: &resolver{keys: map[string]Key{"real": {APIKeyID: "key_1"}}},
-		KeysURL:  keys.URL, Feedback: true, OnOutcome: out.add,
+		KeysURL:  keys.URL, Feedback: true, MaxAttempts: 2, OnOutcome: out.add,
 	})
 	rec := send(t, h, key, batch(t, match{Token: "real", Type: "t"}))
 	// The key is real even though the decision failed.
 	if !strings.Contains(rec.Body.String(), "true_positive") {
 		t.Errorf("feedback %s, want true_positive", rec.Body)
 	}
-	shutdown(t, h)
+	settled(t, db)
 	if out.count(OutcomeDecideFailed) != 1 {
-		t.Errorf("outcomes %v", out.n)
+		t.Errorf("outcomes %v", &out)
+	}
+	if r := stored(t, db, "real", "t", "", ""); r.Status != audit.LeakReportDead || r.APIKeyID != "key_1" {
+		t.Errorf("report %+v, want it dead with its key", r)
 	}
 }
 
@@ -519,18 +716,106 @@ func TestRefusedEventIsNotRetried(t *testing.T) {
 	keys := newKeysServer(t, key)
 	dec := &validatingDecider{}
 	var out outcomes
-	h := newTestHandler(t, Config{
+	h, db := newTestHandler(t, Config{
 		Decider:  dec,
 		Resolver: &resolver{keys: map[string]Key{"real": {APIKeyID: "key\x00one"}}},
 		KeysURL:  keys.URL, OnOutcome: out.add,
 	})
 	send(t, h, key, batch(t, match{Token: "real", Type: "t"}))
-	shutdown(t, h)
+	settled(t, db)
 	if n := dec.calls.Load(); n != 1 {
 		t.Errorf("Decide called %d times, want 1: a refused event is refused again", n)
 	}
-	if out.count(OutcomeDecideFailed) != 1 {
-		t.Errorf("outcomes %v", out.n)
+	if out.count(OutcomeDecideFailed) != 1 || out.count(OutcomeRetry) != 0 {
+		t.Errorf("outcomes %v", &out)
+	}
+}
+
+func TestReportAgeBoundsRetries(t *testing.T) {
+	key := newTestKey(t, "k1")
+	keys := newKeysServer(t, key)
+	res := &resolver{failures: map[string]int{"t": 1000}}
+	var out outcomes
+	h, db := newTestHandler(t, Config{Resolver: res, KeysURL: keys.URL, MaxAge: time.Nanosecond, OnOutcome: out.add})
+	send(t, h, key, batch(t, match{Token: "t"}))
+	settled(t, db)
+	if res.callsFor("t") != 1 || out.count(OutcomeResolveFailed) != 1 || out.count(OutcomeRetry) != 0 {
+		t.Errorf("resolved %d times, outcomes %v; want one attempt past the age", res.callsFor("t"), &out)
+	}
+}
+
+// TestRawTokens checks the raw token's life with RawTokenSecret: sealed in
+// the queue, handed to the resolver, forgotten once processed, and useless
+// to a handler with another secret.
+func TestRawTokens(t *testing.T) {
+	key := newTestKey(t, "k1")
+	keys := newKeysServer(t, key)
+	const secret = "resolver-secret-0123456789abcdef"
+	const raw = "acme_live_SECRET"
+
+	res := &resolver{keys: map[string]Key{raw: {APIKeyID: "key_1"}}, gate: make(chan struct{})}
+	h, db := newTestHandler(t, Config{Resolver: res, KeysURL: keys.URL, RawTokenSecret: secret, ResolveTimeout: time.Minute})
+	send(t, h, key, batch(t, match{Token: raw, Type: "t"}))
+	waiting := stored(t, db, raw, "t", "", "")
+	if waiting.SealedToken == "" || strings.Contains(waiting.SealedToken, "SECRET") {
+		t.Fatalf("sealed token %q, want it encrypted", waiting.SealedToken)
+	}
+	close(res.gate)
+	settled(t, db)
+	if seen := res.seen(); len(seen) != 1 || seen[0].Raw != raw {
+		t.Errorf("resolver saw %+v, want the raw token", seen)
+	}
+	if r := stored(t, db, raw, "t", "", ""); r.Status != audit.LeakReportDone || r.SealedToken != "" {
+		t.Errorf("report %+v, want it done and its token gone", r)
+	}
+
+	// The secret changed while a report was pending: its token is lost,
+	// and the report says so instead of resolving the hash alone.
+	other := openReports(t)
+	h1, _ := newTestHandler(t, Config{Resolver: &resolver{gate: make(chan struct{})}, Reports: other, KeysURL: keys.URL,
+		RawTokenSecret: secret, Workers: 1, ResolveTimeout: time.Minute})
+	send(t, h1, key, batch(t, match{Token: raw, Type: "t"}))
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	_ = h1.Shutdown(ctx)
+	rotated := &resolver{keys: map[string]Key{raw: {APIKeyID: "key_1"}}}
+	var out outcomes
+	newTestHandler(t, Config{Resolver: rotated, Reports: other, KeysURL: keys.URL, RawTokenSecret: "another-secret-0123456789abcdef",
+		OnOutcome: out.add, now: func() time.Time { return time.Now().Add(time.Hour) }})
+	settled(t, other)
+	if r := stored(t, other, raw, "t", "", ""); r.Status != audit.LeakReportDead || !strings.Contains(r.LastError, "cannot be decrypted") {
+		t.Errorf("report %+v, want it dead because its token cannot be decrypted", r)
+	}
+	if len(rotated.seen()) != 0 || out.count(OutcomeResolveFailed) != 1 {
+		t.Errorf("resolver saw %+v, outcomes %v", rotated.seen(), &out)
+	}
+}
+
+func TestSealer(t *testing.T) {
+	s, err := newSealer("resolver-secret-0123456789abcdef")
+	if err != nil {
+		t.Fatal(err)
+	}
+	sealed := s.seal("acme_live_SECRET", "report-1")
+	if strings.Contains(sealed, "SECRET") || !strings.HasPrefix(sealed, "v1:") || sealed == s.seal("acme_live_SECRET", "report-1") {
+		t.Errorf("sealed %q, want an encrypted, randomized v1 token", sealed)
+	}
+	if raw, err := s.open(sealed, "report-1"); err != nil || raw != "acme_live_SECRET" {
+		t.Errorf("open = %q, %v", raw, err)
+	}
+	other, _ := newSealer("another-secret-0123456789abcdef")
+	tampered := sealed[:len(sealed)-2] + "AA"
+	for name, open := range map[string]func() (string, error){
+		"another secret":     func() (string, error) { return other.open(sealed, "report-1") },
+		"another report":     func() (string, error) { return s.open(sealed, "report-2") },
+		"tampered":           func() (string, error) { return s.open(tampered, "report-1") },
+		"unknown version":    func() (string, error) { return s.open("v2:"+sealed[3:], "report-1") },
+		"not base64":         func() (string, error) { return s.open("v1:%%%", "report-1") },
+		"shorter than nonce": func() (string, error) { return s.open("v1:AAAA", "report-1") },
+	} {
+		if raw, err := open(); !errors.Is(err, errUnseal) || raw != "" {
+			t.Errorf("%s: open = %q, %v; want errUnseal", name, raw, err)
+		}
 	}
 }
 
@@ -549,10 +834,14 @@ func TestTokenNeverPrinted(t *testing.T) {
 }
 
 func TestNewValidatesConfig(t *testing.T) {
-	if _, err := New(Config{Resolver: &resolver{}}); err == nil {
+	reports := openReports(t)
+	if _, err := New(Config{Resolver: &resolver{}, Reports: reports}); err == nil {
 		t.Error("no decider: want an error")
 	}
-	if _, err := New(Config{Decider: &recorder{}}); err == nil {
+	if _, err := New(Config{Decider: &recorder{}, Reports: reports}); err == nil {
 		t.Error("no resolver: want an error")
+	}
+	if _, err := New(Config{Decider: &recorder{}, Resolver: &resolver{}}); err == nil {
+		t.Error("no reports: want an error")
 	}
 }

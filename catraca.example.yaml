@@ -150,6 +150,11 @@ secret_scanning:
     # A GitHub token without scopes, to raise the rate limit on GitHub's
     # public keys endpoint.
     github_token: ${GITHUB_TOKEN:-}
+    # Reports are stored in the audit database and retried with backoff
+    # until they go through, or until either bound below is reached; then
+    # they are dead until requeued with catraca secretscan retry.
+    max_attempts: 1000
+    max_age: 24h
 
 logging:
   # debug, info, warn or error.

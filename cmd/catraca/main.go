@@ -1,6 +1,7 @@
 // Command catraca runs the Catraca server and the tools around its rules:
 // checking and testing rulesets, the precision gate, backtests, precision
-// reports, labeling decisions and redriving webhook deliveries. Run
+// reports, labeling decisions, redriving webhook deliveries and the queue
+// of leaked-key reports. Run
 // "catraca help" for the commands and docs/cli.md for details.
 package main
 
@@ -37,8 +38,8 @@ const (
 	exitOK = 0
 	// exitFailed means what the command checked is wrong: an invalid
 	// configuration or ruleset, failing fixtures, rules below the gate, a
-	// label the server refused, or deliveries outbox retry could not
-	// requeue.
+	// label the server refused, deliveries outbox retry could not requeue,
+	// or reports to requeue that are not dead.
 	exitFailed = 1
 	// exitUsage means the command line is wrong.
 	exitUsage = 2
@@ -61,9 +62,11 @@ Commands:
   replay         backtest a ruleset on labeled events
   report         print the precision of every rule, with promote and retire candidates
   label          label a decision on a running server
-  outbox list    list webhook deliveries
-  outbox retry   requeue dead webhook deliveries
-  outbox stats   count webhook deliveries per hook
+  outbox list       list webhook deliveries
+  outbox retry      requeue dead webhook deliveries
+  outbox stats      count webhook deliveries per hook
+  secretscan list   list leaked-key reports from GitHub secret scanning
+  secretscan retry  requeue dead leaked-key reports
   version        print the version
 
 Run "catraca <command> -h" for the arguments of a command.
@@ -71,8 +74,8 @@ Run "catraca <command> -h" for the arguments of a command.
 Exit codes:
   0  success
   1  a check failed: an invalid configuration or ruleset, failing fixtures,
-     rules below the gate, a label the server refused, or deliveries
-     outbox retry left alone
+     rules below the gate, a label the server refused, deliveries
+     outbox retry left alone, or reports to requeue that are not dead
   2  the command line is wrong
   3  the command could not run: a file, the audit database or the server
      was unavailable
@@ -125,6 +128,8 @@ func run(ctx context.Context, args []string, stdout, stderr io.Writer, lookupEnv
 		return c.label(ctx, rest)
 	case "outbox":
 		return c.group(ctx, "outbox", rest, map[string]command{"list": c.outboxList, "retry": c.outboxRetry, "stats": c.outboxStats})
+	case "secretscan":
+		return c.group(ctx, "secretscan", rest, map[string]command{"list": c.secretscanList, "retry": c.secretscanRetry})
 	case "version", "-version", "--version":
 		return c.version()
 	case "help", "-h", "-help", "--help":

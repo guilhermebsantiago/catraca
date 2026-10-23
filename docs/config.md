@@ -379,6 +379,14 @@ GitHub's secret scanning partner endpoint, `/v1/secret-scanning/github`. See
 | `github.feedback` | `false` | answer GitHub with true and false positive labels, once GitHub enables feedback for the partnership |
 | `github.github_token` | | a GitHub token without scopes, to raise the rate limit on GitHub's public keys endpoint |
 | `github.keys_url` | GitHub's | where GitHub's signing keys are fetched; change it only for tests |
+| `github.max_attempts` | `1000` | attempts at a leaked-key report before it is given up as dead; at least 1 |
+| `github.max_age` | `24h` | how long a report is retried, from when it arrived or was requeued, before it is given up as dead. With the default backoff (1s doubling to 5m) this ends a report before `max_attempts` does |
+
+Reports are stored in the audit database before GitHub's request is
+answered, and processed from there; with `send_raw_token`, the raw token is
+stored encrypted until it resolves. See
+[retries and dead reports](secret-scanning.md#retries-and-dead-reports) and
+[privacy of tokens](secret-scanning.md#privacy-of-tokens).
 
 ### logging
 
@@ -394,7 +402,7 @@ Logs go to stderr. Tokens, secrets and message content are never logged.
 | variable | used by | |
 |---|---|---|
 | `CATRACA_CONFIG` | `serve`, `config check` | default for `-config` |
-| `CATRACA_AUDIT_DSN` | `rules gate`, `report` | default for `--audit` |
+| `CATRACA_AUDIT_DSN` | `rules gate`, `report`, `secretscan` | default for `--audit` |
 | `CATRACA_TOKEN` | `label` | the API token, when `--token` is not given |
 | `CATRACA_SERVER` | `label` | default for `--server` (`http://localhost:8080`) |
 

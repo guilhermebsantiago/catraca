@@ -71,8 +71,9 @@ Catraca sits in the send path and is built on a few principles:
 - **Feedback** from Amazon SES (through SNS, signature verified) and useSend,
   or a generic signed endpoint.
 - **Leaked keys** through GitHub's secret scanning partner program: the
-  endpoint verifies GitHub's signature, resolves the key with your platform,
-  blocks it and fires your `revoke_key` hook.
+  endpoint verifies GitHub's signature and stores each report before it
+  answers, then resolves the key with your platform, blocks it and fires
+  your `revoke_key` hook, retrying through outages and restarts.
 - **Audit log** in SQLite or Postgres, a review queue, labels, and
   `catraca report` / `catraca rules gate` to promote and retire rules.
 

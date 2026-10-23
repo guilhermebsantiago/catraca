@@ -6,8 +6,9 @@ labels per rule, and the precision gate uses the counts to decide which rules
 may enforce. This page covers what is stored, how labels work, the review
 queue, the gate and its report, and how to pick a database.
 
-The code is in `internal/audit` (the log and the outbox) and
-`internal/precision` (the statistics and the gate).
+The code is in `internal/audit` (the log, the outbox and the queue of
+leaked-key reports) and `internal/precision` (the statistics and the
+gate).
 
 ## Choosing a database
 
@@ -27,9 +28,9 @@ instead of failing. The driver is pure Go, so Catraca still builds without
 cgo.
 
 Use Postgres when you run more than one Catraca process. Each process writes
-its decisions to the same tables, and the webhook outbox lets several
-processes deliver at once without sending a delivery twice
-(`FOR UPDATE SKIP LOCKED`).
+its decisions to the same tables, and the webhook outbox and the leaked-key
+reports let several processes work at once without taking the same row
+twice (`FOR UPDATE SKIP LOCKED`).
 
 Each process keeps a bounded pool of connections, at most
 `audit.max_open_conns` (10 by default; see [configuration](config.md#audit)).
@@ -300,6 +301,8 @@ audit:
 | decisions with a label, with their matches and labels | decided more than `labeled_retention` ago; never while it is unset |
 | webhook deliveries that were delivered or are dead | finished more than `retention` ago |
 | webhook deliveries still pending | never: they have yet to be sent |
+| [leaked-key reports](secret-scanning.md) that are done or dead | finished more than `retention` ago |
+| leaked-key reports still pending | never: they have yet to be processed |
 
 **Labeled decisions are kept longer** because they are the evidence the
 precision gate counts. `catraca rules gate` and `catraca report` read labels
@@ -327,7 +330,7 @@ about half of the database's write time. That matters most on SQLite, where
 the decision writer waits for each delete. On Postgres, processes deleting at
 the same time skip each other's rows (`FOR UPDATE SKIP LOCKED`). Deleted rows
 are counted in `catraca_audit_retention_deleted_total{table}`, with `table`
-`decisions` or `outbox`, and logged once per run. A run that fails is logged,
+`decisions`, `outbox` or `leak_reports`, and logged once per run. A run that fails is logged,
 counted in `catraca_audit_retention_errors_total` and tried again on the next
 run.
 
@@ -360,14 +363,15 @@ marks it `INVALID`); drop it and build it again before upgrading.
 | `matches` | rule that matched a decision | mode, action, reason, and the verdict of the latest label, so stats and the review queue need no join |
 | `labels` | label | every label ever given |
 | `outbox` | webhook delivery | see [hooks](hooks.md) |
+| `leak_reports` | token GitHub secret scanning reported, and where | the token's SHA-256, never the raw token unless the resolver needs it, and then encrypted; see [secret scanning](secret-scanning.md#privacy-of-tokens) |
 | `schema_migrations` | applied migration | |
 
 Times are stored as unix microseconds (UTC) in `*_at_us` columns on both
 databases, which keeps the queries identical. Each query has an index:
 rule stats read a covering index on match time, the review queue a partial
-index on unlabeled matches, the outbox a partial index on each hook's
-pending deliveries, and retention an index on decision time and a partial
-index on finished deliveries.
+index on unlabeled matches, the outbox and the leak reports a partial index
+on pending rows (the outbox one per hook), and retention an index on
+decision time and partial indexes on finished deliveries and reports.
 
 **Upgrading to per-hook delivery.** Migration `0003_outbox_per_hook.sql`
 adds the column `outbox.requeued_at_us`, set when

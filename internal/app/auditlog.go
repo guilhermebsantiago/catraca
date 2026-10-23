@@ -45,7 +45,10 @@ var errAuditNotOpen = fmt.Errorf("%w: the audit database is not open yet", api.E
 //     and drops, and counts, those that do not fit;
 //   - the outbox waits up to its context, as a write to a database that is
 //     down would, so effects are kept if it opens in time;
-//   - reads and labels fail at once with api.ErrAuditUnavailable.
+//   - reads and labels fail at once with api.ErrAuditUnavailable;
+//   - so does storing leaked-key reports, so the secret scanning endpoint
+//     answers 503 and GitHub sends the batch again, while the workers that
+//     process the reports wait, as the outbox's do.
 //
 // An error that waiting cannot fix (a malformed DSN, wrong credentials, a
 // schema newer than this build) is not retried: it is sent on fatal, and
@@ -339,6 +342,60 @@ func (l *auditLog) Deliveries(ctx context.Context, decisionID string) ([]audit.D
 		return nil, err
 	}
 	return db.Deliveries(ctx, decisionID)
+}
+
+// The leaked-key reports, for secret scanning. Storing a batch and reading
+// its reports back fail at once while the database is not open: the
+// endpoint answers 503 and GitHub sends the batch again, rather than hold
+// GitHub's request for as long as the database takes. The workers wait for
+// it, as the outbox's do.
+
+func (l *auditLog) AddLeakReports(ctx context.Context, reports []audit.LeakReport) (int, error) {
+	db := l.current()
+	if db == nil {
+		return 0, errAuditNotOpen
+	}
+	return db.AddLeakReports(ctx, reports)
+}
+
+func (l *auditLog) LeakReportsByKey(ctx context.Context, keys []string) ([]audit.LeakReport, error) {
+	db := l.current()
+	if db == nil {
+		return nil, errAuditNotOpen
+	}
+	return db.LeakReportsByKey(ctx, keys)
+}
+
+func (l *auditLog) ClaimLeakReports(ctx context.Context, now time.Time, limit int, lease time.Duration) ([]audit.LeakReport, error) {
+	db, err := l.wait(ctx)
+	if err != nil {
+		return nil, err
+	}
+	return db.ClaimLeakReports(ctx, now, limit, lease)
+}
+
+func (l *auditLog) FinishLeakReport(ctx context.Context, id int64, a audit.LeakAttempt) error {
+	db, err := l.wait(ctx)
+	if err != nil {
+		return err
+	}
+	return db.FinishLeakReport(ctx, id, a)
+}
+
+func (l *auditLog) RetryLeakReport(ctx context.Context, id int64, a audit.LeakAttempt, next time.Time) error {
+	db, err := l.wait(ctx)
+	if err != nil {
+		return err
+	}
+	return db.RetryLeakReport(ctx, id, a, next)
+}
+
+func (l *auditLog) MarkLeakReportDead(ctx context.Context, id int64, a audit.LeakAttempt) error {
+	db, err := l.wait(ctx)
+	if err != nil {
+		return err
+	}
+	return db.MarkLeakReportDead(ctx, id, a)
 }
 
 // The API's reads and labels, which fail at once while the database is not

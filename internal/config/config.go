@@ -21,6 +21,7 @@ import (
 	"github.com/guilhermebsantiago/catraca/internal/engine"
 	"github.com/guilhermebsantiago/catraca/internal/hooks"
 	"github.com/guilhermebsantiago/catraca/internal/precision"
+	"github.com/guilhermebsantiago/catraca/internal/secretscan"
 	"github.com/guilhermebsantiago/catraca/internal/store"
 )
 
@@ -308,6 +309,12 @@ type GitHub struct {
 	// KeysURL is where GitHub's signing keys are fetched. Default
 	// https://api.github.com/meta/public_keys/secret_scanning.
 	KeysURL string `yaml:"keys_url"`
+	// MaxAttempts is how many times a leaked-key report is tried before it
+	// is given up as dead. Default 1000.
+	MaxAttempts int `yaml:"max_attempts"`
+	// MaxAge is how long a leaked-key report is retried, from when it
+	// arrived or was requeued, before it is given up as dead. Default 24h.
+	MaxAge time.Duration `yaml:"max_age"`
 }
 
 // Resolver configures the HTTP resolver.
@@ -454,6 +461,12 @@ func (c *Config) applyDefaults(set func(path string) bool) {
 		if h.MaxAge == 0 {
 			h.MaxAge = hooks.DefaultMaxAge
 		}
+	}
+	if c.SecretScanning.GitHub.MaxAttempts == 0 {
+		c.SecretScanning.GitHub.MaxAttempts = secretscan.DefaultMaxAttempts
+	}
+	if c.SecretScanning.GitHub.MaxAge == 0 {
+		c.SecretScanning.GitHub.MaxAge = secretscan.DefaultMaxAge
 	}
 	if c.Logging.Level == "" {
 		c.Logging.Level = DefaultLogLevel

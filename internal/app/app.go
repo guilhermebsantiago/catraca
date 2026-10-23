@@ -4,9 +4,10 @@
 // New opens the store, the audit database, the hooks, the engine, the
 // feedback and secret scanning handlers and the HTTP API. Serve runs the
 // HTTP server until its context ends and then shuts everything down so that
-// no accepted work is lost: it stops accepting requests, lets accepted
-// leaked-key batches finish, writes queued decisions, stops webhook
-// delivery, and closes the audit database and the store, in that order.
+// no accepted work is lost: it stops accepting requests, lets the
+// leaked-key reports in flight finish, writes queued decisions, stops
+// webhook delivery, and closes the audit database and the store, in that
+// order.
 package app
 
 import (
@@ -307,11 +308,11 @@ func (a *App) secretScanning(opts *api.Options) error {
 	}
 	outcomes := prometheus.NewCounterVec(prometheus.CounterOpts{
 		Name: "catraca_secret_scanning_outcomes_total",
-		Help: "What the GitHub secret scanning endpoint did with batches and tokens, by outcome.",
+		Help: "What the GitHub secret scanning endpoint did with batches and leaked-key reports, by outcome.",
 	}, []string{"outcome"})
-	a.registry.MustRegister(outcomes)
-	for _, o := range []secretscan.Outcome{secretscan.OutcomeAccepted, secretscan.OutcomeLeaked,
-		secretscan.OutcomeResolveFailed, secretscan.OutcomeDecideFailed, secretscan.OutcomeInvalidSignature} {
+	a.registry.MustRegister(outcomes, leakReportStats{a.audit})
+	for _, o := range []secretscan.Outcome{secretscan.OutcomeAccepted, secretscan.OutcomeUnavailable, secretscan.OutcomeLeaked,
+		secretscan.OutcomeRetry, secretscan.OutcomeResolveFailed, secretscan.OutcomeDecideFailed, secretscan.OutcomeInvalidSignature} {
 		outcomes.WithLabelValues(string(o))
 	}
 	resolver, err := secretscan.NewHTTPResolver(secretscan.HTTPResolverConfig{
@@ -322,16 +323,24 @@ func (a *App) secretScanning(opts *api.Options) error {
 	if err != nil {
 		return err
 	}
-	a.scan, err = secretscan.New(secretscan.Config{
+	cfg := secretscan.Config{
 		Decider:     a.engine,
 		Resolver:    resolver,
+		Reports:     a.audit,
 		Feedback:    gh.Feedback,
+		MaxAttempts: gh.MaxAttempts,
+		MaxAge:      gh.MaxAge,
 		KeysURL:     gh.KeysURL,
 		GitHubToken: gh.GitHubToken.Value(),
 		Logger:      a.log.With("component", "secretscan"),
 		OnOutcome:   func(o secretscan.Outcome) { outcomes.WithLabelValues(string(o)).Inc() },
-	})
-	if err != nil {
+	}
+	if gh.Resolver.SendRawToken {
+		// The resolver needs the raw token, so it waits in the queue,
+		// sealed with a key only this secret's holders can derive.
+		cfg.RawTokenSecret = gh.Resolver.Secret.Value()
+	}
+	if a.scan, err = secretscan.New(cfg); err != nil {
 		return err
 	}
 	opts.GitHubSecretScanning = a.scan
@@ -588,8 +597,9 @@ func (a *App) reloadOnSignal() (stop func()) {
 // the audit database, if it is still being opened, is given up on (the
 // decisions waiting for it are dropped, and counted):
 //
-//  1. secret scanning finishes the tokens it accepted, which still need the
-//     engine;
+//  1. secret scanning stops claiming leaked-key reports and finishes the
+//     attempts in flight, which still need the engine; reports still
+//     pending wait in the audit database for the next start;
 //  2. the engine hands its queued decisions to the audit log;
 //  3. webhook delivery stops after the attempts in flight;
 //  4. the audit database writes what is queued and closes;

@@ -114,6 +114,8 @@ type options struct {
 	// admin sets server.admin_addr, so health and metrics leave the API's
 	// handler.
 	admin bool
+	// resolverURL replaces the fake resolver of secret scanning.
+	resolverURL string
 }
 
 func newHarness(t *testing.T, opts options) *harness {
@@ -142,7 +144,9 @@ func newHarness(t *testing.T, opts options) *harness {
 	}
 	h.github = key
 	keys := githubKeysServer(t, &key.PublicKey)
-	resolver := resolverServer(t)
+	if opts.resolverURL == "" {
+		opts.resolverURL = resolverServer(t).URL
+	}
 
 	yaml := fmt.Sprintf(`
 server:
@@ -179,7 +183,7 @@ secret_scanning:
       secret: %s
 logging:
   level: debug
-`, opts.maxBodyBytes, opts.drainDelay, token, filepath.ToSlash(h.rulesPath), opts.auditDSN, h.hook.URL, secret, secret, secret, keys.URL, resolver.URL, secret)
+`, opts.maxBodyBytes, opts.drainDelay, token, filepath.ToSlash(h.rulesPath), opts.auditDSN, h.hook.URL, secret, secret, secret, keys.URL, opts.resolverURL, secret)
 	if opts.redisURL != "" {
 		yaml += fmt.Sprintf("store:\n  backend: redis\n  redis:\n    url: '%s'\n", opts.redisURL)
 	}
