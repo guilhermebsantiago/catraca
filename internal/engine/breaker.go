@@ -14,8 +14,8 @@ import (
 
 // Defaults for the fields of BreakerOptions left at zero.
 const (
-	// DefaultBreakerFailures is how many store calls in a row must fail or
-	// miss the deadline, at least, before the breaker opens, so that a few
+	// DefaultBreakerFailures is the fewest store calls in a row that must
+	// fail or miss the deadline before the breaker opens, so that a few
 	// failures spread over a quiet period do not open it.
 	DefaultBreakerFailures = 20
 	// DefaultBreakerWindow is how long store calls must keep failing, with
@@ -108,7 +108,7 @@ const (
 	callIgnored
 )
 
-// storeCall is one store call admitted by the breaker.
+// storeCall is one store call of a decision, as the breaker saw it.
 type storeCall struct {
 	// gen is the breaker's generation when the call started. A call that
 	// ends after a transition is not counted: it is about a state that no

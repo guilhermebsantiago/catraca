@@ -48,7 +48,9 @@ Catraca sits in the send path and is built on a few principles:
   rule only enforces once its measured precision clears a gate (a Wilson 95%
   lower bound over enough labels).
 - **Fail safe.** Each rule declares what happens when it cannot be evaluated.
-  A slow or broken store degrades detection; it never blocks everyone.
+  A slow, broken or overloaded store degrades detection; it never blocks
+  everyone, and decisions it cannot serve in time are shed at once instead
+  of queueing behind it.
 - **Traceable.** Every decision carries its rules and reasons and lands in an
   audit log, with Prometheus metrics and signed webhooks for effects such as
   revoking a key.
