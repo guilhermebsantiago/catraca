@@ -48,9 +48,17 @@ type RedisOptions struct {
 //	s:key                        seen members (sorted set scored by Unix ms)
 //	f:key                        first seen (sorted set with one member)
 //	v:key                        value (string)
+//	e:id                         Dedupe id of a batch whose increments applied ("1")
+//	e:{tag}:id                   the same on a cluster, one per hash slot with increments
 //
 // The braces are a Redis Cluster hash tag: every key of a counter or distinct
 // set shares a slot, so one script can read all of it on a cluster too.
+//
+// A batch's Dedupe id is set with SET NX in the script that applies the
+// batch's increments, before it applies them, so the check and the
+// increments are atomic: a script call that runs twice, because its batch
+// was sent again after a lost reply or a deadline, counts once. On a cluster
+// each call that holds increments gets its own key in its slot.
 //
 // A counter is one hash rather than a key per bucket. Besides a field per
 // bucket, it keeps the index of its newest bucket (n) and the sum of the
@@ -236,12 +244,12 @@ func (r *Redis) Do(ctx context.Context, b *Batch) error {
 	if err := ctx.Err(); err != nil {
 		return err
 	}
-	calls := r.plan(b.ops)
+	calls := r.plan(b)
 	if ctx.Done() == nil {
-		return r.run(ctx, calls)
+		return r.run(ctx, calls, b.once)
 	}
 	done := make(chan error, 1)
-	go func() { done <- r.run(ctx, calls) }()
+	go func() { done <- r.run(ctx, calls, b.once) }()
 	select {
 	case err := <-done:
 		return err
@@ -250,8 +258,9 @@ func (r *Redis) Do(ctx context.Context, b *Batch) error {
 	}
 }
 
-// run sends calls and fills the results of their reads.
-func (r *Redis) run(ctx context.Context, calls []*scriptCall) error {
+// run sends calls and fills the results of their reads and, when the batch
+// has a Dedupe id, whether any call found it applied already.
+func (r *Redis) run(ctx context.Context, calls []*scriptCall, once *once) error {
 	r.send(ctx, calls, false)
 	var again []*scriptCall
 	for _, c := range calls {
@@ -270,10 +279,16 @@ func (r *Redis) run(ctx context.Context, calls []*scriptCall) error {
 			}
 		}
 	}
+	repeated := false
 	for _, c := range calls {
-		if err := c.setResults(); err != nil {
+		rep, err := c.setResults()
+		if err != nil {
 			return r.wrap(err)
 		}
+		repeated = repeated || rep
+	}
+	if once != nil {
+		once.repeated.val = repeated
 	}
 	return nil
 }
@@ -290,15 +305,28 @@ func (r *Redis) wrap(err error) error {
 type scriptCall struct {
 	keys  []string
 	index map[string]int // 1-based position of each key in keys
+	// args starts with the index in keys of the call's Dedupe key and its
+	// time to live in milliseconds, 0 and 0 without one, then the
+	// operations.
 	args  []any
 	reads []*op
+	// incrs is set when the call holds an Incr.
+	incrs bool
 	cmd   *redis.Cmd
 }
 
 func newScriptCall(ops int) *scriptCall {
 	// A send event queues about 60 operations on about 170 keys, most of
 	// them the HyperLogLogs of its distinct counts.
-	return &scriptCall{index: make(map[string]int, 3*ops), args: make([]any, 0, 6*ops)}
+	c := &scriptCall{index: make(map[string]int, 3*ops), args: make([]any, 0, 2+6*ops)}
+	c.args = append(c.args, 0, 0)
+	return c
+}
+
+// guard makes the call skip its increments when key, the batch's Dedupe id
+// in the call's slot, already exists, and set it otherwise.
+func (c *scriptCall) guard(key string, ttl time.Duration) {
+	c.args[0], c.args[1] = c.key(key), ttl.Milliseconds()
 }
 
 // key adds k to the call's keys, once, and returns its index in KEYS.
@@ -312,16 +340,24 @@ func (c *scriptCall) key(k string) int {
 }
 
 // plan turns the batch into script calls: one on a single server, else one
-// per hash tag.
-func (r *Redis) plan(ops []op) []*scriptCall {
+// per hash tag. Each call with increments gets the batch's Dedupe id, if it
+// has one, as a key in the call's slot.
+func (r *Redis) plan(b *Batch) []*scriptCall {
+	ops := b.ops
 	if r.single {
 		c := newScriptCall(len(ops))
 		for i := range ops {
 			r.encode(c, &ops[i], r.keys(&ops[i]))
 		}
+		if b.once != nil && c.incrs {
+			c.guard(r.prefix+"e:"+b.once.id, b.once.ttl)
+		}
 		return []*scriptCall{c}
 	}
-	var calls []*scriptCall
+	var (
+		calls []*scriptCall
+		tags  []string
+	)
 	byTag := make(map[string]*scriptCall)
 	for i := range ops {
 		keys := r.keys(&ops[i])
@@ -332,8 +368,24 @@ func (r *Redis) plan(ops []op) []*scriptCall {
 			c = newScriptCall(4)
 			byTag[tag] = c
 			calls = append(calls, c)
+			tags = append(tags, tag)
 		}
 		r.encode(c, &ops[i], keys)
+	}
+	if b.once != nil {
+		for i, c := range calls {
+			// The id's key repeats the call's tag in braces, which puts
+			// it in the call's slot. A key whose own braces make Redis
+			// hash all of it, such as a counter key that starts with "}",
+			// or any key under a prefix with unmatched braces, has no key
+			// of this form in its slot: its increments go unguarded. The
+			// catalog's keys, which start with the entity's kind, never
+			// do under an ordinary prefix.
+			key := r.prefix + "e:{" + tags[i] + "}:" + b.once.id
+			if c.incrs && hashTag(key) == tags[i] {
+				c.guard(key, b.once.ttl)
+			}
+		}
 	}
 	return calls
 }
@@ -388,6 +440,7 @@ func (r *Redis) encode(c *scriptCall, o *op, keys []string) {
 	switch o.kind {
 	case opIncr:
 		c.args = append(c.args, "I", c.key(keys[0]), floorDiv(o.at, bucketWidth(o.span)), o.n, bucketTTL(o.span).Milliseconds())
+		c.incrs = true
 	case opCount:
 		c.args = append(c.args, "C", c.key(keys[0]), floorDiv(o.at, bucketWidth(o.span)))
 		c.reads = append(c.reads, o)
@@ -416,18 +469,24 @@ func (r *Redis) encode(c *scriptCall, o *op, keys []string) {
 	}
 }
 
-// setResults fills the results of the call's reads from its reply.
-func (c *scriptCall) setResults() error {
+// setResults fills the results of the call's reads from its reply, and
+// reports whether the call skipped its increments because its Dedupe key
+// existed, which the script says after the reads.
+func (c *scriptCall) setResults() (repeated bool, err error) {
 	vals, ok := c.cmd.Val().([]any)
-	if !ok || len(vals) != len(c.reads) {
-		return fmt.Errorf("script returned %d results for %d reads", len(vals), len(c.reads))
+	if !ok || len(vals) != len(c.reads)+1 {
+		return false, fmt.Errorf("script returned %d results for %d reads", len(vals), len(c.reads))
 	}
 	for i, o := range c.reads {
 		if err := setResult(o, vals[i]); err != nil {
-			return err
+			return false, err
 		}
 	}
-	return nil
+	flag, ok := vals[len(c.reads)].(int64)
+	if !ok {
+		return false, fmt.Errorf("script returned %T for the dedupe flag", vals[len(c.reads)])
+	}
+	return flag == 1, nil
 }
 
 // setResult sets o's result from v, the script's result for it: an integer

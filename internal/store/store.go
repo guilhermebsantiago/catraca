@@ -22,6 +22,12 @@
 // Every entry has a time to live on the wall clock, like a Redis TTL, long
 // enough for every window that can still read it, so storage stays bounded by
 // recent traffic. A write renews the time to live of what it touches.
+//
+// # Retries
+//
+// Every write but Incr has the same effect applied twice as once. A batch
+// queued with Dedupe applies its increments once per id, so a caller that
+// does not know whether a batch ran, after a timeout say, can send it again.
 package store
 
 import (
@@ -62,6 +68,20 @@ var ErrClosed = errors.New("store: closed")
 type Batch struct {
 	ops []op
 	err error
+	// once is set by Dedupe.
+	once *once
+	// incrs is set when the batch holds an Incr, the one write once guards.
+	incrs bool
+}
+
+// once is what Dedupe queued: the batch's id, its event time in Unix
+// nanoseconds, how long the id is remembered, and where Do says whether the
+// batch repeated one that had applied.
+type once struct {
+	id       string
+	at       int64
+	ttl      time.Duration
+	repeated *BoolResult
 }
 
 type opKind uint8
@@ -102,7 +122,7 @@ type IntResult struct{ val int64 }
 // Val returns the result.
 func (r *IntResult) Val() int64 { return r.val }
 
-// BoolResult holds the result of SeenWithin once Store.Do has run.
+// BoolResult holds the result of SeenWithin or Dedupe once Store.Do has run.
 type BoolResult struct{ val bool }
 
 // Val returns the result.
@@ -133,7 +153,37 @@ func (b *Batch) Err() error { return b.err }
 func (b *Batch) Incr(key string, w time.Duration, at time.Time, n int64) {
 	if b.check("Incr", key, at) && b.checkWindow("Incr", key, w) {
 		b.ops = append(b.ops, op{kind: opIncr, key: key, span: w, at: at.UnixNano(), n: n})
+		b.incrs = true
 	}
+}
+
+// Dedupe makes the batch's increments apply once per id: when a batch with
+// the same id applied its increments less than ttl ago, by the wall clock,
+// Do skips this batch's Incr operations and the result's Val is true. The
+// rest of the batch runs as usual. Those operations are idempotent (adding a
+// member to a distinct set, marking it seen, keeping the earliest first-seen
+// time, setting a value), so a batch sent again changes nothing, and its
+// reads see the counters with the first batch counted once. at is the
+// batch's event time: the memory store also forgets an id once the newest
+// event time it has stored is ttl past it, as it forgets counters.
+//
+// The id is remembered for ttl from the first batch that carried it, at the
+// cost of one entry per batch with increments: one Redis key, or on a
+// cluster one key in each hash slot whose increments it guards. Each slot is
+// guarded on its own, so sending again a batch that applied in some slots
+// and failed in others applies the rest, once. A batch without increments
+// has nothing to guard: it leaves no entry, and its result is false.
+//
+// Dedupe may be queued once per batch, anywhere in it.
+func (b *Batch) Dedupe(id string, at time.Time, ttl time.Duration) *BoolResult {
+	r := new(BoolResult)
+	switch {
+	case b.once != nil:
+		b.fail("Dedupe %q: the batch already has id %q", id, b.once.id)
+	case b.check("Dedupe", id, at) && b.checkSpan("Dedupe", id, "ttl", ttl):
+		b.once = &once{id: id, at: at.UnixNano(), ttl: ttl, repeated: r}
+	}
+	return r
 }
 
 // Count returns the sum of what was added to the counter key in window w

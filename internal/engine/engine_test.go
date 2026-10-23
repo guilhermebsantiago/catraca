@@ -309,6 +309,41 @@ func TestDecideNormalizesWithoutTouchingTheCaller(t *testing.T) {
 	}
 }
 
+// TestDecideGeneratesIDsAfterObserving checks that the catalog sees only the
+// ids platforms send, which it counts once each, and that every decision
+// still names its event.
+func TestDecideGeneratesIDsAfterObserving(t *testing.T) {
+	rec := &chanRecorder{ch: make(chan recorded, 4)}
+	h := newHarness(t, Options{Recorder: rec})
+	d := h.decide(t, sendEvent())
+	if seen := h.cat.observed[0].ID; seen != "" {
+		t.Errorf("observed id = %q, want none: a generated id never repeats", seen)
+	}
+	if d.EventID == "" || d.EventID >= d.ID {
+		t.Errorf("event id %q, decision id %q: want a generated event id, before the decision's", d.EventID, d.ID)
+	}
+	if r := <-rec.ch; r.ev.ID != d.EventID {
+		t.Errorf("recorded event id = %q, want %q", r.ev.ID, d.EventID)
+	}
+}
+
+func TestDecideDuplicate(t *testing.T) {
+	h := newHarness(t, Options{})
+	h.cat.set.Duplicate = true
+	ev := sendEvent()
+	ev.ID = "msg-1"
+	d := h.decide(t, ev)
+	if !d.Duplicate || d.Degraded || d.EventID != "msg-1" {
+		t.Errorf("decision = %+v, want a duplicate of msg-1, not degraded", d)
+	}
+	if got := counter(t, h.reg, "catraca_duplicate_events_total", map[string]string{"type": "send"}); got != 1 {
+		t.Errorf("duplicates = %v, want 1", got)
+	}
+	if got := counter(t, h.reg, "catraca_duplicate_events_total", map[string]string{"type": "feedback"}); got != 0 {
+		t.Errorf("feedback duplicates = %v, want 0", got)
+	}
+}
+
 func TestDecideRejectsInvalidEvents(t *testing.T) {
 	h := newHarness(t, Options{})
 	wide := sendEvent()
@@ -492,8 +527,8 @@ func TestDecideStoreFailure(t *testing.T) {
 	h.cat.err = errors.New("redis: connection refused")
 
 	d := h.decide(t, sendEvent())
-	if !d.Degraded {
-		t.Error("decision is not degraded")
+	if !d.Degraded || !d.Uncounted {
+		t.Errorf("degraded = %v, uncounted = %v; want both when the store fails", d.Degraded, d.Uncounted)
 	}
 	// leaked fails closed, so the send is blocked; burst, big-burst and
 	// young fail open and are skipped.
@@ -563,6 +598,9 @@ func TestDecideObserveDeadline(t *testing.T) {
 
 	if !d.Degraded {
 		t.Error("decision is not degraded after the deadline")
+	}
+	if d.Uncounted {
+		t.Error("a store that answers late counts as having failed: its writes still apply")
 	}
 	if elapsed > 2*time.Second {
 		t.Errorf("Decide took %s; the deadline did not bound Observe", elapsed)
@@ -776,6 +814,83 @@ func TestCloseWithoutRecorder(t *testing.T) {
 	h := newHarness(t, Options{})
 	if err := h.eng.Close(context.Background()); err != nil {
 		t.Error(err)
+	}
+	if err := h.eng.Sync(context.Background()); err != nil {
+		t.Errorf("Sync without a recorder = %v", err)
+	}
+}
+
+// TestSyncWaitsForQueuedDecisions checks that Sync returns only once the
+// decisions made before it have reached the recorder, so a read that
+// follows a decision's response finds it.
+func TestSyncWaitsForQueuedDecisions(t *testing.T) {
+	rec := &chanRecorder{ch: make(chan recorded, 16), block: make(chan struct{})}
+	h := newHarness(t, Options{Recorder: rec})
+	var want []string
+	for range 3 {
+		want = append(want, h.decide(t, sendEvent()).ID)
+	}
+
+	synced := make(chan error, 1)
+	go func() { synced <- h.eng.Sync(context.Background()) }()
+	// The recorder holds the first decision, so Sync cannot return yet.
+	select {
+	case err := <-synced:
+		t.Fatalf("Sync returned %v while the decisions were still queued", err)
+	case <-time.After(20 * time.Millisecond):
+	}
+	close(rec.block)
+	if err := <-synced; err != nil {
+		t.Fatalf("Sync = %v", err)
+	}
+	if len(rec.ch) != len(want) {
+		t.Fatalf("Sync returned with %d of %d decisions recorded", len(rec.ch), len(want))
+	}
+	for _, id := range want {
+		if r := <-rec.ch; r.d.ID != id {
+			t.Errorf("recorded %s, want %s", r.d.ID, id)
+		}
+	}
+}
+
+func TestSyncEndsWithItsContext(t *testing.T) {
+	rec := &chanRecorder{ch: make(chan recorded, 4), block: make(chan struct{})}
+	h := newHarness(t, Options{Recorder: rec, RecordQueue: 1})
+	// One decision in the recorder and one filling the queue: Sync's marker
+	// has to wait for room.
+	h.decide(t, sendEvent())
+	waitFor(t, func() bool { return len(h.eng.records.jobs) == 0 })
+	h.decide(t, sendEvent())
+
+	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Millisecond)
+	defer cancel()
+	if err := h.eng.Sync(ctx); !errors.Is(err, context.DeadlineExceeded) {
+		t.Errorf("Sync with the queue full = %v, want the context's deadline", err)
+	}
+	close(rec.block)
+	if err := h.eng.Sync(context.Background()); err != nil {
+		t.Errorf("Sync once the recorder moves = %v", err)
+	}
+	if err := h.eng.Close(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if err := h.eng.Sync(context.Background()); err != nil {
+		t.Errorf("Sync after Close = %v", err)
+	}
+	if len(rec.ch) != 2 {
+		t.Errorf("recorded %d decisions, want 2", len(rec.ch))
+	}
+}
+
+// waitFor polls cond until it holds, for state another goroutine changes.
+func waitFor(t *testing.T, cond func() bool) {
+	t.Helper()
+	deadline := time.Now().Add(10 * time.Second)
+	for !cond() {
+		if time.Now().After(deadline) {
+			t.Fatal("condition not met after 10s")
+		}
+		time.Sleep(time.Millisecond)
 	}
 }
 

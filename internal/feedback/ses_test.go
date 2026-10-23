@@ -2,6 +2,8 @@ package feedback
 
 import (
 	"net/http"
+	"net/http/httptest"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -258,28 +260,67 @@ func TestSESIgnoresOtherNotifications(t *testing.T) {
 	}
 }
 
+// wantRetry checks that rec asks the provider to send the request again.
+func wantRetry(t *testing.T, rec *httptest.ResponseRecorder) {
+	t.Helper()
+	if rec.Code != http.StatusServiceUnavailable || rec.Header().Get("Retry-After") != "10" {
+		t.Fatalf("status %d, Retry-After %q; want 503 and 10", rec.Code, rec.Header().Get("Retry-After"))
+	}
+}
+
 func TestSESDecideFailures(t *testing.T) {
 	t.Run("all fail: SNS retries", func(t *testing.T) {
 		dec := &recorder{fail: func(event.Event) bool { return true }}
 		var out outcomes
 		h := newTestSES(t, SESConfig{Decider: dec, FetchCert: (&fetcher{}).fetch, AccountHeader: "X-Catraca-Account", OnOutcome: out.add})
-		rec := postJSON(t, h, notification(t, classicBounce))
-		if rec.Code != http.StatusInternalServerError {
-			t.Fatalf("status %d, want 500", rec.Code)
-		}
+		wantRetry(t, postJSON(t, h, notification(t, classicBounce)))
 		if !out.has(OutcomeDecideFailed) {
 			t.Error("decide_failed not reported")
 		}
 	})
-	t.Run("some fail: no retry that would double count", func(t *testing.T) {
-		dec := &recorder{fail: func(ev event.Event) bool { return ev.Feedback.Recipient == "recipient2@example.com" }}
+	t.Run("some fail: SNS retries, with the same event ids", func(t *testing.T) {
+		failing := true
+		dec := &recorder{fail: func(ev event.Event) bool { return failing && ev.Feedback.Recipient == "recipient2@example.com" }}
 		h := newTestSES(t, SESConfig{Decider: dec, FetchCert: (&fetcher{}).fetch, AccountHeader: "X-Catraca-Account"})
-		rec := postJSON(t, h, notification(t, classicBounce))
-		if rec.Code != http.StatusOK {
+		msg := notification(t, classicBounce)
+		wantRetry(t, postJSON(t, h, msg))
+		failing = false
+		if rec := postJSON(t, h, msg); rec.Code != http.StatusOK {
+			t.Fatalf("retry: status %d, want 200", rec.Code)
+		}
+		// The engine counts each id once, so recipient1's second event
+		// does not count again.
+		var ids []string
+		for _, ev := range dec.got() {
+			ids = append(ids, strings.ToLower(ev.Feedback.Recipient)+" "+ev.ID)
+		}
+		want := []string{
+			"recipient1@example.com ses:22b80b92-fdea-4c2c-8f9d-bdfb0c7bf324:0",
+			"recipient1@example.com ses:22b80b92-fdea-4c2c-8f9d-bdfb0c7bf324:0",
+			"recipient2@example.com ses:22b80b92-fdea-4c2c-8f9d-bdfb0c7bf324:1",
+		}
+		if !slices.Equal(ids, want) {
+			t.Errorf("events decided = %q, want %q", ids, want)
+		}
+	})
+	t.Run("store failed: SNS retries", func(t *testing.T) {
+		dec := &recorder{uncounted: func(ev event.Event) bool { return ev.Feedback.Recipient == "recipient2@example.com" }}
+		var out outcomes
+		h := newTestSES(t, SESConfig{Decider: dec, FetchCert: (&fetcher{}).fetch, AccountHeader: "X-Catraca-Account", OnOutcome: out.add})
+		wantRetry(t, postJSON(t, h, notification(t, classicBounce)))
+		if !out.has(OutcomeUncounted) || !out.has(OutcomeDecided) {
+			t.Errorf("outcomes %v, want uncounted and decided", out.list)
+		}
+	})
+	t.Run("store late: no retry, its writes still apply", func(t *testing.T) {
+		dec := &recorder{late: func(event.Event) bool { return true }}
+		var out outcomes
+		h := newTestSES(t, SESConfig{Decider: dec, FetchCert: (&fetcher{}).fetch, AccountHeader: "X-Catraca-Account", OnOutcome: out.add})
+		if rec := postJSON(t, h, notification(t, classicBounce)); rec.Code != http.StatusOK {
 			t.Fatalf("status %d, want 200", rec.Code)
 		}
-		if len(dec.got()) != 1 {
-			t.Errorf("decided %d events, want 1", len(dec.got()))
+		if out.has(OutcomeUncounted) {
+			t.Errorf("outcomes %v: a late store is not a failed one", out.list)
 		}
 	})
 	t.Run("all refused: no retry that would be refused again", func(t *testing.T) {
@@ -300,9 +341,7 @@ func TestSESDecideFailures(t *testing.T) {
 			fail:   func(ev event.Event) bool { return ev.Feedback.Recipient == "recipient2@example.com" },
 		}
 		h := newTestSES(t, SESConfig{Decider: dec, FetchCert: (&fetcher{}).fetch, AccountHeader: "X-Catraca-Account"})
-		if rec := postJSON(t, h, notification(t, classicBounce)); rec.Code != http.StatusInternalServerError {
-			t.Fatalf("status %d, want 500", rec.Code)
-		}
+		wantRetry(t, postJSON(t, h, notification(t, classicBounce)))
 	})
 }
 

@@ -3,6 +3,7 @@ package signal_test
 import (
 	"context"
 	"errors"
+	"fmt"
 	"math"
 	"math/rand/v2"
 	"reflect"
@@ -565,7 +566,12 @@ func randomEvents(n int) []event.Event {
 	rcpts := []string{"a@m1.example", "b@m2.example", "c@m3.example", "d@m1.example", "e@m4.example", "f@m5.example"}
 	at := t0
 	events := make([]event.Event, 0, n)
-	for range n {
+	for i := range n {
+		// A retry: the event before, sent again.
+		if i > 0 && r.IntN(20) == 0 {
+			events = append(events, events[i-1])
+			continue
+		}
 		at = at.Add(time.Duration(r.Int64N(int64(time.Hour))))
 		ev := event.Event{Time: at, AccountID: pick(accounts...), APIKeyID: pick(keys...), IP: pick(ips...), From: pick(froms...)}
 		switch p := r.IntN(100); {
@@ -592,9 +598,72 @@ func randomEvents(n int) []event.Event {
 			ev.Type = event.KeyLeak
 			ev.APIKeyID = pick(keys[1:]...)
 		}
+		if r.IntN(2) == 0 {
+			ev.ID = fmt.Sprintf("ev-%d", i)
+		}
 		events = append(events, ev)
 	}
 	return events
+}
+
+// TestRetriesCountOnce observes events again with the same id, as a
+// platform's or a provider's retry sends them: they count once, and their
+// signals include the first observation.
+func TestRetriesCountOnce(t *testing.T) {
+	withID := func(id string) func(*event.Event) { return func(e *event.Event) { e.ID = id } }
+	eachBackend(t, func(t *testing.T, c signal.Catalog) {
+		first := observe(t, c, send(0, withID("msg-1")))
+		if first.Duplicate {
+			t.Error("the first observation is a duplicate")
+		}
+		for i := range 2 {
+			set := observe(t, c, send(0, withID("msg-1")))
+			if !set.Duplicate {
+				t.Errorf("retry %d is not a duplicate", i+1)
+			}
+			label := fmt.Sprintf("retry %d", i+1)
+			want(t, label, set.Account, map[string]any{"sends_1m": int64(1), "recipients_1h": int64(1), "ip_sends_24h": int64(1), "new_ip": false})
+			want(t, label, set.Key, map[string]any{"sends_1m": int64(1)})
+			want(t, label, set.IP, map[string]any{"sends_1m": int64(1)})
+			want(t, label, set.Domain, map[string]any{"sends_1h": int64(1)})
+		}
+		// Without an id, or with another one, an event counts.
+		want(t, "no id", observe(t, c, send(time.Second)).Account, map[string]any{"sends_1m": int64(2)})
+		want(t, "no id again", observe(t, c, send(time.Second)).Account, map[string]any{"sends_1m": int64(3)})
+		want(t, "another id", observe(t, c, send(time.Second, withID("msg-2"))).Account, map[string]any{"sends_1m": int64(4)})
+		// The same id names another event for another account or type.
+		set := observe(t, c, send(time.Second, withID("msg-1"), withAccount("acct-2")))
+		if set.Duplicate {
+			t.Error("another account's event with the id is a duplicate")
+		}
+		want(t, "another account", set.Account, map[string]any{"sends_1m": int64(1)})
+		for i := range 2 {
+			set := observe(t, c, feedback(time.Minute, event.Complaint, "", withID("msg-1")))
+			if set.Duplicate != (i == 1) {
+				t.Errorf("complaint %d: duplicate = %v", i+1, set.Duplicate)
+			}
+			want(t, fmt.Sprintf("complaint %d", i+1), set.Account, map[string]any{"complaints_24h": int64(1)})
+			want(t, fmt.Sprintf("complaint %d", i+1), set.Domain, map[string]any{"complaints_24h": int64(1)})
+		}
+		// An event that increments nothing is never a duplicate.
+		for range 2 {
+			if set := observe(t, c, accountEvent(time.Minute, "login", withID("login-1"))); set.Duplicate {
+				t.Error("an event without increments is a duplicate")
+			}
+		}
+	})
+}
+
+func TestRetriesCountAgainWithDedupeOff(t *testing.T) {
+	c := signal.NewCatalog(store.NewMemory(), signal.Options{DedupeTTL: -1})
+	defer c.Close()
+	for i := range 2 {
+		set := observe(t, c, send(0, func(e *event.Event) { e.ID = "msg-1" }))
+		if set.Duplicate {
+			t.Error("a duplicate with deduplication off")
+		}
+		want(t, fmt.Sprintf("send %d", i+1), set.Account, map[string]any{"sends_1m": int64(i + 1)})
+	}
 }
 
 // TestReplayReproducesSignals replays the same events into fresh stores of

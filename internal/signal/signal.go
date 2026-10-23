@@ -21,6 +21,10 @@ type Set struct {
 	Key     map[string]any
 	IP      map[string]any
 	Domain  map[string]any
+	// Duplicate is true when the event had counted already: the store
+	// remembered its id, and its increments were skipped. It is not a
+	// signal rules read.
+	Duplicate bool
 }
 
 // Catalog computes signals.
@@ -28,6 +32,14 @@ type Catalog interface {
 	// Observe records ev in the counters and returns the signals as of ev,
 	// ev included, in one round trip to the store. Counters use ev.Time, so
 	// replaying old events in order reproduces the values they had.
+	//
+	// An event with an id counts once: observed again with the same type,
+	// account and id while the catalog remembers it (Options.DedupeTTL), it
+	// increments nothing and Set.Duplicate is true, so a retry, or a request
+	// sent again after a timeout, does not inflate the counters. Its signals
+	// are read as usual and include the first observation, which also
+	// recorded what is seen and first-seen, so new_ip and the like may now be
+	// false. An event without an id counts every time.
 	//
 	// When the store fails or ctx expires, Observe still returns the
 	// signals that need no store (Set.Event at least) together with the

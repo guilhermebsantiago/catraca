@@ -18,7 +18,11 @@ import (
 	"github.com/guilhermebsantiago/catraca/internal/api"
 	"github.com/guilhermebsantiago/catraca/internal/audit"
 	"github.com/guilhermebsantiago/catraca/internal/decision"
+	"github.com/guilhermebsantiago/catraca/internal/engine"
 	"github.com/guilhermebsantiago/catraca/internal/event"
+	"github.com/guilhermebsantiago/catraca/internal/rules"
+	"github.com/guilhermebsantiago/catraca/internal/signal"
+	"github.com/guilhermebsantiago/catraca/internal/store"
 )
 
 var errRefused = &net.OpError{Op: "dial", Net: "tcp", Err: errors.New("connection refused")}
@@ -230,5 +234,91 @@ func TestUnreachable(t *testing.T) {
 		if got := unreachable(tt.err); got != tt.want {
 			t.Errorf("%s: unreachable = %t, want %t", tt.name, got, tt.want)
 		}
+	}
+}
+
+// heldRecorder passes decisions on to next once release is closed, so a test
+// can hold them between the engine's queue and the audit log.
+type heldRecorder struct {
+	next    *auditLog
+	release chan struct{}
+}
+
+func (r heldRecorder) Record(ctx context.Context, ev event.Event, d decision.Decision) {
+	<-r.release
+	r.next.Record(ctx, ev, d)
+}
+
+// TestAuditReadsSeeEarlierDecisions checks that a read sent after a
+// decision is made finds it, while the engine still holds it in its queue:
+// Get waits for the queue rather than answer not found.
+func TestAuditReadsSeeEarlierDecisions(t *testing.T) {
+	l, err := openAuditLog(context.Background(), "sqlite:"+filepath.Join(t.TempDir(), "audit.db"), audit.Options{}, slog.New(slog.DiscardHandler))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { l.Close(context.Background()) })
+	rs, err := rules.Parse([]byte("version: 1\nrules:\n  - id: wide\n    when: event.recipients > 1\n    action: flag\n    reason: wide\n"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	cat := signal.NewCatalog(store.NewMemory(), signal.Options{})
+	t.Cleanup(func() { cat.Close() })
+	rec := heldRecorder{next: l, release: make(chan struct{})}
+	eng, err := engine.New(engine.Options{Catalog: cat, Rules: rules.NewHolder(rs), Recorder: rec, Deadline: time.Minute})
+	if err != nil {
+		t.Fatal(err)
+	}
+	l.handedOver = eng.Sync
+	t.Cleanup(func() {
+		select {
+		case <-rec.release:
+		default:
+			close(rec.release)
+		}
+		eng.Close(context.Background())
+	})
+
+	d, err := eng.Decide(context.Background(), event.Event{Type: event.Send, AccountID: "acct", To: []string{"a@x.example", "b@y.example"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	type result struct {
+		entry audit.Entry
+		err   error
+	}
+	got := make(chan result, 1)
+	go func() {
+		e, err := l.Get(context.Background(), d.ID)
+		got <- result{e, err}
+	}()
+	select {
+	case r := <-got:
+		t.Fatalf("Get answered before the decision reached the audit log: %+v, %v", r.entry, r.err)
+	case <-time.After(50 * time.Millisecond):
+	}
+	close(rec.release)
+	r := <-got
+	if r.err != nil || r.entry.Decision.ID != d.ID {
+		t.Fatalf("Get = %+v, %v; want the decision", r.entry, r.err)
+	}
+
+	// A label and the review queue, right after the next decision.
+	d, err = eng.Decide(context.Background(), event.Event{Type: event.Send, AccountID: "acct", To: []string{"a@x.example", "b@y.example"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := l.Label(context.Background(), d.ID, audit.Label{RuleID: "wide", Verdict: audit.TruePositive, By: "test"}); err != nil {
+		t.Errorf("Label right after the decision: %v", err)
+	}
+	if _, err := eng.Decide(context.Background(), event.Event{Type: event.Send, AccountID: "acct", To: []string{"a@x.example", "b@y.example"}}); err != nil {
+		t.Fatal(err)
+	}
+	if err := l.Flush(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	items, err := l.ReviewQueue(context.Background(), "wide", decision.Shadow, 10)
+	if err != nil || len(items) != 2 {
+		t.Errorf("review queue right after the decisions = %d items, %v; want the 2 unlabeled ones", len(items), err)
 	}
 }

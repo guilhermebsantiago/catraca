@@ -216,6 +216,10 @@ func (h *sesHandler) notification(w http.ResponseWriter, r *http.Request, msg *s
 		writeOK(w)
 		return
 	}
+	// SNS keeps a message's MessageId when it delivers the message again.
+	if msg.MessageID != "" {
+		eventIDs(evs, "ses:"+msg.MessageID)
+	}
 	answerDecided(w, h.decideAll(r, "ses", evs))
 }
 

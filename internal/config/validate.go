@@ -88,6 +88,11 @@ func (v *validator) explicit(c *Config) {
 	v.positive("engine.dispatch_timeout", c.Engine.DispatchTimeout)
 	v.positive("engine.max_future_skew", c.Engine.MaxFutureSkew)
 	v.positive("engine.max_event_age", c.Engine.MaxEventAge)
+	if d := c.Engine.DedupeTTL; d < 0 || (d > 0 && d < time.Second) {
+		// 0s is allowed: it turns deduplication off. Below a second it
+		// would outlast no retry.
+		v.add("engine.dedupe_ttl", "must be at least 1s, or 0s to turn deduplication off, got %s", d)
+	}
 	if v.isSet("gate.min_labeled") && c.Gate.MinLabeled < 1 {
 		v.add("gate.min_labeled", "must be at least 1, got %d", c.Gate.MinLabeled)
 	}

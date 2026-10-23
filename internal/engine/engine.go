@@ -54,8 +54,9 @@ var (
 // context that is never canceled. While it blocks, decisions wait in a
 // bounded queue; when the queue is full they are dropped and counted in
 // catraca_records_dropped_total, so a slow audit database never slows sends.
-// The decision shares its slices with the one Decide returns, so neither
-// side may modify them.
+// Engine.Sync waits for the decisions made so far to reach Record. The
+// decision shares its slices with the one Decide returns, so neither side
+// may modify them.
 type Recorder interface {
 	Record(ctx context.Context, ev event.Event, d decision.Decision)
 }
@@ -193,12 +194,14 @@ func New(opts Options) (*Engine, error) {
 
 // Decide decides one event:
 //
-//  1. validate and normalize it, bound its time to the clock (see
-//     Options.MaxFutureSkew and Options.MaxEventAge) and assign its id (an
-//     id the platform sent is kept);
+//  1. validate and normalize it, and bound its time to the clock (see
+//     Options.MaxFutureSkew and Options.MaxEventAge);
 //  2. for key_leak events, mark the key leaked, under the deadline;
 //  3. observe the signals under the deadline, marking the decision degraded
-//     when the catalog fails;
+//     when the catalog fails, and also uncounted when it failed rather than
+//     answered late; an event whose id counted already does not count
+//     again, and its decision is marked duplicate; then give the event an
+//     id if the platform sent none;
 //  4. evaluate every rule: the most severe enforced match is the action,
 //     shadow matches are recorded, and rules that cannot be evaluated follow
 //     on_error;
@@ -224,9 +227,6 @@ func (e *Engine) Decide(ctx context.Context, ev event.Event) (decision.Decision,
 	if err := e.boundTime(&ev, start); err != nil {
 		return decision.Decision{}, fmt.Errorf("%w: %w", ErrInvalidEvent, err)
 	}
-	if ev.ID == "" {
-		ev.ID = e.ids.next(start)
-	}
 
 	// The key is marked before Observe so that this event's own signals,
 	// and every later one, see key.leaked. The write has the deadline
@@ -250,6 +250,13 @@ func (e *Engine) Decide(ctx context.Context, ev event.Event) (decision.Decision,
 	if degraded && e.observeLog.allow(start) {
 		e.log.Warn("signals unavailable; deciding degraded", "error", err, "event_type", ev.Type)
 	}
+	// The catalog counts an event with an id once per id, so the id is
+	// generated only now: the platform's id makes its retries count once,
+	// and a generated one, which never repeats, would only cost the store
+	// an entry.
+	if ev.ID == "" {
+		ev.ID = e.ids.next(start)
+	}
 
 	out := rs.Apply(set)
 	d := decision.Decision{
@@ -262,6 +269,8 @@ func (e *Engine) Decide(ctx context.Context, ev event.Event) (decision.Decision,
 		Shadow:         out.Shadow,
 		Errors:         out.Errors,
 		Degraded:       degraded,
+		Uncounted:      degraded && !late(err),
+		Duplicate:      set.Duplicate,
 		RulesetVersion: rs.Version(),
 	}
 	elapsed := monotime.Since(mono)
@@ -270,8 +279,11 @@ func (e *Engine) Decide(ctx context.Context, ev event.Event) (decision.Decision,
 	}
 	d.LatencyMicros = elapsed.Microseconds()
 	e.metrics.observe(d, elapsed)
+	if d.Duplicate {
+		e.metrics.duplicates.WithLabelValues(string(ev.Type)).Inc()
+	}
 
-	if e.records != nil && !e.records.push(recordJob{context.WithoutCancel(ctx), ev, d}) {
+	if e.records != nil && !e.records.push(recordJob{ctx: context.WithoutCancel(ctx), ev: ev, d: d}) {
 		e.metrics.dropped.Inc()
 		if e.dropLog.allow(start) {
 			e.log.Warn("recorder queue is full; dropping decisions from the audit log", "decision_id", d.ID)
@@ -288,6 +300,22 @@ func (e *Engine) Decide(ctx context.Context, ev event.Event) (decision.Decision,
 	return d, nil
 }
 
+// Sync returns once every decision Decide returned before the call has been
+// handed to the Recorder, or dropped because the queue was full, or with
+// ctx's error when ctx ends first. Decide queues decisions for the Recorder
+// without waiting, so a caller that answered a decision and is then asked
+// for it, such as a read of the audit log sent right after the response,
+// calls Sync first to see it. Sync does not wait for the Recorder to finish
+// whatever it does with a decision, such as writing it to a database. It
+// returns at once without a Recorder, and after Close once the queue is
+// drained.
+func (e *Engine) Sync(ctx context.Context) error {
+	if e.records == nil {
+		return nil
+	}
+	return e.records.sync(ctx)
+}
+
 // Close stops the Recorder goroutine after it records the decisions already
 // queued, or returns ctx's error when ctx ends first. Decisions made during
 // or after Close are not recorded. Close does not close the Catalog.
@@ -296,6 +324,14 @@ func (e *Engine) Close(ctx context.Context) error {
 		return nil
 	}
 	return e.records.close(ctx)
+}
+
+// late reports whether err, from Observe, says the store did not answer by
+// the deadline rather than that it failed. The Redis store's round trip goes
+// on in the background past the deadline and its writes still apply, so
+// such an event most likely counts; one the store failed on may not.
+func late(err error) bool {
+	return errors.Is(err, context.DeadlineExceeded)
 }
 
 // boundTime keeps ev's time within reach of the clock, now. Counters slide

@@ -182,14 +182,20 @@ and the expected matches, so a rule change comes with a test like code does.
 
 `Decide(ctx, ev)`:
 
-1. Validate and normalize the event, assign IDs. Validation enforces the
-   limits on an event (list sizes, string lengths, no control characters in
+1. Validate and normalize the event. Validation enforces the limits on an
+   event (list sizes, string lengths, no control characters in
    identifiers), and the event time is bounded by the server's clock: a time
    more than `engine.max_future_skew` ahead takes the clock's, and an event
    more than `engine.max_event_age` old is rejected, except a key_leak,
    which takes the clock's. Replays trust event times.
 2. `Observe` signals under the configured deadline (default 10 ms). On error,
-   mark the decision degraded and continue with what was returned.
+   mark the decision degraded and continue with what was returned; when the
+   store failed rather than answered late, also mark it uncounted, since a
+   late Redis round trip still applies its writes. An event with an id
+   counts once per id within `engine.dedupe_ttl`, so retries do not inflate
+   counters: the store sets the id with the batch's increments, atomically,
+   and a repeat skips them and is marked duplicate. Then assign the IDs: a
+   generated event id never repeats, so it is not deduplicated.
 3. Evaluate every rule. A matching enforced rule contributes its action; a
    matching shadow rule is recorded in `Shadow`. An evaluation error follows
    `on_error`: open skips the rule, closed counts it as matched (`Errored`):
@@ -265,6 +271,12 @@ dead ones.
   is read from a configurable SES message tag or header.
 - `POST /v1/feedback/usesend`: useSend webhooks, signature verified.
 - `POST /v1/feedback`: a generic JSON feedback event.
+
+Each feedback event gets an id the provider keeps across deliveries (SNS's
+MessageId, useSend's call id, the generic event's own), so when an event
+comes back uncounted, or the Decider fails on it, the endpoint answers 503
+and the provider's retry counts each event once. A decision degraded only
+by the deadline keeps its 200.
 
 ## Leaked keys
 

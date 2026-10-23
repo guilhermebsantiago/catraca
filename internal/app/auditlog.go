@@ -63,6 +63,13 @@ type auditLog struct {
 	opened, closed chan struct{}
 	db             *audit.DB
 
+	// handedOver, when set, returns once the decisions made so far have
+	// reached Record: the engine's Sync. The engine queues them for Record
+	// from a goroutine of its own, so without it a read sent right after a
+	// decision's response could miss the decision. It is set once, before
+	// the server serves.
+	handedOver func(context.Context) error
+
 	// lastErr is the last error opening the database.
 	lastErr atomic.Pointer[error]
 	// dropped counts decisions dropped because the database never opened.
@@ -402,17 +409,17 @@ func (l *auditLog) MarkLeakReportDead(ctx context.Context, id int64, a audit.Lea
 // open rather than hold the request.
 
 func (l *auditLog) Get(ctx context.Context, decisionID string) (audit.Entry, error) {
-	db := l.current()
-	if db == nil {
-		return audit.Entry{}, errAuditNotOpen
+	db, err := l.readable(ctx)
+	if err != nil {
+		return audit.Entry{}, err
 	}
 	return db.Get(ctx, decisionID)
 }
 
 func (l *auditLog) Label(ctx context.Context, decisionID string, lb audit.Label) error {
-	db := l.current()
-	if db == nil {
-		return errAuditNotOpen
+	db, err := l.readable(ctx)
+	if err != nil {
+		return err
 	}
 	return db.Label(ctx, decisionID, lb)
 }
@@ -434,9 +441,28 @@ func (l *auditLog) ReviewQueue(ctx context.Context, ruleID string, mode decision
 }
 
 func (l *auditLog) Flush(ctx context.Context) error {
-	db := l.current()
-	if db == nil {
-		return errAuditNotOpen
+	db, err := l.readable(ctx)
+	if err != nil {
+		return err
 	}
 	return db.Flush(ctx)
+}
+
+// readable returns the database for Get, Label and Flush once the decisions
+// made before the call have reached Record, where the database queues them:
+// Get and Label write the queue when the decision they look for is not
+// stored yet, and Flush always does, so a decision whose response went out
+// is found. It fails at once while the database is not open, before waiting
+// on the engine, whose queue does not move until it opens.
+func (l *auditLog) readable(ctx context.Context) (*audit.DB, error) {
+	db := l.current()
+	if db == nil {
+		return nil, errAuditNotOpen
+	}
+	if l.handedOver != nil {
+		if err := l.handedOver(ctx); err != nil {
+			return nil, fmt.Errorf("audit: wait for the engine's queued decisions: %w", err)
+		}
+	}
+	return db, nil
 }

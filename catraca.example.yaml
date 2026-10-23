@@ -89,6 +89,10 @@ engine:
   # rejected (168h is the longest counter window).
   max_future_skew: 5s
   max_event_age: 168h
+  # How long the id of an event that counted is remembered, so the event sent
+  # again meanwhile (a retry, a provider's redelivery) counts once. Each event
+  # with an id costs a store entry for this long; 0s turns it off.
+  dedupe_ttl: 10m
 
 gate:
   # A rule may enforce once it has at least min_labeled labeled matches and

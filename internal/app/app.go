@@ -138,7 +138,11 @@ func New(ctx context.Context, cfg *config.Config, opts Options) (_ *App, err err
 	if a.store, err = openStore(cfg.Store); err != nil {
 		return nil, err
 	}
-	a.catalog = signal.NewCatalog(a.store, signal.Options{})
+	dedupe := cfg.Engine.DedupeTTL
+	if dedupe == 0 {
+		dedupe = -1 // engine.dedupe_ttl: 0s turns deduplication off.
+	}
+	a.catalog = signal.NewCatalog(a.store, signal.Options{DedupeTTL: dedupe})
 
 	alog := log.With("component", "audit")
 	auditOpts := cfg.Audit.Options()
@@ -174,6 +178,7 @@ func New(ctx context.Context, cfg *config.Config, opts Options) (_ *App, err err
 	if a.engine, err = engine.New(eopts); err != nil {
 		return nil, err
 	}
+	a.audit.handedOver = a.engine.Sync
 
 	a.deps = newDependencyMonitor(a.dependencies(), a.registry, log)
 	a.deps.start()
@@ -255,7 +260,7 @@ func (a *App) feedback(opts *api.Options) error {
 	}, []string{"provider", "outcome"})
 	a.registry.MustRegister(outcomes)
 	count := func(provider string) func(feedback.Outcome) {
-		for _, o := range []feedback.Outcome{feedback.OutcomeDecided, feedback.OutcomeDecideFailed, feedback.OutcomeInvalidSignature} {
+		for _, o := range []feedback.Outcome{feedback.OutcomeDecided, feedback.OutcomeDecideFailed, feedback.OutcomeUncounted, feedback.OutcomeInvalidSignature} {
 			outcomes.WithLabelValues(provider, string(o))
 		}
 		return func(o feedback.Outcome) { outcomes.WithLabelValues(provider, string(o)).Inc() }

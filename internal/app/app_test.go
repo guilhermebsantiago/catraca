@@ -33,6 +33,7 @@ import (
 	"github.com/guilhermebsantiago/catraca/internal/config"
 	"github.com/guilhermebsantiago/catraca/internal/decision"
 	"github.com/guilhermebsantiago/catraca/internal/event"
+	"github.com/guilhermebsantiago/catraca/internal/store/storetest"
 	"github.com/guilhermebsantiago/catraca/signature"
 )
 
@@ -555,13 +556,7 @@ func TestReviewQueue(t *testing.T) {
 		r.json(t, &out)
 		return out
 	}
-	// The engine hands decisions to the audit log from a goroutine of its
-	// own, which a loaded machine may run after this request.
-	var q api.ReviewResponse
-	eventually(t, 10*time.Second, func() bool {
-		q = review("?mode=shadow&limit=10")
-		return len(q.Items) > 0
-	})
+	q := review("?mode=shadow&limit=10")
 	if q.RuleID != "wide-send" || q.Mode != decision.Shadow || len(q.Items) != 1 {
 		t.Fatalf("queue = %+v", q)
 	}
@@ -808,11 +803,12 @@ func (h *harness) signedFeedback(body string, key string) response {
 }
 
 // useSend posts a useSend webhook about one email of team, signed as useSend
-// signs them.
+// signs them. Each webhook call has its own id, as in useSend, unless the
+// same one is sent again: the id is made from kind and createdAt.
 func (h *harness) useSend(kind string, createdAt time.Time, team int) response {
 	h.t.Helper()
-	body := fmt.Sprintf(`{"id":"call_1","type":%q,"createdAt":%q,"teamId":%d,"data":{"id":"email_1","from":"news@us.example","to":["someone@mail.example"]}}`,
-		kind, createdAt.UTC().Format(time.RFC3339), team)
+	body := fmt.Sprintf(`{"id":"call_%s_%d","type":%q,"createdAt":%q,"teamId":%d,"data":{"id":"email_1","from":"news@us.example","to":["someone@mail.example"]}}`,
+		kind, createdAt.UnixNano(), kind, createdAt.UTC().Format(time.RFC3339), team)
 	ts := strconv.FormatInt(time.Now().UnixMilli(), 10)
 	mac := hmac.New(sha256.New, []byte(secret))
 	mac.Write([]byte(ts + "." + body))
@@ -840,21 +836,18 @@ func TestEventTimeBoundsOnEveryRoute(t *testing.T) {
 	if d.Action != decision.Throttle {
 		t.Errorf("fourth send in a minute, the first dated a month ahead: %+v", d)
 	}
+	r := h.do("GET", "/v1/decisions/"+first.ID, token, nil)
+	if r.status != http.StatusOK {
+		t.Fatalf("GET decision: %d %s", r.status, r.body)
+	}
 	var entry audit.Entry
-	eventually(t, 5*time.Second, func() bool {
-		r := h.do("GET", "/v1/decisions/"+first.ID, token, nil)
-		if r.status != http.StatusOK {
-			return false
-		}
-		r.json(t, &entry)
-		return true
-	})
+	r.json(t, &entry)
 	if off := time.Since(entry.Event.Time); off < -time.Minute || off > time.Minute {
 		t.Errorf("stored event time %s, want the time it arrived", entry.Event.Time)
 	}
 
 	// POST /v1/events.
-	r := h.do("POST", "/v1/events", token, map[string]any{"type": "account", "account_id": "acct_old", "time": epoch, "account": map[string]any{"action": "signup"}})
+	r = h.do("POST", "/v1/events", token, map[string]any{"type": "account", "account_id": "acct_old", "time": epoch, "account": map[string]any{"action": "signup"}})
 	if code, msg := r.apiError(t); r.status != http.StatusBadRequest || code != "invalid_event" || !strings.Contains(msg, "in the past") {
 		t.Errorf("account event dated 1970: %d %s", r.status, r.body)
 	}
@@ -964,6 +957,153 @@ func TestGenericFeedbackChangesLaterDecisions(t *testing.T) {
 	}
 	if r := h.do("POST", "/v1/feedback/ses", "", `{}`); r.status != 404 || r.errorCode(t) != "not_configured" {
 		t.Errorf("unconfigured SES: %d %s", r.status, r.body)
+	}
+}
+
+// TestFeedbackIsRetriedWhenTheStoreFails checks that feedback the store
+// could not count is answered 503, so the provider sends it again, while a
+// send is still decided, and that the feedback counts once it is.
+func TestFeedbackIsRetriedWhenTheStoreFails(t *testing.T) {
+	t.Parallel()
+	mr := storetest.Miniredis(t)
+	h := newHarness(t, options{redisURL: "redis://" + mr.Addr() + "/0?read_timeout=1m"})
+	mr.SetError("LOADING Redis is loading the dataset in memory")
+
+	d, r := h.decide(send("acct_down", "news@down.example"))
+	if !d.Degraded || !d.Uncounted || r.status != http.StatusOK {
+		t.Errorf("send with the store failing: %d %+v, want 200 and a degraded, uncounted decision", r.status, d)
+	}
+	complaint := `{"id":"fb-1","account_id":"acct_down","feedback":{"kind":"complaint"}}`
+	r = h.signedFeedback(complaint, secret)
+	if r.status != http.StatusServiceUnavailable || r.header.Get("Retry-After") != "10" {
+		t.Errorf("generic complaint with the store failing: %d %s, Retry-After %q", r.status, r.body, r.header.Get("Retry-After"))
+	}
+	at := time.Now()
+	if r := h.useSend("email.complained", at, 4343); r.status != http.StatusServiceUnavailable {
+		t.Errorf("useSend complaint with the store failing: %d %s", r.status, r.body)
+	}
+
+	mr.SetError("")
+	for i := range 2 {
+		r = h.signedFeedback(complaint, secret)
+		var out api.DecisionResponse
+		r.json(t, &out)
+		if r.status != http.StatusAccepted || out.Decision.Duplicate != (i > 0) {
+			t.Errorf("complaint sent again, %d: %d %s", i+1, r.status, r.body)
+		}
+		if r := h.useSend("email.complained", at, 4343); r.status != http.StatusOK {
+			t.Errorf("useSend complaint sent again, %d: %d %s", i+1, r.status, r.body)
+		}
+	}
+	m := string(h.do("GET", "/metrics", "", nil).body)
+	for _, want := range []string{
+		`catraca_feedback_outcomes_total{outcome="uncounted",provider="generic"} 1`,
+		`catraca_feedback_outcomes_total{outcome="uncounted",provider="usesend"} 1`,
+		`catraca_duplicate_events_total{type="feedback"} 2`,
+	} {
+		if !strings.Contains(m, want) {
+			t.Errorf("metrics lack %s", want)
+		}
+	}
+}
+
+// TestRetriesCountOnce sends events again with the ids they were first sent
+// with, as platforms and providers retry, through the decide, events,
+// generic feedback and useSend routes, on each store: each event counts
+// once, and the answer to a retry says it was a duplicate.
+func TestRetriesCountOnce(t *testing.T) {
+	t.Parallel()
+	stores := map[string]string{
+		"memory":    "",
+		"miniredis": "redis://" + storetest.Miniredis(t).Addr() + "/0?read_timeout=1m",
+	}
+	if url := os.Getenv(storetest.RedisURLEnv); url != "" {
+		stores["redis-server"] = url
+	}
+	for name, url := range stores {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			h := newHarness(t, options{redisURL: url})
+			// A real Redis keeps the counters of earlier runs: the
+			// accounts are new each time.
+			run := time.Now().UnixNano()
+			acct := fmt.Sprintf("acct_retry_%d", run)
+
+			// burst throttles the fourth send in a minute; one send sent
+			// four times is one send.
+			for i := range 4 {
+				d, _ := h.decide(send(acct, "hi@retry.example", "id", "msg-1"))
+				if d.Action != decision.Allow || d.Duplicate != (i > 0) || d.EventID != "msg-1" {
+					t.Errorf("send %d of msg-1: %+v", i+1, d)
+				}
+			}
+			for _, id := range []string{"msg-2", "msg-3"} {
+				if d, _ := h.decide(send(acct, "hi@retry.example", "id", id)); d.Action != decision.Allow || d.Duplicate {
+					t.Errorf("%s: %+v, want the third and fourth sends allowed", id, d)
+				}
+			}
+			if d, _ := h.decide(send(acct, "hi@retry.example", "id", "msg-4")); d.Action != decision.Throttle {
+				t.Errorf("fifth send: %+v, want throttled", d)
+			}
+
+			// complaints holds an account with two; one complaint sent
+			// twice is one.
+			complaint := map[string]any{"id": "fb-1", "type": "feedback", "account_id": acct + "_fb", "feedback": map[string]any{"kind": "complaint"}}
+			for i := range 2 {
+				r := h.do("POST", "/v1/events", token, complaint)
+				var out api.DecisionResponse
+				r.json(t, &out)
+				if r.status != http.StatusAccepted || out.Decision.Duplicate != (i > 0) {
+					t.Errorf("complaint %d of fb-1: %d %s", i+1, r.status, r.body)
+				}
+			}
+			if d, _ := h.decide(send(acct+"_fb", "hi@retry.example")); d.Action != decision.Allow {
+				t.Errorf("send after one complaint sent twice: %+v", d)
+			}
+
+			// The same through the generic feedback endpoint.
+			generic := fmt.Sprintf(`{"id":"fb-1","account_id":%q,"feedback":{"kind":"complaint"}}`, acct+"_gen")
+			for i := range 2 {
+				r := h.signedFeedback(generic, secret)
+				var out api.DecisionResponse
+				r.json(t, &out)
+				if r.status != http.StatusAccepted || out.Decision.Duplicate != (i > 0) {
+					t.Errorf("generic complaint %d of fb-1: %d %s", i+1, r.status, r.body)
+				}
+			}
+			if d, _ := h.decide(send(acct+"_gen", "hi@retry.example")); d.Action != decision.Allow {
+				t.Errorf("send after one generic complaint sent twice: %+v", d)
+			}
+
+			// And for useSend, which sends a webhook call again with its
+			// id.
+			team := int(run % 1_000_000_000)
+			at := time.Now()
+			for range 2 {
+				if r := h.useSend("email.complained", at, team); r.status != http.StatusOK {
+					t.Fatalf("useSend complaint: %d %s", r.status, r.body)
+				}
+			}
+			if d, _ := h.decide(send(strconv.Itoa(team), "news@us.example")); d.Action != decision.Allow {
+				t.Errorf("send after one useSend complaint sent twice: %+v", d)
+			}
+			if r := h.useSend("email.complained", at.Add(time.Second), team); r.status != http.StatusOK {
+				t.Fatalf("useSend complaint: %d %s", r.status, r.body)
+			}
+			if d, _ := h.decide(send(strconv.Itoa(team), "news@us.example")); d.Action != decision.Hold {
+				t.Errorf("send after two useSend complaints: %+v", d)
+			}
+
+			m := string(h.do("GET", "/metrics", "", nil).body)
+			for _, want := range []string{
+				`catraca_duplicate_events_total{type="send"} 3`,
+				`catraca_duplicate_events_total{type="feedback"} 3`,
+			} {
+				if !strings.Contains(m, want) {
+					t.Errorf("metrics lack %s", want)
+				}
+			}
+		})
 	}
 }
 

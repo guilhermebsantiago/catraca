@@ -53,6 +53,8 @@ type memShard struct {
 	seen      map[string]*seenSet
 	first     map[string]*firstSeen
 	values    map[string]*value
+	// ids holds the ids of batches whose increments applied, by Dedupe id.
+	ids map[string]onceEntry
 	// nextSweep is when the shard is next due a sweep by the wall clock, and
 	// nextSweepAt by the newest event time, both Unix ns.
 	nextSweep   atomic.Int64
@@ -84,10 +86,14 @@ func (s *memShard) reset() {
 	s.seen = make(map[string]*seenSet)
 	s.first = make(map[string]*firstSeen)
 	s.values = make(map[string]*value)
+	s.ids = make(map[string]onceEntry)
 }
 
 // Do runs the batch. Each operation is atomic; the batch as a whole is not,
-// as with Redis.
+// as with Redis. A batch's Dedupe id is checked and recorded before any of
+// its operations run, so of two batches with the same id the first to get
+// there applies its increments and the other skips them, even while the
+// first is still running.
 func (m *Memory) Do(ctx context.Context, b *Batch) error {
 	if err := b.Err(); err != nil {
 		return err
@@ -99,9 +105,20 @@ func (m *Memory) Do(ctx context.Context, b *Batch) error {
 		return ErrClosed
 	}
 	now := m.now().UnixNano()
+	repeated := false
+	if b.once != nil && b.incrs {
+		s := &m.shards[maphash.String(m.seed, b.once.id)%shardCount]
+		s.mu.Lock()
+		repeated = s.markOnce(b.once, now, m.horizon.Load())
+		s.mu.Unlock()
+		b.once.repeated.val = repeated
+	}
 	newest := int64(math.MinInt64)
 	for i := range b.ops {
 		o := &b.ops[i]
+		if repeated && o.kind == opIncr {
+			continue
+		}
 		s := &m.shards[maphash.String(m.seed, o.key)%shardCount]
 		s.mu.Lock()
 		s.apply(o, now)
@@ -280,6 +297,33 @@ func (s *memShard) sweep(now, horizon int64) {
 			delete(s.values, k)
 		}
 	}
+	for id, e := range s.ids {
+		if e.expires <= now || e.until <= horizon {
+			delete(s.ids, id)
+		}
+	}
+}
+
+// markOnce records o's id and reports whether a batch with it had already
+// applied its increments, within the id's time to live. horizon is the
+// newest event time stored, Unix ns.
+func (s *memShard) markOnce(o *once, now, horizon int64) bool {
+	if e, ok := s.ids[o.id]; ok && e.expires > now {
+		return true
+	}
+	// The id is forgotten by event time ttl after the newest event time
+	// stored, or after its own when that is newer, rather than after its
+	// own alone: a late event's retry needs the id as much as a recent
+	// one's, and in a replay the ids still go once the replay moves on.
+	s.ids[o.id] = onceEntry{expires: deadline(now, o.ttl), until: addSat(max(o.at, horizon), int64(o.ttl))}
+	return false
+}
+
+// onceEntry is a Dedupe id: when it expires by the wall clock and by event
+// time, both Unix ns.
+type onceEntry struct {
+	expires int64
+	until   int64
 }
 
 // deadline returns t plus ttl, or the end of time when ttl is zero.

@@ -467,6 +467,136 @@ var contractCases = []struct {
 		}
 	}},
 
+	{"dedupe applies a batch's increments once per id", func(t *testing.T, s backend) {
+		// The batch of an event: increments on several keys, so on a
+		// cluster they land in several slots, with idempotent writes and
+		// reads among them.
+		type result struct {
+			repeated         bool
+			a, b, d          int64
+			seenBefore, seen bool
+		}
+		send := func(id string) result {
+			t.Helper()
+			var (
+				rep          *BoolResult
+				a, b, d      *IntResult
+				before, seen *BoolResult
+			)
+			run(t, s, func(bt *Batch) {
+				bt.Incr("a", time.Hour, t0, 1)
+				bt.Incr("a", time.Minute, t0, 1)
+				bt.Incr("b", time.Hour, t0, 3)
+				bt.AddDistinct("d", "m", time.Hour, t0)
+				bt.FirstSeen("f", t0, time.Hour)
+				bt.Set("v", "1", time.Hour)
+				before = bt.SeenWithin("s", "ip", time.Hour, t0)
+				bt.MarkSeen("s", "ip", t0, time.Hour)
+				seen = bt.SeenWithin("s", "ip", time.Hour, t0)
+				rep = bt.Dedupe(id, t0, 10*time.Minute)
+				a = bt.Count("a", time.Hour, t0)
+				b = bt.Count("b", time.Hour, t0)
+				d = bt.Distinct("d", time.Hour, t0)
+			})
+			return result{rep.Val(), a.Val(), b.Val(), d.Val(), before.Val(), seen.Val()}
+		}
+		if got, want := send("ev-1"), (result{false, 1, 3, 1, false, true}); got != want {
+			t.Errorf("first batch: %+v, want %+v", got, want)
+		}
+		// The same batch again, as a retry would send it: its increments
+		// are skipped and its reads see the first batch's.
+		for i := range 2 {
+			if got, want := send("ev-1"), (result{true, 1, 3, 1, true, true}); got != want {
+				t.Errorf("retry %d: %+v, want %+v", i+1, got, want)
+			}
+		}
+		if got := count(t, s, "a", time.Minute, t0); got != 1 {
+			t.Errorf("Count(a, 1m) after the retries = %d, want 1", got)
+		}
+		if got, want := send("ev-2"), (result{false, 2, 6, 1, true, true}); got != want {
+			t.Errorf("another id: %+v, want %+v", got, want)
+		}
+	}},
+
+	{"dedupe ids expire after their ttl", func(t *testing.T, s backend) {
+		send := func() bool {
+			var rep *BoolResult
+			run(t, s, func(b *Batch) {
+				rep = b.Dedupe("ev", t0, time.Minute)
+				b.Incr("k", time.Hour, t0, 1)
+			})
+			return rep.Val()
+		}
+		send()
+		s.advance(59 * time.Second)
+		if !send() {
+			t.Error("the id was forgotten before its ttl")
+		}
+		s.advance(time.Second)
+		if send() {
+			t.Error("the id was remembered after its ttl")
+		}
+		if got := count(t, s, "k", time.Hour, t0); got != 2 {
+			t.Errorf("Count = %d, want 2: once, then again after the ttl", got)
+		}
+	}},
+
+	{"dedupe guards nothing in a batch without increments", func(t *testing.T, s backend) {
+		for i := range 2 {
+			var rep *BoolResult
+			run(t, s, func(b *Batch) {
+				rep = b.Dedupe("ev", t0, time.Hour)
+				b.AddDistinct("d", "m", time.Hour, t0)
+				b.Set("v", "1", time.Hour)
+			})
+			if rep.Val() {
+				t.Errorf("batch %d without increments reported as a repeat", i)
+			}
+		}
+		// Nothing was remembered: the id still guards a batch's first
+		// increments.
+		var rep *BoolResult
+		run(t, s, func(b *Batch) {
+			rep = b.Dedupe("ev", t0, time.Hour)
+			b.Incr("k", time.Hour, t0, 1)
+		})
+		if rep.Val() {
+			t.Error("a batch without increments left its id behind")
+		}
+	}},
+
+	{"concurrent batches with one id count once", func(t *testing.T, s backend) {
+		const n = 8
+		var (
+			wg    sync.WaitGroup
+			mu    sync.Mutex
+			fresh int
+		)
+		for range n {
+			wg.Go(func() {
+				var b Batch
+				rep := b.Dedupe("ev", t0, time.Hour)
+				b.Incr("k", time.Hour, t0, 1)
+				if err := s.Do(context.Background(), &b); err != nil {
+					t.Error(err)
+					return
+				}
+				if !rep.Val() {
+					mu.Lock()
+					fresh++
+					mu.Unlock()
+				}
+			})
+		}
+		wg.Wait()
+		if fresh != 1 {
+			t.Errorf("%d of %d batches applied their increments, want 1", fresh, n)
+		}
+		if got := count(t, s, "k", time.Hour, t0); got != 1 {
+			t.Errorf("Count = %d, want 1", got)
+		}
+	}},
+
 	{"invalid operations fail the batch", func(t *testing.T, s backend) {
 		cases := []struct {
 			name  string
@@ -482,6 +612,12 @@ var contractCases = []struct {
 			{"negative ttl", func(b *Batch) { b.Set("k", "v", -time.Second) }, "ttl"},
 			{"tiny ttl", func(b *Batch) { b.FirstSeen("k", t0, time.Microsecond) }, "ttl"},
 			{"empty get key", func(b *Batch) { b.Get("") }, "empty key"},
+			{"empty dedupe id", func(b *Batch) { b.Dedupe("", t0, time.Hour) }, "empty key"},
+			{"zero dedupe ttl", func(b *Batch) { b.Dedupe("id", t0, 0) }, "ttl"},
+			{"two dedupe ids", func(b *Batch) {
+				b.Dedupe("id", t0, time.Hour)
+				b.Dedupe("other", t0, time.Hour)
+			}, "already has id"},
 		}
 		for _, c := range cases {
 			var b Batch

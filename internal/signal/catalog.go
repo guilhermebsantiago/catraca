@@ -2,6 +2,8 @@ package signal
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/base64"
 	"errors"
 	"fmt"
 	"strconv"
@@ -20,6 +22,13 @@ const (
 	newIPLookback = 30 * day
 	// DefaultRetention is the default for Options.Retention.
 	DefaultRetention = 365 * day
+	// DefaultDedupeTTL is the default for Options.DedupeTTL. It outlasts the
+	// retries of a platform whose request timed out, and those of the
+	// feedback providers Catraca takes: Amazon SNS's default delivery policy
+	// and useSend's webhooks both give up within about five minutes. Each
+	// event with an id costs an entry for this long, so a longer one costs
+	// memory in proportion.
+	DefaultDedupeTTL = 10 * time.Minute
 )
 
 // Options configures a catalog.
@@ -29,6 +38,12 @@ type Options struct {
 	// them. An account or key idle for longer looks new again. Default
 	// DefaultRetention.
 	Retention time.Duration
+	// DedupeTTL is how long an event with an id is remembered after it
+	// counts, so that the same event observed again meanwhile, such as a
+	// retry after a timeout, does not count twice; see Catalog.Observe.
+	// Zero means DefaultDedupeTTL. A negative value turns it off: every
+	// observation counts.
+	DedupeTTL time.Duration
 }
 
 // NewCatalog returns a Catalog that keeps its counters in s and computes the
@@ -37,12 +52,18 @@ func NewCatalog(s store.Store, opts Options) Catalog {
 	if opts.Retention <= 0 {
 		opts.Retention = DefaultRetention
 	}
-	return &catalog{store: s, retention: opts.Retention, leaked: newLeakedKeys(maxLeakedKeys)}
+	if opts.DedupeTTL == 0 {
+		opts.DedupeTTL = DefaultDedupeTTL
+	}
+	return &catalog{store: s, retention: opts.Retention, dedupeTTL: opts.DedupeTTL, leaked: newLeakedKeys(maxLeakedKeys)}
 }
 
 type catalog struct {
 	store     store.Store
 	retention time.Duration
+	// dedupeTTL is Options.DedupeTTL; deduplication is off when it is
+	// negative.
+	dedupeTTL time.Duration
 	// leaked answers key.leaked when the store cannot. Without it a store
 	// outage leaves the signal absent for every key, and a rule that fails
 	// closed on it blocks every send with a key, while one that fails open
@@ -61,6 +82,25 @@ func domainKey(name, d string) string   { return "domain:" + name + ":" + d }
 // IPs as sent may both contain ':', so the account id is length-prefixed.
 func accountIPKey(name, id, ip string) string {
 	return accountKey(name, strconv.Itoa(len(id))+":"+id+":"+ip)
+}
+
+// dedupeID names ev among the events the store counted: a digest of its
+// type, account and id, so that one id sent by two accounts, or for a send
+// and then for feedback about it, names two events. The store keeps an entry
+// per event under this name, and the digest keeps it short whatever the
+// length of the ids, up to 256 bytes each. With 128 bits a collision, which
+// would leave one event uncounted, becomes likely only with some 2^64 ids
+// remembered at once.
+func dedupeID(ev event.Event) string {
+	var buf [2*event.MaxIDBytes + 32]byte
+	b := append(buf[:0], ev.Type...)
+	b = append(b, ':')
+	b = strconv.AppendInt(b, int64(len(ev.AccountID)), 10)
+	b = append(b, ':')
+	b = append(b, ev.AccountID...)
+	b = append(b, ev.ID...)
+	sum := sha256.Sum256(b)
+	return base64.RawURLEncoding.EncodeToString(sum[:16])
 }
 
 func (c *catalog) Observe(ctx context.Context, ev event.Event) (Set, error) {
@@ -90,11 +130,16 @@ func (c *catalog) Observe(ctx context.Context, ev event.Event) (Set, error) {
 			b.MarkSeen(apiKeyKey("seen_ips", ev.APIKeyID), f.ip, ev.Time, newIPLookback)
 		}
 	}
+	var repeated *store.BoolResult
+	if ev.ID != "" && c.dedupeTTL > 0 {
+		repeated = b.Dedupe(dedupeID(ev), ev.Time, c.dedupeTTL)
+	}
 
 	if err := c.store.Do(ctx, &b); err != nil {
 		set.Key = c.knownLeaked(ev.APIKeyID)
 		return set, fmt.Errorf("signal: observe %s event: %w", ev.Type, err)
 	}
+	set.Duplicate = repeated != nil && repeated.Val()
 	set.Account = acct.signals(ev.Time)
 	set.Key = key.signals(ev.Time)
 	set.IP = ip.signals()

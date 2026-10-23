@@ -23,10 +23,43 @@ func (m *Memory) entries() int {
 	for i := range m.shards {
 		s := &m.shards[i]
 		s.mu.Lock()
-		n += len(s.counters) + len(s.distincts) + len(s.seen) + len(s.first) + len(s.values)
+		n += len(s.counters) + len(s.distincts) + len(s.seen) + len(s.first) + len(s.values) + len(s.ids)
 		s.mu.Unlock()
 	}
 	return n
+}
+
+// TestMemoryForgetsDedupeIDs checks that ids go by the wall clock, and by
+// event time once the newest event time stored is their ttl past them or
+// past the newest event time when they were written, whichever is later.
+func TestMemoryForgetsDedupeIDs(t *testing.T) {
+	// The wall clock stays put, as in a replay of old events.
+	m, _ := newTestMemory(t, t0.Add(365*24*time.Hour))
+	send := func(id string, at time.Time) bool {
+		t.Helper()
+		var rep *BoolResult
+		run(t, m, func(b *Batch) {
+			rep = b.Dedupe(id, at, 10*time.Minute)
+			b.Incr("k", time.Hour, at, 1)
+		})
+		return rep.Val()
+	}
+	send("now", t0.Add(time.Hour))
+	// An event an hour older than the newest stored: its id lasts as long
+	// as one written for the newest, so its retry is caught too.
+	send("late", t0)
+	m.sweepAll()
+	if !send("late", t0) || !send("now", t0.Add(time.Hour)) {
+		t.Fatal("an id was forgotten before its ttl")
+	}
+	run(t, m, func(b *Batch) { b.Incr("k", time.Hour, t0.Add(time.Hour+10*time.Minute), 1) })
+	m.sweepAll()
+	if got := m.entries(); got != 1 {
+		t.Errorf("entries = %d, want only the counter once event time is the ttl past the ids", got)
+	}
+	if send("late", t0) {
+		t.Error("the id was still remembered after event time moved its ttl past it")
+	}
 }
 
 func (m *Memory) sweepAll() {

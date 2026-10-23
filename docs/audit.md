@@ -120,7 +120,11 @@ A decision can be read and labeled as soon as Record returns: when `Get` or
 `Label` does not find a decision and the buffer is not empty, it flushes the
 buffer and looks again. `Flush(ctx)` writes everything queued; when ctx ends
 first it returns ctx's error, and the decisions stay queued to be written
-later.
+later. The engine calls Record from a queue of its own, after the decision
+is answered, so the server's reads and labels (`GET /v1/decisions/{id}`,
+labels, the review queue and the rule stats) first wait for that queue to
+hand over the decisions made before them (`Engine.Sync`): a read sent right
+after a decision's response finds the decision.
 
 `Close(ctx)` stops accepting decisions and writes everything still queued,
 for as long as ctx allows, or 30 seconds when ctx has no deadline. The server

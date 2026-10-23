@@ -3,6 +3,7 @@ package signal_test
 import (
 	"context"
 	"fmt"
+	"strconv"
 	"testing"
 	"time"
 
@@ -18,7 +19,22 @@ import (
 // CATRACA_TEST_REDIS_URL and the cluster at CATRACA_TEST_REDIS_CLUSTER, when
 // they are set, and also report redis-us/op: the CPU time Redis spent per
 // event during the loop, which bounds how many events one Redis core can take.
-func BenchmarkObserve(b *testing.B) {
+// The events have no id, so nothing guards them against a retry.
+func BenchmarkObserve(b *testing.B) { benchmarkObserve(b, "") }
+
+// BenchmarkObserveWithID is BenchmarkObserve for events that carry an id, as
+// a platform sends to make its retries count once: each event's id is new,
+// so each one writes its dedupe entry (one key on a single Redis, one per
+// slot with increments on a cluster). BenchmarkObserveRetry sends one event
+// with an id once and then again on every iteration: each is a duplicate,
+// which skips its increments.
+func BenchmarkObserveWithID(b *testing.B) { benchmarkObserve(b, "new") }
+
+func BenchmarkObserveRetry(b *testing.B) { benchmarkObserve(b, "same") }
+
+// benchmarkObserve runs BenchmarkObserve with event ids: none ("") a new one
+// per event ("new"), or the same one for every event of an account ("same").
+func benchmarkObserve(b *testing.B, ids string) {
 	const accounts = 1000
 	events := make([]event.Event, accounts)
 	for i := range events {
@@ -32,6 +48,9 @@ func BenchmarkObserve(b *testing.B) {
 			Subject:   "Your weekly digest",
 			Links:     []string{"https://sender.example/read", "https://bit.ly/x"},
 		}
+		if ids == "same" {
+			events[i].ID = fmt.Sprintf("msg-%d", i)
+		}
 	}
 	for i, be := range backends {
 		b.Run(be.name, func(b *testing.B) {
@@ -39,12 +58,30 @@ func BenchmarkObserve(b *testing.B) {
 			c := signal.NewCatalog(be.new(b), signal.Options{})
 			defer c.Close()
 			ctx := context.Background()
+			if ids == "same" {
+				// The first send of each event, so the loop has only
+				// retries.
+				for _, ev := range events {
+					ev.Time = t0
+					if _, err := c.Observe(ctx, ev); err != nil {
+						b.Fatal(err)
+					}
+				}
+			}
 			done := measureRedis(b, i)
 			b.ReportAllocs()
 			n := 0
 			for b.Loop() {
 				ev := events[n%accounts]
-				ev.Time = t0.Add(time.Duration(n) * time.Millisecond)
+				switch ids {
+				case "new":
+					ev.ID = "msg-" + strconv.Itoa(n)
+					ev.Time = t0.Add(time.Duration(n) * time.Millisecond)
+				case "same":
+					ev.Time = t0
+				default:
+					ev.Time = t0.Add(time.Duration(n) * time.Millisecond)
+				}
 				if _, err := c.Observe(ctx, ev); err != nil {
 					b.Fatal(err)
 				}

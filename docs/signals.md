@@ -96,6 +96,13 @@ login from a new IP leaves `account.new_ip` true for the first send from that
 IP, and `account.recent_ip` true for the sends after it, so a hijacked account
 still shows a new IP when it starts sending.
 
+An event sent again with the `id` it was first sent with, same type and
+account, records nothing more for `engine.dedupe_ttl` after it first counted
+([retries](api.md#retries)): counters do not count it twice. Its signals are
+read as for any event, so they include the first sending: a retried send
+sees `sends_1m` as it was with the send counted once, and `new_ip` false,
+since the first sending recorded the IP.
+
 Values are matched as follows: account and key ids exactly as sent; domains in
 lowercase; IPs in canonical form, so `2001:DB8::1` and `2001:db8::1` are the
 same address, and so are `::ffff:203.0.113.7` and `203.0.113.7`.

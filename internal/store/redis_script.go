@@ -8,8 +8,10 @@ import (
 )
 
 // batchScript runs the operations of one scriptCall, in order. KEYS lists
-// each key once; ARGV is the operations, each an opcode followed by its
-// arguments, keys being given by their index in KEYS:
+// each key once. ARGV starts with the call's Dedupe key, by its index in
+// KEYS, and that key's ttl, or 0 and 0 without one; then come the
+// operations, each an opcode followed by its arguments, keys being given by
+// their index in KEYS:
 //
 //	I key bucket delta ttl            counter: add delta to bucket
 //	C key bucket                      counter: count over the window ending in bucket
@@ -21,8 +23,17 @@ import (
 //	V key value ttl                   value: set
 //	G key                             value: get, or nil
 //
-// It returns the result of each C, D, S, F and G, in order. A ttl of 0 means
-// none.
+// It returns the result of each C, D, S, F and G, in order, then 1 when the
+// Dedupe key existed, so the I operations were skipped, and 0 otherwise. A
+// ttl of 0 means none.
+//
+// The Dedupe key is set, with NX, before any operation runs. An error that
+// stops the script midway, such as a counter holding something that is not
+// a number, leaves the writes made before it, the key included: sending the
+// batch again then skips the increments that did not apply rather than
+// repeat those that did, since a count too low costs detection and a count
+// too high can block a good sender. Out of memory stops the script at its
+// first write, the key's, before anything applies.
 //
 // A counter hash holds a field per bucket, n (its newest bucket) and s (the
 // sum of its buckets). Buckets are kept only within the window of the newest
@@ -159,7 +170,14 @@ local function count(k, idx)
   return (sum(k, newest - B + 1, idx))
 end
 
-local i, n = 1, #argv
+-- repeated is true when the call's Dedupe key exists: a call with the same
+-- id applied these increments already.
+local repeated = false
+if argv[1] ~= '0' then
+  repeated = not call('SET', keys[tonumber(argv[1])], '1', 'NX', 'PX', argv[2])
+end
+
+local i, n = 3, #argv
 while i <= n do
   local op = argv[i]
   if op == 'D' then
@@ -175,7 +193,9 @@ while i <= n do
       out[#out + 1] = count(k, tonumber(argv[i + 2]))
       i = i + 3
     elseif op == 'I' then
-      incr(k, argv[i + 2], argv[i + 3], argv[i + 4])
+      if not repeated then
+        incr(k, argv[i + 2], argv[i + 3], argv[i + 4])
+      end
       i = i + 5
     elseif op == 'A' then
       local block, member, ttl = keys[tonumber(argv[i + 2])], argv[i + 3], argv[i + 4]
@@ -216,6 +236,7 @@ while i <= n do
     end
   end
 end
+out[#out + 1] = repeated and 1 or 0
 return out
 `, "BUCKETS", strconv.Itoa(Buckets))
 
