@@ -139,5 +139,10 @@ CATRACA_TOKEN=... catraca label 01M50QGQP8YVGSY487W3YJ8J24 \
 catraca version
 ```
 
-Prints the version set at build time, the VCS revision when known, and the
-Go version and platform.
+Prints the version, commit and commit date set at build time (release builds
+set all three; other builds fall back to the VCS stamp when there is one),
+and the Go version and platform:
+
+```text
+catraca v0.1.0 (0123456789ab, 2026-10-23T12:00:00Z) go1.26.10 linux/amd64
+```

@@ -1,0 +1,133 @@
+# yaml-language-server: $schema=https://goreleaser.com/static/schema.json
+#
+# Release configuration, run by .github/workflows/release.yml when a v* tag
+# is pushed. CONTRIBUTING.md ("Releasing") has the steps. Check a change with
+#
+#   go run github.com/goreleaser/goreleaser/v2@v2.18.3 check
+#   go run github.com/goreleaser/goreleaser/v2@v2.18.3 release --snapshot --clean --skip=docker,sign,sbom
+#
+# and keep that version in step with the one in release.yml.
+version: 2
+
+project_name: catraca
+
+builds:
+  - id: catraca
+    main: ./cmd/catraca
+    binary: catraca
+    # SQLite is modernc.org/sqlite, pure Go, so every target cross-compiles
+    # from one runner into a static binary.
+    env:
+      - CGO_ENABLED=0
+    goos: [linux, darwin, windows]
+    goarch: [amd64, arm64]
+    flags:
+      - -trimpath
+    # catraca version prints these. The tag drops its "v" in .Version, so it
+    # is added back to match the tag.
+    ldflags:
+      - -s -w -X main.version=v{{ .Version }} -X main.commit={{ .FullCommit }} -X main.date={{ .CommitDate }}
+    # File times from the commit rather than the clock, so a rebuild of the
+    # same tag produces the same binaries.
+    mod_timestamp: "{{ .CommitTimestamp }}"
+
+archives:
+  - id: catraca
+    ids: [catraca]
+    formats: [tar.gz]
+    format_overrides:
+      - goos: windows
+        formats: [zip]
+    # Enough to follow the README's quick start from the extracted archive:
+    # catraca.example.yaml points at rules/default.yaml.
+    files:
+      - LICENSE
+      - README.md
+      - catraca.example.yaml
+      - rules/default.yaml
+      - rules/default.test.yaml
+
+checksum:
+  name_template: checksums.txt
+  algorithm: sha256
+
+# One SPDX SBOM per archive, made by syft, which the workflow installs.
+sboms:
+  - artifacts: archive
+
+dockers_v2:
+  - id: catraca
+    ids: [catraca]
+    # Dockerfile.release copies the binaries built above; Dockerfile builds
+    # from source for compose and development.
+    dockerfile: Dockerfile.release
+    images:
+      - ghcr.io/guilhermebsantiago/catraca
+    tags:
+      - "v{{ .Version }}"
+      - "{{ if not .Prerelease }}latest{{ end }}"
+    platforms:
+      - linux/amd64
+      - linux/arm64
+    extra_files:
+      - rules/default.yaml
+      - deploy/catraca.yaml
+    # buildx attaches an SBOM attestation to each platform image.
+    sbom: true
+    labels:
+      org.opencontainers.image.title: "{{ .ProjectName }}"
+      org.opencontainers.image.description: Anti-abuse engine for platforms that send email
+      org.opencontainers.image.source: https://github.com/guilhermebsantiago/catraca
+      org.opencontainers.image.url: https://catraca.guilhermebs.com.br
+      org.opencontainers.image.licenses: Apache-2.0
+      org.opencontainers.image.version: "v{{ .Version }}"
+      org.opencontainers.image.revision: "{{ .FullCommit }}"
+      org.opencontainers.image.created: "{{ .CommitDate }}"
+    # On the multi-arch index, which is what ghcr.io shows.
+    annotations:
+      org.opencontainers.image.description: Anti-abuse engine for platforms that send email
+      org.opencontainers.image.source: https://github.com/guilhermebsantiago/catraca
+      org.opencontainers.image.licenses: Apache-2.0
+      org.opencontainers.image.version: "v{{ .Version }}"
+      org.opencontainers.image.revision: "{{ .FullCommit }}"
+      org.opencontainers.image.base.name: "{{ .BaseImage }}"
+      org.opencontainers.image.base.digest: "{{ .BaseImageDigest }}"
+
+# Keyless: cosign signs with a short-lived certificate for the release
+# workflow's GitHub OIDC identity and records it in Sigstore's transparency
+# log, so there is no key to keep. One signature on the index digest covers
+# both platforms.
+docker_signs:
+  - artifacts: manifests
+    args:
+      - sign
+      - "${artifact}@${digest}"
+      - --yes
+
+changelog:
+  sort: asc
+
+release:
+  # The workflow publishes a draft: check the notes and assets, then publish
+  # it by hand. A failed run leaves a draft to delete, not a broken release.
+  draft: true
+  replace_existing_draft: true
+  # Tags such as v0.2.0-rc.1 become pre-releases (and skip the latest image tag).
+  prerelease: auto
+  footer: |
+    ## Verify
+
+    Build provenance for every file in `checksums.txt` and for the image:
+
+    ```sh
+    gh attestation verify catraca_{{ .Version }}_linux_amd64.tar.gz --repo guilhermebsantiago/catraca
+    gh attestation verify oci://ghcr.io/guilhermebsantiago/catraca:v{{ .Version }} --repo guilhermebsantiago/catraca
+    ```
+
+    The image signature:
+
+    ```sh
+    cosign verify ghcr.io/guilhermebsantiago/catraca:v{{ .Version }} \
+      --certificate-identity https://github.com/guilhermebsantiago/catraca/.github/workflows/release.yml@refs/tags/{{ .Tag }} \
+      --certificate-oidc-issuer https://token.actions.githubusercontent.com
+    ```

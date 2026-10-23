@@ -1,0 +1,70 @@
+# Dependabot version updates: weekly, with minor and patch updates grouped
+# into one pull request per entry and majors left on their own, since those
+# need reading. The cooldown gives a new release a week to be pulled before
+# it is proposed. Security updates skip both the cooldown and the grouping.
+version: 2
+
+updates:
+  - package-ecosystem: gomod
+    directory: /
+    schedule:
+      interval: weekly
+    cooldown:
+      default-days: 7
+    groups:
+      go:
+        update-types: [minor, patch]
+
+  # Keeps the workflows' commit-SHA pins current; the PRs update the SHA and
+  # the version comment together.
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly
+    cooldown:
+      default-days: 7
+    groups:
+      actions:
+        update-types: [minor, patch]
+
+  # The base images in Dockerfile and Dockerfile.release, pinned by digest.
+  # A new golang patch release also needs go.mod's toolchain line bumped in
+  # the same PR; CI's govulncheck job fails until both match.
+  - package-ecosystem: docker
+    directory: /
+    schedule:
+      interval: weekly
+    cooldown:
+      default-days: 7
+    groups:
+      images:
+        update-types: [minor, patch]
+    ignore:
+      # A new Go minor release moves the go directive, the toolchain line and
+      # this image together, by hand.
+      - dependency-name: golang
+        update-types: ["version-update:semver-major", "version-update:semver-minor"]
+
+  - package-ecosystem: npm
+    directories:
+      - /examples/client-ts
+      - /examples/hono
+    schedule:
+      interval: weekly
+    cooldown:
+      default-days: 7
+    groups:
+      examples:
+        update-types: [minor, patch]
+
+  # The Remotion project that renders the launch video. CI does not build
+  # it, so check a render before merging an update.
+  - package-ecosystem: npm
+    directory: /media
+    schedule:
+      interval: weekly
+    cooldown:
+      default-days: 7
+    groups:
+      media:
+        update-types: [minor, patch]

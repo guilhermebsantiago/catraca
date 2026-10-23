@@ -19,10 +19,18 @@ import (
 	"time"
 )
 
-// version is set at build time:
+// version, commit and date are set at build time; release builds set all
+// three (see .goreleaser.yaml):
 //
-//	go build -ldflags "-X main.version=v1.2.3" ./cmd/catraca
-var version = "dev"
+//	go build -ldflags "-X main.version=v1.2.3 -X main.commit=<sha> -X main.date=<RFC 3339>" ./cmd/catraca
+//
+// Without commit and date, "catraca version" falls back to the VCS stamp the
+// go command embeds when it builds from a git checkout.
+var (
+	version = "dev"
+	commit  string
+	date    string
+)
 
 // Exit codes.
 const (
