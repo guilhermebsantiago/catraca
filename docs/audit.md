@@ -365,9 +365,26 @@ marks it `INVALID`); drop it and build it again before upgrading.
 Times are stored as unix microseconds (UTC) in `*_at_us` columns on both
 databases, which keeps the queries identical. Each query has an index:
 rule stats read a covering index on match time, the review queue a partial
-index on unlabeled matches, the outbox a partial index on pending
-deliveries, and retention an index on decision time and a partial index on
-finished deliveries.
+index on unlabeled matches, the outbox a partial index on each hook's
+pending deliveries, and retention an index on decision time and a partial
+index on finished deliveries.
+
+**Upgrading to per-hook delivery.** Migration `0003_outbox_per_hook.sql`
+adds the column `outbox.requeued_at_us`, set when
+[`catraca outbox retry`](cli.md#outbox-retry) requeues a dead delivery, and
+the partial index `outbox_effect_due` that each hook claims its deliveries
+through. Adding the column does not rewrite the table on either database.
+The index covers pending deliveries only, but building it reads the whole
+outbox and blocks writes to it meanwhile; on a large Postgres outbox, build
+it beforehand without blocking writes, and the migration skips it:
+
+```sql
+CREATE INDEX CONCURRENTLY IF NOT EXISTS outbox_effect_due ON outbox (effect, next_attempt_at_us, id) WHERE status = 'pending';
+```
+
+During a rolling upgrade, processes of the older release that are still
+running keep delivering, but one that restarts refuses the newer schema, so
+finish the rollout rather than roll back.
 
 To delete decisions by hand instead of with [retention](#retention), delete
 from `decisions`; matches and labels go with them through `ON DELETE

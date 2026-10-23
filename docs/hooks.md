@@ -3,8 +3,9 @@
 An enforced rule can list `effects`: things the platform should do beyond
 the decision itself, such as revoking a leaked API key or suspending an
 account. Catraca carries out an effect by calling a webhook on the platform.
-This page covers when a webhook is called, what it receives, how to verify
-it, and how retries and idempotency work.
+This page covers when a webhook is called, how deliveries are sent, what
+they carry, how to verify them, and how retries, redrives and idempotency
+work.
 
 The code is in `internal/hooks`; the outbox it uses lives in the audit
 database (`internal/audit`), and the signature scheme in the public
@@ -12,7 +13,10 @@ database (`internal/audit`), and the signature scheme in the public
 
 ## Configuring hooks
 
-Each hook is named after the effect it carries out:
+Each hook is named after the effect it carries out. In `catraca.yaml` the
+fields are `name`, `url`, `secret`, `timeout`, `headers`, `concurrency`,
+`max_attempts` and `max_age` ([configuration](config.md#hooks)); in Go,
+`hooks.Hook`:
 
 | field | | |
 |---|---|---|
@@ -21,15 +25,21 @@ Each hook is named after the effect it carries out:
 | `Secret` | required | the key for the request signature; generate a long random value per hook |
 | `Timeout` | 10s | bound on one attempt |
 | `Headers` | | extra request headers, for example `Authorization`; they cannot replace the `Catraca-*` headers |
+| `Concurrency` | 4 | the hook's deliveries attempted at once, at most `Workers` |
+| `MaxAttempts` | 15 | attempts before a delivery is marked dead |
+| `MaxAge` | 24h | how long a delivery is tried for, from when it was queued |
 
-Dispatcher-wide settings:
+Dispatcher-wide settings, in `hooks.Config`:
 
 | setting | default | |
 |---|---|---|
-| `MaxAttempts` | 15 | attempts before a delivery is marked dead |
+| `Workers` | 16 | deliveries attempted at once across every hook (`outbox.workers`) |
+| `Concurrency`, `MaxAttempts`, `MaxAge` | 4, 15, 24h | the defaults of the hooks' own |
 | `MinBackoff`, `MaxBackoff` | 2s, 15m | the retry backoff range |
-| `Concurrency` | 4 | deliveries attempted at once |
 | `PollInterval` | 2s | how often due retries are looked for |
+| `BacklogInterval` | 15s | how often the backlog is counted and deliveries past their max age are given up |
+| `EnqueueTimeout` | 5s | bound on writing a decision's deliveries to the outbox |
+| `MaxWrites` | 1024 | outbox writes in flight before new effects are given up at once |
 
 ## When a webhook is called
 
@@ -40,11 +50,52 @@ done. Nor do the effects of a rule that matched only because it fails closed
 (`errored` in the decision): while the store is down such a rule matches
 every event it covers. An effect with no configured hook is skipped.
 
-The delivery is written to the `outbox` table in the audit database before
-`Dispatch` returns, so it survives a crash or a restart. A background worker
-then sends it, normally within milliseconds. If the decision is dispatched
-again, nothing new is written: there is at most one delivery per
-(decision id, effect).
+The delivery is written to the `outbox` table in the audit database, so it
+survives a crash or a restart, and a background worker sends it, normally
+within milliseconds. If the decision is dispatched again, nothing new is
+written: there is at most one delivery per (decision id, effect).
+
+The decision waits for that write, but only for its dispatch budget,
+[`engine.dispatch_timeout`](config.md#engine) (by default the engine
+deadline, 10 ms). The write normally takes a millisecond or two, and then
+the delivery is durable before the platform has its answer. When the
+outbox is slow (SQLite busy with a large write, Postgres failing over or
+still opening at start), the decision is answered when the budget runs out
+and the write goes on in the background for up to 5 seconds. Holding the
+answer longer would turn a slow audit database into slow decisions, and
+the decisions with effects are the ones that block abuse; dropping the
+write would lose an effect, such as revoking a leaked key, to a hiccup.
+Finishing it in the background keeps the effect unless Catraca crashes in
+those few seconds or the outbox stays unavailable through them.
+
+Deliveries whose write fails, or that find 1024 writes already in flight,
+are lost. Each is counted in `catraca_hooks_enqueue_errors_total` and logged
+at error level, with the decision id, the effects, the account and the API
+key, so it can be carried out by hand (when writes pile up, the log is
+limited to a line a second, which counts the effects lost since the one
+before). `catraca_hooks_enqueue_deferred_total` counts the deliveries whose
+decision was answered before they were written.
+
+## Delivery
+
+A pool of workers, 16 by default ([`outbox.workers`](config.md#outbox)),
+attempts deliveries for every hook, and each hook takes at most its own
+`concurrency` of them, 4 by default. A delivery starts as soon as a worker
+is free; it never waits for other attempts to end. So a hook whose endpoint
+hangs until its timeout, or one with a backlog of thousands, holds at most
+its own concurrency of the workers while the others keep delivering. When
+more deliveries are due than workers are free, the hook with the fewest
+attempts in flight goes first, and hooks equally busy take turns.
+
+Each hook claims its own due deliveries, oldest first. That is the only
+order there is: deliveries for different hooks are independent, attempts of
+one hook run concurrently and may finish in any order, and a failed attempt
+goes back behind newer deliveries until its retry is due. A receiver that
+needs an order must restore it, for example from the decision's `time`.
+
+With Postgres, several Catraca processes deliver from the same outbox, each
+with its own workers, and never claim the same delivery twice; each hook's
+concurrency then applies per process.
 
 ## The request
 
@@ -228,26 +279,80 @@ wait = min(MinBackoff × 2^(attempt − 1), MaxBackoff), with equal jitter: a ra
 ```
 
 With the defaults the waits are about 1–2 s, 2–4 s, 4–8 s and so on,
-doubling up to 7.5–15 minutes, and the fifteenth failure, 45 to 90 minutes
-after the first, marks the delivery `dead`. The jitter keeps a receiver
-coming back from an outage from getting every retry at the same moment. A
-`Retry-After` header (seconds or an HTTP date) on the response is honored when
-it asks for longer, up to `MaxBackoff`.
+doubling up to 7.5–15 minutes. The jitter keeps a receiver coming back from
+an outage from getting every retry at the same moment. A `Retry-After`
+header (seconds or an HTTP date) on the response is honored when it asks
+for longer, up to `MaxBackoff`.
 
-Dead deliveries stay in the outbox with the last status code and error, until
-[`audit.retention`](audit.md#retention), when set, deletes them along with
-delivered ones. To list them, and to send one again after fixing the
-receiver:
+Each hook bounds its retries two ways, and a delivery is marked `dead` at
+whichever limit it reaches first:
 
-```sql
-SELECT id, decision_id, effect, attempts, last_status_code, last_error
-FROM outbox WHERE status = 'dead' ORDER BY updated_at_us DESC;
+- **`max_attempts`** (15 by default): the fifteenth failure, 45 to 90
+  minutes after the first with the default backoff, ends the delivery.
+- **`max_age`** (24 hours by default), counted from when the delivery was
+  queued: an effect that late, such as suspending an account a day after
+  the abuse, may no longer be wanted. A failure whose retry would come after
+  it ends the delivery at once, its error saying so. A delivery still
+  waiting for an attempt when it passes `max_age`, because Catraca was down
+  or behind a backlog, is not attempted again: every 15 seconds the
+  dispatcher gives such deliveries up, and counts them in
+  `catraca_hooks_expired_total` as well as dead.
 
-UPDATE outbox SET status = 'pending', attempts = 0, next_attempt_at_us = 0 WHERE id = 42;
+A delivery for an effect that no configured hook carries out, because the
+hook was removed or this process's configuration lacks it, is left pending:
+during a rolling deploy another process may have the hook. It is given up
+once it is older than 24 hours (the default `max_age`), with an error that
+says no hook carries it out, and shows in the backlog metrics meanwhile.
+
+## Redriving dead deliveries
+
+Dead deliveries stay in the outbox with the last status code and error,
+until [`audit.retention`](audit.md#retention), when set, deletes them along
+with delivered ones, so redrive them before that. Once the receiver is
+fixed, list them and requeue them with the [CLI](cli.md#outbox-list),
+against the same audit database the server uses:
+
+```sh
+catraca outbox list --audit "$CATRACA_AUDIT_DSN" --status dead --hook revoke_key
+catraca outbox retry --audit "$CATRACA_AUDIT_DSN" 42 43
+catraca outbox retry --audit "$CATRACA_AUDIT_DSN" --dead --hook revoke_key --since 6h
 ```
 
-The dispatcher's `Stats` (enqueued, enqueue errors, delivered, retried, dead)
-are meant to be exported as metrics; alert on dead deliveries.
+A requeued delivery is due at once, so a running server sends it within its
+poll interval (2 seconds), with the same body and idempotency key as before.
+Its attempts start over from 1, and its `max_age` from the moment it was
+requeued, so an old delivery can be redriven too; `catraca outbox list`
+shows when it was requeued. The receiver gets the effect again even if an
+earlier attempt did it and only the answer was lost, which the idempotency
+key makes safe.
+
+## Metrics
+
+| metric | |
+|---|---|
+| `catraca_hooks_enqueued_total` | deliveries written to the outbox |
+| `catraca_hooks_enqueue_errors_total` | deliveries lost because they could not be written, each logged |
+| `catraca_hooks_enqueue_deferred_total` | deliveries whose decision was answered before they were written, when the write outlasted `engine.dispatch_timeout` |
+| `catraca_hooks_delivered_total` | deliveries answered with a `2xx` |
+| `catraca_hooks_retries_total` | failed attempts that will be retried |
+| `catraca_hooks_dead_total` | deliveries given up, for any reason |
+| `catraca_hooks_expired_total` | deliveries given up without another attempt, past `max_age` or with no hook; also counted as dead |
+| `catraca_hooks_pending{hook}` | deliveries waiting: due, in flight, or waiting out a backoff |
+| `catraca_hooks_pending_due{hook}` | of those, the ones already due: waiting for a worker, not for a backoff |
+| `catraca_hooks_oldest_pending_age_seconds{hook}` | how long the oldest pending delivery has waited since it was queued |
+
+The `{hook}` gauges have a series for every configured hook, and one for each
+effect with pending deliveries and no hook. They are counted every 15
+seconds from the outbox, which every process shares, so with several
+processes aggregate them with `max`, not `sum`. The counters are per process.
+
+Alert on `catraca_hooks_dead_total` and `catraca_hooks_enqueue_errors_total`
+rising, and on `catraca_hooks_oldest_pending_age_seconds` past what an
+effect may wait. A `catraca_hooks_pending_due` that stays high means the
+workers cannot keep up; a `catraca_hooks_pending` that grows while
+`pending_due` stays low means the receiver is failing and deliveries wait
+out their backoff. `catraca outbox stats` shows the same per hook, with the
+dead and delivered counts.
 
 ## Idempotency
 

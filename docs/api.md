@@ -728,7 +728,8 @@ Prometheus metrics in the text format.
 | `catraca_audit_retention_deleted_total{table}` | counter | rows deleted by [retention](audit.md#retention): `decisions` (with their matches and labels) and `outbox` |
 | `catraca_audit_retention_errors_total` | counter | retention runs that failed |
 | `go_sql_*{db_name="audit"}` | gauge, counter | the audit database's connection pool: open, in use, idle, waits for a connection and their duration |
-| `catraca_hooks_enqueued_total`, `_enqueue_errors_total`, `_delivered_total`, `_retries_total`, `_dead_total` | counter | effect webhook deliveries |
+| `catraca_hooks_enqueued_total`, `_enqueue_errors_total`, `_enqueue_deferred_total`, `_delivered_total`, `_retries_total`, `_dead_total`, `_expired_total` | counter | effect webhook deliveries ([metrics](hooks.md#metrics)) |
+| `catraca_hooks_pending{hook}`, `_pending_due{hook}`, `_oldest_pending_age_seconds{hook}` | gauge | the outbox backlog of each hook, counted every 15s; aggregate several instances with `max` |
 | `catraca_feedback_outcomes_total{provider,outcome}` | counter | what the feedback endpoints did ([outcomes](feedback.md#metrics)) |
 | `catraca_secret_scanning_outcomes_total{outcome}` | counter | batches and tokens ([outcomes](secret-scanning.md#metrics)) |
 | `catraca_ruleset_info{version}` | gauge | 1, labeled with the current ruleset version |
@@ -742,7 +743,9 @@ Prometheus metrics in the text format.
 plus the standard `go_*` and `process_*` metrics. Worth alerting on:
 `catraca_degraded_decisions_total`, `catraca_audit_dropped_total` and
 `catraca_audit_failed_total` rising, `catraca_audit_retention_errors_total`,
-`catraca_dependency_up` at 0, `catraca_hooks_dead_total`,
+`catraca_dependency_up` at 0, `catraca_hooks_dead_total` and
+`catraca_hooks_enqueue_errors_total`, `catraca_hooks_oldest_pending_age_seconds`
+past what an effect may wait,
 `catraca_ruleset_loads_total{result="error"}`, and the `decide_failed` and
 `resolve_failed` outcomes.
 

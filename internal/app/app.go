@@ -157,14 +157,15 @@ func New(ctx context.Context, cfg *config.Config, opts Options) (_ *App, err err
 	// scanning, decides through this engine, so its time bounds and the
 	// event limits of Validate cover them all.
 	eopts := engine.Options{
-		Catalog:       a.catalog,
-		Rules:         a.holder,
-		Recorder:      a.audit,
-		Deadline:      cfg.Engine.Deadline,
-		MaxFutureSkew: cfg.Engine.MaxFutureSkew,
-		MaxEventAge:   cfg.Engine.MaxEventAge,
-		Registerer:    a.registry,
-		Logger:        log.With("component", "engine"),
+		Catalog:         a.catalog,
+		Rules:           a.holder,
+		Recorder:        a.audit,
+		Deadline:        cfg.Engine.Deadline,
+		DispatchTimeout: cfg.Engine.DispatchTimeout,
+		MaxFutureSkew:   cfg.Engine.MaxFutureSkew,
+		MaxEventAge:     cfg.Engine.MaxEventAge,
+		Registerer:      a.registry,
+		Logger:          log.With("component", "engine"),
 	}
 	if a.hooks != nil {
 		eopts.Dispatcher = a.hooks
@@ -229,13 +230,9 @@ func openStore(c config.Store) (store.Store, error) {
 func (a *App) startHooks() error {
 	hs := make([]hooks.Hook, 0, len(a.cfg.Hooks))
 	for _, h := range a.cfg.Hooks {
-		headers := make(map[string]string, len(h.Headers))
-		for k, v := range h.Headers {
-			headers[k] = v.Value()
-		}
-		hs = append(hs, hooks.Hook{Name: h.Name, URL: h.URL, Secret: h.Secret.Value(), Timeout: h.Timeout, Headers: headers})
+		hs = append(hs, h.Options())
 	}
-	d, err := hooks.New(a.audit, hooks.Config{Hooks: hs, Logger: a.log.With("component", "hooks")})
+	d, err := hooks.New(a.audit, hooks.Config{Hooks: hs, Workers: a.cfg.Outbox.Workers, Logger: a.log.With("component", "hooks")})
 	if err != nil {
 		return err
 	}

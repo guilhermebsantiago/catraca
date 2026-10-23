@@ -1,8 +1,9 @@
 # Command line
 
 `catraca` runs the server and the tools around rules: checking and testing a
-ruleset, the precision gate for CI, backtests and precision reports, and
-labeling decisions. `catraca help` lists the commands and
+ruleset, the precision gate for CI, backtests and precision reports,
+labeling decisions, and listing and redriving webhook deliveries.
+`catraca help` lists the commands and
 `catraca <command> -h` the flags of one. Flags may come before or after
 positional arguments, with one dash or two.
 
@@ -15,7 +16,7 @@ go build -ldflags "-X main.version=v0.1.0" -o catraca ./cmd/catraca
 | code | meaning |
 |---|---|
 | 0 | success |
-| 1 | a check failed: an invalid configuration or ruleset, failing fixtures, rules below the gate, lint warnings with `--strict`, or a label the server refused |
+| 1 | a check failed: an invalid configuration or ruleset, failing fixtures, rules below the gate, lint warnings with `--strict`, a label the server refused, or deliveries `outbox retry` left alone |
 | 2 | the command line is wrong: an unknown command or flag, a missing argument |
 | 3 | the command could not run: a file, the audit database or the server was unavailable, or the server failed to start |
 
@@ -135,6 +136,66 @@ a server that cannot be reached or fails exits 3.
 ```sh
 CATRACA_TOKEN=... catraca label 01M50QGQP8YVGSY487W3YJ8J24 \
   --verdict false_positive --by support@platform.example --reason "appeal #4411"
+```
+
+## outbox list
+
+```sh
+catraca outbox list --audit <dsn> [--status pending|dead|delivered] [--hook <name>] \
+  [--since 24h] [--limit 50] [--json]
+```
+
+Lists the [webhook deliveries](hooks.md) in the outbox of the audit
+database: pending ones in the order they are due, the others most recently
+updated first. `--since` keeps those last updated since then, which for a
+dead delivery is when it was given up. `--audit` defaults to
+`$CATRACA_AUDIT_DSN`, and a SQLite database that does not exist is an error
+(exit 3). `--json` prints the deliveries as a JSON array, without their
+bodies.
+
+```
+ID  DECISION                    HOOK        STATUS   ATTEMPTS  CREATED               REQUEUED  UPDATED               NEXT  LAST
+42  01M50QGQP8YVGSY487W3YJ8J24  revoke_key  dead     15        2026-10-22T09:12:03Z  -         2026-10-22T10:31:44Z  -     HTTP 503: maintenance
+```
+
+The outbox commands open the database the server uses, while it runs: on
+SQLite, run them on the same host, on the file `audit.dsn` names.
+
+## outbox retry
+
+```sh
+catraca outbox retry --audit <dsn> <id>...
+catraca outbox retry --audit <dsn> --dead [--hook <name>] [--since 24h]
+```
+
+Requeues dead deliveries once their receiver is fixed: the ones named by
+id, as `outbox list` prints them, or with `--dead` every dead delivery, or
+those of one hook, or those that died since a time. A requeued delivery is
+due at once, with the same body and idempotency key; its attempts and its
+`max_age` start over ([redriving](hooks.md#redriving-dead-deliveries)). A
+running server sends it within its poll interval, 2 seconds. Deliveries
+that are not dead are left alone: with ids, each one left alone is
+reported and the command exits 1.
+
+```sh
+catraca outbox retry --audit "$CATRACA_AUDIT_DSN" --dead --hook revoke_key --since 6h
+```
+
+## outbox stats
+
+```sh
+catraca outbox stats --audit <dsn> [--json]
+```
+
+Counts the deliveries of each hook: pending, due now (waiting for a worker
+rather than a backoff), how long the oldest pending one has waited, dead
+and delivered. It reads the whole outbox, which without
+[retention](audit.md#retention) holds every delivery ever made.
+
+```
+HOOK        PENDING  DUE  OLDEST PENDING  DEAD  DELIVERED
+notify      0        0    -               1     2210
+revoke_key  3        1    4m12s           2     1187
 ```
 
 ## version

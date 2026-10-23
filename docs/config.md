@@ -240,7 +240,8 @@ database opens:
   in `catraca_records_dropped_total`;
 - the effects of enforced rules are written to the outbox if it opens
   within 5 seconds, and are otherwise logged and counted in
-  `catraca_hooks_enqueue_errors_total`;
+  `catraca_hooks_enqueue_errors_total`; their decisions do not wait for
+  that, only for `engine.dispatch_timeout`;
 - `GET /v1/decisions/{id}`, labels, the review queue and the rule stats
   answer `503 audit_unavailable`.
 
@@ -270,6 +271,7 @@ them and keeps its one connection.
 | field | default | |
 |---|---|---|
 | `deadline` | `10ms` | time budget for the signal lookup of one decision. When it runs out, the decision is made without the missing signals and marked `degraded`; each rule's `on_error` decides what that means. A `key_leak` event's write of the leak gets the same budget first, and the event answers `503` when it runs out, so the platform sends it again |
+| `dispatch_timeout` | `deadline` | time budget for writing a decision's [effects](hooks.md#when-a-webhook-is-called) to the outbox. When it runs out, the decision is answered and the write goes on in the background for up to 5 seconds, so the effects are delayed, not lost; one that still fails is logged and counted. A decision with effects takes at most this much longer than one without |
 | `max_future_skew` | `5s` | how far ahead of Catraca's clock an event's `time` may be. A later time is replaced by the clock's, since an event cannot come from the future and, counted there, would empty the windows it touches until the clock caught up. Keep it well under a minute, the shortest window |
 | `max_event_age` | `168h` | how far behind Catraca's clock an event's `time` may be. An older event is answered `400 invalid_event`, and the feedback endpoints acknowledge it so the provider does not retry; a `key_leak` takes the clock's time instead. The default is the longest counter window, so nothing a counter could still use is refused. A lower value also stops late feedback from counting; a higher one lets an event move an account's first-seen time further back |
 
@@ -302,6 +304,9 @@ See [hooks](hooks.md) for the request and how to verify it.
 | `[].secret` | required | signs each request; at least 16 characters |
 | `[].timeout` | `10s` | bound on one attempt |
 | `[].headers` | | extra headers, for example `Authorization`; `Catraca-*` headers cannot be set |
+| `[].concurrency` | `4`, or `outbox.workers` if fewer | deliveries to this hook attempted at once, at most `outbox.workers` |
+| `[].max_attempts` | `15` | attempts before a delivery is given up (marked dead) |
+| `[].max_age` | `24h` | how long a delivery is tried for, from when it was queued; longer than `timeout`. A delivery not delivered by then is given up |
 
 ```yaml
 hooks:
@@ -310,10 +315,32 @@ hooks:
     secret: ${CATRACA_HOOK_SECRET}
     headers:
       Authorization: Bearer ${PLATFORM_HOOK_TOKEN}
+    max_age: 6h
 ```
 
 An effect that an enforced rule lists and no hook carries out is skipped;
 `config check` and the server's log warn about it.
+
+A delivery ends at whichever limit comes first. With the default backoff,
+15 attempts take 45 to 90 minutes, so `max_attempts` ends a delivery to a
+receiver that keeps failing, and `max_age` ends one that waited too long to
+be tried at all, after an outage of Catraca or behind a backlog: an effect
+such as suspending an account may be unwanted a day late. To keep retrying
+through a longer outage of the receiver, raise `max_attempts` too: each
+retry after the tenth comes 7.5 to 15 minutes after the one before. See
+[retries](hooks.md#retries).
+
+### outbox
+
+How the hooks' deliveries are sent. See [hooks](hooks.md#delivery).
+
+| field | default | |
+|---|---|---|
+| `workers` | `16` | deliveries attempted at once across every hook. Each hook takes at most its own `concurrency`, so a hook whose endpoint hangs holds that many and the others keep the rest |
+
+Each attempt holds a worker for up to its hook's `timeout`. Give the pool
+room for every hook that may be slow at once: with the defaults, three
+hooks hanging until their timeout still leave four workers for the rest.
 
 ### feedback
 

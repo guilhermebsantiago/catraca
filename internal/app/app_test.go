@@ -1048,8 +1048,10 @@ func TestMetrics(t *testing.T) {
 	h.signedFeedback(`{"account_id":"acct","feedback":{"kind":"delivery"}}`, secret)
 	h.do("POST", "/v1/decide", token, `{}`)
 
+	// The hooks count their backlog when they start, in the background.
 	eventually(t, 5*time.Second, func() bool {
-		return strings.Contains(string(h.do("GET", "/metrics", "", nil).body), "catraca_audit_recorded_total 3")
+		m := string(h.do("GET", "/metrics", "", nil).body)
+		return strings.Contains(m, "catraca_audit_recorded_total 3") && strings.Contains(m, `catraca_hooks_pending{hook="revoke_key"} 0`)
 	})
 	m := string(h.do("GET", "/metrics", "", nil).body)
 	for _, want := range []string{
@@ -1073,6 +1075,10 @@ func TestMetrics(t *testing.T) {
 		`go_sql_max_open_connections{db_name="audit"} 10`,
 		`catraca_hooks_delivered_total 0`,
 		`catraca_hooks_dead_total 0`,
+		`catraca_hooks_expired_total 0`,
+		`catraca_hooks_enqueue_deferred_total 0`,
+		`catraca_hooks_pending_due{hook="revoke_key"} 0`,
+		`catraca_hooks_oldest_pending_age_seconds{hook="revoke_key"} 0`,
 		`catraca_ruleset_rules{mode="enforce"} 5`,
 		`catraca_ruleset_rules{mode="shadow"} 1`,
 		`catraca_build_info{goversion=`,

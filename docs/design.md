@@ -22,7 +22,7 @@ Principles, in order:
 ## Packages
 
 ```
-cmd/catraca          CLI: serve, config check, rules check|test|gate, replay, report, label
+cmd/catraca          CLI: serve, config check, rules check|test|gate, replay, report, label, outbox list|retry|stats
 internal/event       Event types (shared)
 internal/decision    Decision, Match, Action, Mode, OnError (shared)
 internal/signal      Signal Set + Catalog interface (shared); catalog impl
@@ -200,7 +200,10 @@ and the expected matches, so a rule change comes with a test like code does.
    the key in memory, and `Decide` returns an error so the caller sends the
    event again.
 6. Hand the decision to the Recorder (non-blocking) and, when enforced
-   matches that are not `Errored` have effects, to the Dispatcher.
+   matches that are not `Errored` have effects, to the Dispatcher, waiting
+   for it at most the dispatch budget (`engine.dispatch_timeout`, the
+   deadline by default). A slow outbox delays the effects, whose write
+   goes on in the background, not the decision.
 7. Metrics: decisions by action, matches by rule and mode, errors by rule,
    degraded decisions, latency histogram.
 
@@ -244,7 +247,11 @@ HMAC-SHA256 over `timestamp.body` in a `Catraca-Signature: t=..,v1=..`
 header (package `signature`; the generic feedback endpoint and the secret
 scanning resolver use the same scheme). Deliveries are written to an outbox table in the audit database
 first, retried with exponential backoff and jitter, and are idempotent per
-(decision id, effect).
+(decision id, effect). Each hook claims its own deliveries, up to its
+concurrency, from a pool of workers shared by all hooks, so one slow
+endpoint never holds up the others; a delivery is given up after the
+hook's `max_attempts` or `max_age`, and `catraca outbox retry` requeues
+dead ones.
 
 ## Feedback
 

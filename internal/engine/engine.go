@@ -64,9 +64,12 @@ type Recorder interface {
 // that revokes a key. Dispatch is called synchronously by Decide, only for
 // decisions with enforced effects (decision.Decision.Effects: never those
 // of shadow matches or of rules that matched only by failing closed), with
-// a context that is not canceled when the caller goes away. It should
-// persist the work, for example to an outbox, and deliver it in the
-// background.
+// a context that is not canceled when the caller goes away but ends with
+// the dispatch budget (Options.DispatchTimeout). It should persist the work,
+// for example to an outbox, deliver it in the background, and return by
+// the end of the budget: work not persisted by then it should go on with in
+// the background, and count and log what it loses, because Decide answers
+// regardless.
 type Dispatcher interface {
 	Dispatch(ctx context.Context, ev event.Event, d decision.Decision)
 }
@@ -89,6 +92,10 @@ type Options struct {
 	// during Observe the decision is degraded and rules run on the signals
 	// Observe returned; during MarkLeaked, Decide returns an error.
 	Deadline time.Duration
+	// DispatchTimeout is how long Decide waits for the Dispatcher, the
+	// dispatch budget; zero means Deadline. A decision with effects costs
+	// at most this much more than one without, however slow the outbox.
+	DispatchTimeout time.Duration
 	// RecordQueue is how many decisions may wait for the Recorder; zero
 	// means DefaultRecordQueue.
 	RecordQueue int
@@ -125,6 +132,8 @@ type Engine struct {
 	rules      RuleSource
 	dispatcher Dispatcher
 	deadline   time.Duration
+	// dispatchTimeout bounds the wait for the dispatcher.
+	dispatchTimeout time.Duration
 	// maxFuture and maxAge bound event times; trustTime turns the bounds off.
 	maxFuture, maxAge time.Duration
 	trustTime         bool
@@ -149,8 +158,8 @@ func New(opts Options) (*Engine, error) {
 	if opts.Rules == nil {
 		return nil, errors.New("engine: Options.Rules is required")
 	}
-	if opts.Deadline < 0 || opts.RecordQueue < 0 || opts.MaxFutureSkew < 0 || opts.MaxEventAge < 0 {
-		return nil, errors.New("engine: Options.Deadline, RecordQueue, MaxFutureSkew and MaxEventAge must not be negative")
+	if opts.Deadline < 0 || opts.DispatchTimeout < 0 || opts.RecordQueue < 0 || opts.MaxFutureSkew < 0 || opts.MaxEventAge < 0 {
+		return nil, errors.New("engine: Options.Deadline, DispatchTimeout, RecordQueue, MaxFutureSkew and MaxEventAge must not be negative")
 	}
 	m, err := newMetrics(opts.Registerer)
 	if err != nil {
@@ -169,6 +178,7 @@ func New(opts Options) (*Engine, error) {
 		log:        opts.Logger,
 		metrics:    m,
 	}
+	e.dispatchTimeout = cmp.Or(opts.DispatchTimeout, e.deadline)
 	if e.now == nil {
 		e.now = time.Now
 	}
@@ -193,7 +203,8 @@ func New(opts Options) (*Engine, error) {
 //     shadow matches are recorded, and rules that cannot be evaluated follow
 //     on_error;
 //  5. queue the decision for the Recorder and, when enforced rules that
-//     matched have effects, call the Dispatcher.
+//     matched have effects, call the Dispatcher, for at most the dispatch
+//     budget (Options.DispatchTimeout).
 //
 // Decide returns an error only when nothing was observed, so the caller may
 // retry: the event is invalid (ErrInvalidEvent), no ruleset is loaded
@@ -267,7 +278,12 @@ func (e *Engine) Decide(ctx context.Context, ev event.Event) (decision.Decision,
 		}
 	}
 	if e.dispatcher != nil && len(d.Effects()) > 0 {
-		e.dispatcher.Dispatch(context.WithoutCancel(ctx), ev, d)
+		// The decision is made and the platform waits for it: effects get
+		// a budget of their own, not the caller's patience. A dispatcher
+		// that runs out of it finishes the work in the background.
+		dctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), e.dispatchTimeout)
+		e.dispatcher.Dispatch(dctx, ev, d)
+		cancel()
 	}
 	return d, nil
 }

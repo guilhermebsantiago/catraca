@@ -1,12 +1,14 @@
 // Package hooks calls the platform's webhooks for the effects of enforced
 // rules, such as revoking an API key or suspending an account.
 //
-// Dispatch writes one delivery per effect to a durable outbox before it
-// returns; Run delivers them. Each request is signed in the
-// signature.Header header (receivers verify it with signature.Verify),
-// carries an idempotency key that is the same on every attempt, and is
-// retried with exponential backoff and jitter until it gets a 2xx response or
-// runs out of attempts.
+// Dispatch writes one delivery per effect to a durable outbox; Run delivers
+// them. Each hook takes its own deliveries, at most its Concurrency at a
+// time out of Workers shared by every hook, so one slow endpoint never holds
+// up another's. Each request is signed in the signature.Header header
+// (receivers verify it with signature.Verify), carries an idempotency key
+// that is the same on every attempt, and is retried with exponential backoff
+// and jitter until it gets a 2xx response, runs out of attempts or outlives
+// its hook's MaxAge.
 package hooks
 
 import (
@@ -41,6 +43,15 @@ const (
 	AttemptHeader = "Catraca-Attempt"
 )
 
+// Defaults for the zero values of Hook and Config.
+const (
+	DefaultTimeout     = 10 * time.Second
+	DefaultConcurrency = 4
+	DefaultMaxAttempts = 15
+	DefaultMaxAge      = 24 * time.Hour
+	DefaultWorkers     = 16
+)
+
 // Hook is a webhook that carries out one effect.
 type Hook struct {
 	// Name is the effect the hook carries out, as rules list it under
@@ -50,20 +61,43 @@ type Hook struct {
 	URL string
 	// Secret keys the request signature. Required.
 	Secret string
-	// Timeout bounds one attempt. Default 10s.
+	// Timeout bounds one attempt. Default DefaultTimeout.
 	Timeout time.Duration
 	// Headers are added to every request, for example an Authorization
 	// header. They cannot replace the Catraca-* headers.
 	Headers map[string]string
+	// Concurrency is how many of the hook's deliveries are attempted at
+	// once, at most Config.Workers. Default Config.Concurrency.
+	Concurrency int
+	// MaxAttempts is how many times a delivery is tried before it is marked
+	// dead. Default Config.MaxAttempts.
+	MaxAttempts int
+	// MaxAge is how long a delivery is tried for, from when it was queued
+	// (audit.Delivery.QueuedAt). One not delivered by then is marked dead:
+	// an effect that late, such as suspending an account a day after the
+	// abuse, may no longer be wanted. Default Config.MaxAge.
+	MaxAge time.Duration
 }
 
 // Config configures a Dispatcher. Zero values take the defaults.
 type Config struct {
 	Hooks []Hook
-	// MaxAttempts is how many times a delivery is tried before it is marked
-	// dead. Default 15, which with the default backoff keeps retrying for
+	// Workers is how many deliveries are attempted at once across every
+	// hook. Each hook takes at most its own Concurrency of them. Default
+	// DefaultWorkers.
+	Workers int
+	// Concurrency is the Concurrency of hooks that do not set one. Default
+	// DefaultConcurrency.
+	Concurrency int
+	// MaxAttempts is the MaxAttempts of hooks that do not set one. Default
+	// DefaultMaxAttempts, which with the default backoff keeps retrying for
 	// 45 to 90 minutes.
 	MaxAttempts int
+	// MaxAge is the MaxAge of hooks that do not set one. Default
+	// DefaultMaxAge. Deliveries for an effect no hook carries out are given
+	// up at this age: until then another instance, configured with the
+	// hook, may still deliver them.
+	MaxAge time.Duration
 	// MinBackoff is the wait after the first failed attempt; it doubles with
 	// each further failure, up to MaxBackoff. Each wait is jittered to
 	// between half and all of its value. Defaults 2s and 15m.
@@ -72,10 +106,17 @@ type Config struct {
 	// PollInterval is how often Run looks for due deliveries when Dispatch
 	// has not woken it. Default 2s.
 	PollInterval time.Duration
-	// Concurrency is how many deliveries are attempted at once. Default 4.
-	Concurrency int
-	// EnqueueTimeout bounds the outbox write in Dispatch. Default 5s.
+	// BacklogInterval is how often Run counts the deliveries waiting for
+	// each hook (Backlog) and gives up those past their max age. Default
+	// 15s.
+	BacklogInterval time.Duration
+	// EnqueueTimeout bounds an outbox write of Dispatch, including the part
+	// that runs on after Dispatch returned. Default 5s.
 	EnqueueTimeout time.Duration
+	// MaxWrites bounds the outbox writes in flight. While that many are,
+	// the outbox is not keeping up, and Dispatch gives up on new effects at
+	// once instead of piling up more. Default 1024.
+	MaxWrites int
 	// Client sends the requests. The default client does not follow
 	// redirects: a 3xx response is a failed attempt.
 	Client *http.Client
@@ -83,11 +124,18 @@ type Config struct {
 	Logger *slog.Logger
 }
 
-const defaultHookTimeout = 10 * time.Second
-
 func (c Config) withDefaults() Config {
+	if c.Workers <= 0 {
+		c.Workers = DefaultWorkers
+	}
+	if c.Concurrency <= 0 {
+		c.Concurrency = min(DefaultConcurrency, c.Workers)
+	}
 	if c.MaxAttempts <= 0 {
-		c.MaxAttempts = 15
+		c.MaxAttempts = DefaultMaxAttempts
+	}
+	if c.MaxAge <= 0 {
+		c.MaxAge = DefaultMaxAge
 	}
 	if c.MinBackoff <= 0 {
 		c.MinBackoff = 2 * time.Second
@@ -99,11 +147,14 @@ func (c Config) withDefaults() Config {
 	if c.PollInterval <= 0 {
 		c.PollInterval = 2 * time.Second
 	}
-	if c.Concurrency <= 0 {
-		c.Concurrency = 4
+	if c.BacklogInterval <= 0 {
+		c.BacklogInterval = 15 * time.Second
 	}
 	if c.EnqueueTimeout <= 0 {
 		c.EnqueueTimeout = 5 * time.Second
+	}
+	if c.MaxWrites <= 0 {
+		c.MaxWrites = 1024
 	}
 	if c.Client == nil {
 		c.Client = &http.Client{
@@ -139,14 +190,24 @@ type Stats struct {
 	// Enqueued deliveries were written to the outbox; a repeated
 	// (decision, effect) is not counted again.
 	Enqueued uint64
-	// EnqueueErrors are deliveries Dispatch could not write.
+	// EnqueueErrors are deliveries Dispatch could not write: effects that
+	// are lost, each logged.
 	EnqueueErrors uint64
+	// Deferred deliveries outlasted the wait of their Dispatch (the engine's
+	// dispatch budget), so the decision was answered before they were
+	// durable. Their write went on, and each is also counted in Enqueued or
+	// EnqueueErrors once it ends.
+	Deferred uint64
 	// Delivered deliveries got a 2xx response.
 	Delivered uint64
 	// Retried counts failed attempts that will be tried again.
 	Retried uint64
 	// Dead deliveries were given up.
 	Dead uint64
+	// Expired deliveries were given up without another attempt because
+	// they outlived their hook's max age waiting, or because no hook
+	// carries out their effect. They are also counted in Dead.
+	Expired uint64
 }
 
 // Dispatcher enqueues and delivers effect webhooks. It is safe for
@@ -154,24 +215,39 @@ type Stats struct {
 type Dispatcher struct {
 	outbox audit.Outbox
 	cfg    Config
-	hooks  map[string]Hook
-	log    *slog.Logger
+	// hooks are the configured hooks by name, with their defaults applied;
+	// names lists them in configuration order.
+	hooks map[string]Hook
+	names []string
+	log   *slog.Logger
 	// now is the clock for scheduling and signing; tests replace it.
-	now func() time.Time
-	// lease is how long a claimed delivery is reserved for its attempt.
-	lease time.Duration
-	wake  chan struct{}
+	now  func() time.Time
+	wake chan struct{}
+
+	// writes holds a token for each outbox write in flight, and writing
+	// counts them, so Run can wait for the writes Dispatch left running.
+	writes  chan struct{}
+	writing sync.WaitGroup
+	// overloadLog limits the log of effects lost to a full writes, which
+	// counts them meanwhile in overloadLost.
+	overloadLog  limiter
+	overloadLost atomic.Uint64
+
+	// backlog is what the last refresh found waiting in the outbox.
+	backlog atomic.Pointer[[]audit.Backlog]
 
 	enqueued      atomic.Uint64
 	enqueueErrors atomic.Uint64
+	deferred      atomic.Uint64
 	delivered     atomic.Uint64
 	retried       atomic.Uint64
 	dead          atomic.Uint64
+	expired       atomic.Uint64
 }
 
 // New returns a Dispatcher that writes to and delivers from outbox, usually
 // an *audit.DB. It checks the hooks: each needs a unique name, an http(s)
-// URL and a secret.
+// URL, a secret, and a concurrency no higher than the workers.
 func New(outbox audit.Outbox, cfg Config) (*Dispatcher, error) {
 	if outbox == nil {
 		return nil, errors.New("hooks: nil outbox")
@@ -184,8 +260,8 @@ func New(outbox audit.Outbox, cfg Config) (*Dispatcher, error) {
 		log:    cfg.Logger,
 		now:    time.Now,
 		wake:   make(chan struct{}, 1),
+		writes: make(chan struct{}, cfg.MaxWrites),
 	}
-	var longest time.Duration
 	for _, h := range cfg.Hooks {
 		if err := validateHook(h); err != nil {
 			return nil, err
@@ -194,14 +270,23 @@ func New(outbox audit.Outbox, cfg Config) (*Dispatcher, error) {
 			return nil, fmt.Errorf("hooks: hook %q is configured twice", h.Name)
 		}
 		if h.Timeout == 0 {
-			h.Timeout = defaultHookTimeout
+			h.Timeout = DefaultTimeout
 		}
-		longest = max(longest, h.Timeout)
+		if h.Concurrency == 0 {
+			h.Concurrency = cfg.Concurrency
+		}
+		if h.MaxAttempts == 0 {
+			h.MaxAttempts = cfg.MaxAttempts
+		}
+		if h.MaxAge == 0 {
+			h.MaxAge = cfg.MaxAge
+		}
+		if h.Concurrency > cfg.Workers {
+			return nil, fmt.Errorf("hooks: hook %q: concurrency %d is more than the %d workers", h.Name, h.Concurrency, cfg.Workers)
+		}
 		d.hooks[h.Name] = h
+		d.names = append(d.names, h.Name)
 	}
-	// The lease outlasts the slowest attempt, so a delivery is not claimed
-	// twice while its first attempt is still running.
-	d.lease = longest + 30*time.Second
 	return d, nil
 }
 
@@ -216,8 +301,8 @@ func validateHook(h Hook) error {
 	if h.Secret == "" {
 		return fmt.Errorf("hooks: hook %q: secret is required", h.Name)
 	}
-	if h.Timeout < 0 {
-		return fmt.Errorf("hooks: hook %q: negative timeout", h.Name)
+	if h.Timeout < 0 || h.Concurrency < 0 || h.MaxAttempts < 0 || h.MaxAge < 0 {
+		return fmt.Errorf("hooks: hook %q: negative timeout, concurrency, max attempts or max age", h.Name)
 	}
 	return nil
 }
@@ -234,9 +319,11 @@ func (d *Dispatcher) Stats() Stats {
 	return Stats{
 		Enqueued:      d.enqueued.Load(),
 		EnqueueErrors: d.enqueueErrors.Load(),
+		Deferred:      d.deferred.Load(),
 		Delivered:     d.delivered.Load(),
 		Retried:       d.retried.Load(),
 		Dead:          d.dead.Load(),
+		Expired:       d.expired.Load(),
 	}
 }
 
@@ -244,10 +331,15 @@ func (d *Dispatcher) Stats() Stats {
 // matches that has a hook, then wakes Run. Effects without a hook are
 // skipped. Dispatching the same decision again adds nothing.
 //
-// Once Dispatch returns, the deliveries survive a restart. It blocks for the
-// outbox write, at most EnqueueTimeout, even if ctx is canceled first: the
-// decision has been made and its effects must not be lost. Failures are
-// logged and counted, not returned, because the decision stands either way.
+// Dispatch returns once the deliveries are written, so they survive a
+// restart, or when ctx is done, whichever comes first. The engine gives it
+// its dispatch budget that way, so a slow outbox never holds a decision up
+// for long. Canceling ctx never cancels the write: it goes on in the
+// background, for at most EnqueueTimeout, because the decision has been made
+// and its effects must not be lost. Deliveries whose write fails, or that
+// find MaxWrites writes in flight, are lost: they are counted and logged,
+// with what to carry out by hand, not returned, because the decision stands
+// either way.
 func (d *Dispatcher) Dispatch(ctx context.Context, ev event.Event, dec decision.Decision) {
 	var ds []audit.Delivery
 	now := d.now()
@@ -267,12 +359,37 @@ func (d *Dispatcher) Dispatch(ctx context.Context, ev event.Event, dec decision.
 	if len(ds) == 0 {
 		return
 	}
+	select {
+	case d.writes <- struct{}{}:
+	default:
+		d.overloaded(ev, dec, ds)
+		return
+	}
+	written := make(chan struct{})
+	d.writing.Go(func() {
+		defer func() { <-d.writes }()
+		defer close(written)
+		d.write(ctx, ev, dec, ds)
+	})
+	select {
+	case <-written:
+	case <-ctx.Done():
+		d.deferred.Add(uint64(len(ds)))
+	}
+}
+
+// write writes ds to the outbox, for at most EnqueueTimeout whatever
+// happens to ctx.
+func (d *Dispatcher) write(ctx context.Context, ev event.Event, dec decision.Decision, ds []audit.Delivery) {
 	ctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), d.cfg.EnqueueTimeout)
 	defer cancel()
 	n, err := d.outbox.Enqueue(ctx, ds)
 	if err != nil {
 		d.enqueueErrors.Add(uint64(len(ds)))
-		d.log.Error("hooks: enqueue deliveries", "decision_id", dec.ID, "count", len(ds), "err", err)
+		// The log line is the only trace of these effects, so it names
+		// what to carry out by hand.
+		d.log.Error("hooks: effects lost: they could not be written to the outbox; carry them out by hand",
+			"decision_id", dec.ID, "effects", effectNames(ds), "account_id", ev.AccountID, "api_key_id", ev.APIKeyID, "err", err)
 		return
 	}
 	d.enqueued.Add(uint64(n))
@@ -280,6 +397,28 @@ func (d *Dispatcher) Dispatch(ctx context.Context, ev event.Event, dec decision.
 	case d.wake <- struct{}{}:
 	default:
 	}
+}
+
+// overloaded gives up on ds because MaxWrites writes are in flight. Then
+// effects may be lost by the hundred each second, so the log is limited to
+// a line a second, which counts the effects lost since the last one.
+func (d *Dispatcher) overloaded(ev event.Event, dec decision.Decision, ds []audit.Delivery) {
+	d.enqueueErrors.Add(uint64(len(ds)))
+	d.overloadLost.Add(uint64(len(ds)))
+	if !d.overloadLog.allow(time.Now()) {
+		return
+	}
+	d.log.Error("hooks: effects lost: the outbox is not keeping up, with too many writes in flight; carry them out by hand",
+		"decision_id", dec.ID, "effects", effectNames(ds), "account_id", ev.AccountID, "api_key_id", ev.APIKeyID,
+		"writes_in_flight", d.cfg.MaxWrites, "lost_since_last_line", d.overloadLost.Swap(0))
+}
+
+func effectNames(ds []audit.Delivery) []string {
+	names := make([]string, len(ds))
+	for i, del := range ds {
+		names[i] = del.Effect
+	}
+	return names
 }
 
 func newPayload(effect string, ev event.Event, dec decision.Decision) Payload {
@@ -311,99 +450,6 @@ func newPayload(effect string, ev event.Event, dec decision.Decision) Payload {
 		}
 	}
 	return p
-}
-
-// Run delivers due deliveries until ctx is done, then waits for the attempts
-// in flight (each bounded by its hook's timeout) and returns nil. Run one
-// per process; with Postgres, several processes can run it at once.
-func (d *Dispatcher) Run(ctx context.Context) error {
-	timer := time.NewTimer(d.cfg.PollInterval)
-	defer timer.Stop()
-	for {
-		n, err := d.deliverDue(ctx)
-		if ctx.Err() != nil {
-			return nil
-		}
-		if err != nil {
-			d.log.Error("hooks: claim deliveries", "err", err)
-		} else if n == d.cfg.Concurrency {
-			continue // a full batch: more may be due
-		}
-		timer.Reset(d.cfg.PollInterval)
-		select {
-		case <-ctx.Done():
-			return nil
-		case <-d.wake:
-		case <-timer.C:
-		}
-	}
-}
-
-// deliverDue claims up to Concurrency due deliveries, attempts them in
-// parallel and returns how many it claimed.
-func (d *Dispatcher) deliverDue(ctx context.Context) (int, error) {
-	ds, err := d.outbox.Claim(ctx, d.now(), d.cfg.Concurrency, d.lease)
-	if err != nil {
-		return 0, err
-	}
-	var wg sync.WaitGroup
-	for _, del := range ds {
-		wg.Go(func() { d.deliver(ctx, del) })
-	}
-	wg.Wait()
-	return len(ds), nil
-}
-
-// deliver makes one attempt and records its outcome. The attempt and the
-// outbox update are not canceled with ctx, so a shutdown lets them finish.
-func (d *Dispatcher) deliver(ctx context.Context, del audit.Delivery) {
-	ctx = context.WithoutCancel(ctx)
-	log := d.log.With("decision_id", del.DecisionID, "effect", del.Effect, "attempt", del.Attempts)
-
-	h, ok := d.hooks[del.Effect]
-	if !ok {
-		// The hook was removed from the configuration after the delivery
-		// was enqueued.
-		a := audit.Attempt{At: d.now(), Error: "no hook configured for effect " + strconv.Quote(del.Effect)}
-		d.settle(ctx, log, func(ctx context.Context) error { return d.outbox.MarkDead(ctx, del.ID, a) })
-		d.dead.Add(1)
-		log.Error("hooks: delivery dead: no hook configured")
-		return
-	}
-
-	status, retryAfter, err := d.send(ctx, h, del)
-	a := audit.Attempt{At: d.now(), StatusCode: status}
-	switch {
-	case err == nil:
-		d.settle(ctx, log, func(ctx context.Context) error { return d.outbox.MarkDelivered(ctx, del.ID, a) })
-		d.delivered.Add(1)
-		log.Debug("hooks: delivered", "status", status)
-	case del.Attempts >= d.cfg.MaxAttempts:
-		a.Error = err.Error()
-		d.settle(ctx, log, func(ctx context.Context) error { return d.outbox.MarkDead(ctx, del.ID, a) })
-		d.dead.Add(1)
-		log.Error("hooks: delivery dead after max attempts", "status", status, "err", err)
-	default:
-		a.Error = err.Error()
-		next := a.At.Add(d.backoff(del.Attempts, retryAfter))
-		d.settle(ctx, log, func(ctx context.Context) error { return d.outbox.Retry(ctx, del.ID, a, next) })
-		d.retried.Add(1)
-		log.Warn("hooks: delivery failed, will retry", "status", status, "next_attempt", next, "err", err)
-	}
-}
-
-// settleTimeout bounds an outbox update after an attempt.
-const settleTimeout = 10 * time.Second
-
-// settle records an attempt's outcome in the outbox. If that fails, the
-// delivery's lease expires and it is attempted again, which the idempotency
-// key makes safe, so the error is only logged.
-func (d *Dispatcher) settle(ctx context.Context, log *slog.Logger, update func(context.Context) error) {
-	ctx, cancel := context.WithTimeout(ctx, settleTimeout)
-	defer cancel()
-	if err := update(ctx); err != nil {
-		log.Error("hooks: record delivery outcome", "err", err)
-	}
 }
 
 // maxSnippet bounds how much of an error response is kept.
@@ -476,4 +522,17 @@ func parseRetryAfter(v string, now time.Time) time.Duration {
 		return t.Sub(now)
 	}
 	return 0
+}
+
+// limiter lets one log line through per second.
+type limiter struct {
+	last atomic.Int64
+}
+
+func (l *limiter) allow(now time.Time) bool {
+	last := l.last.Load()
+	if now.UnixNano()-last < int64(time.Second) {
+		return false
+	}
+	return l.last.CompareAndSwap(last, now.UnixNano())
 }

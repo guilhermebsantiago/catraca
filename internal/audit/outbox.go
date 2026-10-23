@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"fmt"
+	"math"
 	"sort"
 	"strings"
 	"time"
@@ -18,16 +19,25 @@ type Outbox interface {
 	// a (decision id, effect) already in the outbox is skipped, which makes
 	// enqueueing idempotent.
 	Enqueue(ctx context.Context, deliveries []Delivery) (int, error)
-	// Claim leases up to limit pending deliveries due at now, oldest first,
-	// and counts an attempt for each. A claimed delivery is not claimed
-	// again until the lease ends, so if its worker dies it is retried.
-	Claim(ctx context.Context, now time.Time, limit int, lease time.Duration) ([]Delivery, error)
+	// Claim leases up to r.Limit pending deliveries of r.Effect that are due
+	// at r.Now, oldest first, and counts an attempt for each. A claimed
+	// delivery is not claimed again until the lease ends, so if its worker
+	// dies it is retried. Each hook claims its own deliveries, so one whose
+	// endpoint is slow never holds up another's.
+	Claim(ctx context.Context, r ClaimRequest) ([]Delivery, error)
 	// MarkDelivered records a successful attempt.
 	MarkDelivered(ctx context.Context, id int64, a Attempt) error
 	// Retry records a failed attempt and schedules the next one.
 	Retry(ctx context.Context, id int64, a Attempt, next time.Time) error
 	// MarkDead records a failed attempt after which the delivery is given up.
 	MarkDead(ctx context.Context, id int64, a Attempt) error
+	// Expire gives up the deliveries of effect that are due at a.At and were
+	// queued before before (see Delivery.QueuedAt), recording a.Error as the
+	// reason, and returns how many it gave up. They are past their hook's
+	// max age, or wait for a hook that is not configured.
+	Expire(ctx context.Context, effect string, before time.Time, a Attempt) (int, error)
+	// Backlog counts the pending deliveries of every effect that has some.
+	Backlog(ctx context.Context, now time.Time) ([]Backlog, error)
 	// Deliveries returns the deliveries for a decision, by effect.
 	Deliveries(ctx context.Context, decisionID string) ([]Delivery, error)
 }
@@ -60,6 +70,48 @@ type Delivery struct {
 	UpdatedAt      time.Time      `json:"updated_at"`
 	LastStatusCode int            `json:"last_status_code,omitempty"`
 	LastError      string         `json:"last_error,omitempty"`
+	// RequeuedAt is when the dead delivery was last made pending again
+	// (Requeue), zero if it never was.
+	RequeuedAt time.Time `json:"requeued_at,omitzero"`
+}
+
+// QueuedAt is when the delivery last entered the queue: when it was
+// requeued, or when it was created if it never was. A hook's max age counts
+// from it, so a requeued delivery gets the whole of it again.
+func (d Delivery) QueuedAt() time.Time {
+	if d.RequeuedAt.After(d.CreatedAt) {
+		return d.RequeuedAt
+	}
+	return d.CreatedAt
+}
+
+// ClaimRequest says which deliveries Claim leases.
+type ClaimRequest struct {
+	// Effect names the hook whose deliveries to claim.
+	Effect string
+	// Now is when the deliveries must be due by. Leases start then.
+	Now time.Time
+	// Limit is the most deliveries to claim.
+	Limit int
+	// Lease is how long each claimed delivery is reserved for its attempt.
+	Lease time.Duration
+	// QueuedAfter skips the deliveries queued before it, which are past
+	// their hook's max age and left for Expire. Zero skips none.
+	QueuedAfter time.Time
+}
+
+// Backlog is what waits in the outbox for one effect.
+type Backlog struct {
+	Effect string `json:"effect"`
+	// Pending deliveries wait for an attempt: due, leased to an attempt in
+	// flight, or waiting out the backoff before a retry.
+	Pending int `json:"pending"`
+	// Due deliveries are the pending ones whose next attempt is due: they
+	// wait for a worker, not for a backoff or an attempt in flight.
+	Due int `json:"due"`
+	// Oldest is the earliest QueuedAt among the pending deliveries, zero
+	// without any.
+	Oldest time.Time `json:"oldest_pending,omitzero"`
 }
 
 // Attempt is the outcome of one delivery attempt.
@@ -78,7 +130,11 @@ var outboxCols = []string{"decision_id", "effect", "payload", "status", "attempt
 	"next_attempt_at_us", "created_at_us", "updated_at_us"}
 
 const deliveryCols = `id, decision_id, effect, payload, status, attempts,
-    next_attempt_at_us, created_at_us, updated_at_us, last_status_code, last_error`
+    next_attempt_at_us, created_at_us, updated_at_us, last_status_code, last_error, requeued_at_us`
+
+// queuedAt is Delivery.QueuedAt in SQL. requeued_at_us is 0 until the first
+// requeue, and later than created_at_us after it.
+const queuedAt = `CASE WHEN requeued_at_us > created_at_us THEN requeued_at_us ELSE created_at_us END`
 
 // Enqueue implements Outbox. Of each delivery it reads DecisionID, Effect,
 // Payload and CreatedAt (now when zero); the first attempt is due at
@@ -108,8 +164,8 @@ func (db *DB) Enqueue(ctx context.Context, deliveries []Delivery) (int, error) {
 }
 
 // Claim implements Outbox.
-func (db *DB) Claim(ctx context.Context, now time.Time, limit int, lease time.Duration) ([]Delivery, error) {
-	if limit <= 0 {
+func (db *DB) Claim(ctx context.Context, r ClaimRequest) ([]Delivery, error) {
+	if r.Limit <= 0 {
 		return nil, nil
 	}
 	// The lease is the next attempt time: a delivery whose worker never
@@ -118,13 +174,17 @@ func (db *DB) Claim(ctx context.Context, now time.Time, limit int, lease time.Du
 SET attempts = attempts + 1, next_attempt_at_us = ?, updated_at_us = ?
 WHERE id IN (
     SELECT id FROM outbox
-    WHERE status = 'pending' AND next_attempt_at_us <= ?
+    WHERE status = 'pending' AND effect = ? AND next_attempt_at_us <= ? AND ` + queuedAt + ` >= ?
     ORDER BY next_attempt_at_us, id
     LIMIT ?` + db.dialect.skipLocked + `
 )
 RETURNING ` + deliveryCols)
-	nowUS := toMicros(now)
-	rows, err := db.db.QueryContext(ctx, q, toMicros(now.Add(lease)), nowUS, nowUS, limit)
+	nowUS := toMicros(r.Now)
+	after := int64(math.MinInt64)
+	if !r.QueuedAfter.IsZero() {
+		after = toMicros(r.QueuedAfter)
+	}
+	rows, err := db.db.QueryContext(ctx, q, toMicros(r.Now.Add(r.Lease)), nowUS, r.Effect, nowUS, after, r.Limit)
 	if err != nil {
 		return nil, fmt.Errorf("audit: claim deliveries: %w", err)
 	}
@@ -160,6 +220,98 @@ SET status = 'dead', updated_at_us = ?, last_status_code = ?, last_error = ?
 WHERE id = ? AND status = 'pending'`, toMicros(a.At), a.StatusCode, truncate(a.Error), id)
 }
 
+// expireBatch is the most deliveries one statement of Expire or Requeue
+// changes, so neither holds the outbox's locks for long: on SQLite every
+// write waits for it, the decision writer included.
+const expireBatch = 500
+
+// Expire implements Outbox. It keeps the error of the last attempt, if there
+// was one, after the reason. A delivery leased to an attempt in flight is
+// not due, so it is left to finish.
+func (db *DB) Expire(ctx context.Context, effect string, before time.Time, a Attempt) (int, error) {
+	q := db.dialect.rebind(`UPDATE outbox
+SET status = 'dead', updated_at_us = ?,
+    last_error = CASE WHEN last_error = '' THEN CAST(? AS TEXT) ELSE CAST(? AS TEXT) || '; last attempt: ' || last_error END
+WHERE id IN (
+    SELECT id FROM outbox
+    WHERE status = 'pending' AND effect = ? AND next_attempt_at_us <= ? AND ` + queuedAt + ` < ?
+    ORDER BY id
+    LIMIT ?` + db.dialect.skipLocked + `
+)`)
+	reason, at := truncate(a.Error), toMicros(a.At)
+	total := 0
+	for {
+		res, err := db.db.ExecContext(ctx, q, at, reason, reason, effect, at, toMicros(before), expireBatch)
+		if err != nil {
+			return total, fmt.Errorf("audit: expire deliveries: %w", err)
+		}
+		n, err := res.RowsAffected()
+		if err != nil {
+			return total, fmt.Errorf("audit: expire deliveries: %w", err)
+		}
+		total += int(n)
+		if n < expireBatch {
+			return total, nil
+		}
+	}
+}
+
+// Backlog implements Outbox.
+func (db *DB) Backlog(ctx context.Context, now time.Time) ([]Backlog, error) {
+	stats, err := db.countDeliveries(ctx, now, true)
+	if err != nil {
+		return nil, fmt.Errorf("audit: outbox backlog: %w", err)
+	}
+	out := make([]Backlog, 0, len(stats))
+	for _, s := range stats {
+		out = append(out, s.Backlog)
+	}
+	return out, nil
+}
+
+// countDeliveries counts the deliveries of each effect by status, or only
+// the pending ones, in effect order.
+func (db *DB) countDeliveries(ctx context.Context, now time.Time, pendingOnly bool) ([]EffectStats, error) {
+	q := `SELECT effect, status, COUNT(*),
+    SUM(CASE WHEN next_attempt_at_us <= ? THEN 1 ELSE 0 END),
+    MIN(` + queuedAt + `)
+FROM outbox`
+	if pendingOnly {
+		q += " WHERE status = 'pending'"
+	}
+	q += " GROUP BY effect, status ORDER BY effect"
+	rows, err := db.db.QueryContext(ctx, db.dialect.rebind(q), toMicros(now))
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	out := []EffectStats{}
+	for rows.Next() {
+		var (
+			effect string
+			status DeliveryStatus
+			n, due int
+			oldest int64
+		)
+		if err := rows.Scan(&effect, &status, &n, &due, &oldest); err != nil {
+			return nil, err
+		}
+		if len(out) == 0 || out[len(out)-1].Effect != effect {
+			out = append(out, EffectStats{Backlog: Backlog{Effect: effect}})
+		}
+		s := &out[len(out)-1]
+		switch status {
+		case DeliveryPending:
+			s.Pending, s.Due, s.Oldest = n, due, fromMicros(oldest)
+		case DeliveryDead:
+			s.Dead = n
+		case DeliveryDelivered:
+			s.Delivered = n
+		}
+	}
+	return out, rows.Err()
+}
+
 func (db *DB) settle(ctx context.Context, q string, args ...any) error {
 	if _, err := db.db.ExecContext(ctx, db.dialect.rebind(q), args...); err != nil {
 		return fmt.Errorf("audit: update delivery: %w", err)
@@ -186,14 +338,17 @@ func scanDeliveries(rows *sql.Rows) ([]Delivery, error) {
 	ds := []Delivery{}
 	for rows.Next() {
 		var d Delivery
-		var next, created, updated int64
+		var next, created, updated, requeued int64
 		if err := rows.Scan(&d.ID, &d.DecisionID, &d.Effect, &d.Payload, &d.Status, &d.Attempts,
-			&next, &created, &updated, &d.LastStatusCode, &d.LastError); err != nil {
+			&next, &created, &updated, &d.LastStatusCode, &d.LastError, &requeued); err != nil {
 			return nil, err
 		}
 		d.NextAttemptAt = fromMicros(next)
 		d.CreatedAt = fromMicros(created)
 		d.UpdatedAt = fromMicros(updated)
+		if requeued > 0 {
+			d.RequeuedAt = fromMicros(requeued)
+		}
 		ds = append(ds, d)
 	}
 	if err := rows.Err(); err != nil {

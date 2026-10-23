@@ -285,12 +285,28 @@ func (l *auditLog) Enqueue(ctx context.Context, deliveries []audit.Delivery) (in
 	return db.Enqueue(ctx, deliveries)
 }
 
-func (l *auditLog) Claim(ctx context.Context, now time.Time, limit int, lease time.Duration) ([]audit.Delivery, error) {
+func (l *auditLog) Claim(ctx context.Context, r audit.ClaimRequest) ([]audit.Delivery, error) {
 	db, err := l.wait(ctx)
 	if err != nil {
 		return nil, err
 	}
-	return db.Claim(ctx, now, limit, lease)
+	return db.Claim(ctx, r)
+}
+
+func (l *auditLog) Expire(ctx context.Context, effect string, before time.Time, a audit.Attempt) (int, error) {
+	db, err := l.wait(ctx)
+	if err != nil {
+		return 0, err
+	}
+	return db.Expire(ctx, effect, before, a)
+}
+
+func (l *auditLog) Backlog(ctx context.Context, now time.Time) ([]audit.Backlog, error) {
+	db, err := l.wait(ctx)
+	if err != nil {
+		return nil, err
+	}
+	return db.Backlog(ctx, now)
 }
 
 func (l *auditLog) MarkDelivered(ctx context.Context, id int64, a audit.Attempt) error {
