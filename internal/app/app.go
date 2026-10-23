@@ -196,7 +196,7 @@ func NewLogger(cfg config.Logging, w io.Writer) *slog.Logger {
 
 func openStore(c config.Store) (store.Store, error) {
 	if c.Backend == config.StoreRedis {
-		s, err := store.OpenRedis(c.Redis.URL.Value(), store.RedisOptions{Prefix: c.Redis.Prefix})
+		s, err := store.OpenRedis(c.Redis.URL.Value(), store.RedisOptions{Prefix: c.Redis.Prefix, Mode: c.Redis.Mode})
 		if err != nil {
 			return nil, err
 		}

@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/guilhermebsantiago/catraca/internal/audit"
+	"github.com/guilhermebsantiago/catraca/internal/store"
 )
 
 // minSecretLen is the shortest API token or shared secret accepted. Catraca
@@ -170,7 +171,16 @@ func (v *validator) store(s Store) {
 		if s.Redis.URL != "" {
 			v.add("store.redis.url", "is set but store.backend is memory; set backend: redis to use Redis")
 		}
+		if v.isSet("store.redis.mode") {
+			v.add("store.redis.mode", "is set but store.backend is memory; set backend: redis to use Redis")
+		}
 	case StoreRedis:
+		switch s.Redis.Mode {
+		case store.RedisStandalone, store.RedisSentinel, store.RedisCluster:
+		default:
+			v.add("store.redis.mode", "want standalone, sentinel or cluster, got %q", s.Redis.Mode)
+			return
+		}
 		if s.Redis.URL == "" {
 			v.add("store.redis.url", "is required with backend: redis")
 			return
@@ -178,6 +188,14 @@ func (v *validator) store(s Store) {
 		u, err := url.Parse(s.Redis.URL.Value())
 		if err != nil || (u.Scheme != "redis" && u.Scheme != "rediss" && u.Scheme != "unix") {
 			v.add("store.redis.url", "want a redis://, rediss:// or unix:// URL")
+			return
+		}
+		// The rest of what the server would refuse at start: unknown
+		// parameters, a sentinel URL without master_name, max_retries. The
+		// message never repeats the URL.
+		if err := store.CheckRedisURL(s.Redis.URL.Value(), s.Redis.Mode); err != nil {
+			msg := strings.TrimPrefix(err.Error(), "store: redis url: ")
+			v.add("store.redis.url", "%s", strings.TrimPrefix(msg, "redis: "))
 		}
 	default:
 		v.add("store.backend", "want memory or redis, got %q", s.Backend)

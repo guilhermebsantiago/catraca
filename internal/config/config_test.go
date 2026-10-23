@@ -204,7 +204,7 @@ logging:
 	if len(cfg.Auth.Tokens) != 2 || cfg.Auth.Tokens[1].Name != "ops.cli" {
 		t.Errorf("tokens = %#v", cfg.Auth.Tokens)
 	}
-	if cfg.Store.Backend != StoreRedis || cfg.Store.Redis.URL.Value() != "redis://:pw@redis:6379/1" || cfg.Store.Redis.Prefix != "prod:" {
+	if cfg.Store.Backend != StoreRedis || cfg.Store.Redis.URL.Value() != "redis://:pw@redis:6379/1" || cfg.Store.Redis.Prefix != "prod:" || cfg.Store.Redis.Mode != "standalone" {
 		t.Errorf("store = %#v", cfg.Store)
 	}
 	if cfg.Audit.IsSQLite() || cfg.Audit.EventDetail != "full" {
@@ -447,6 +447,12 @@ func TestValidation(t *testing.T) {
 		{"redis url", "store: {backend: redis}", "store.redis.url: is required with backend: redis"},
 		{"redis scheme", "store: {backend: redis, redis: {url: 'http://x'}}", "store.redis.url: want a redis://, rediss:// or unix:// URL"},
 		{"redis without backend", "store: {redis: {url: 'redis://x'}}", "store.redis.url: is set but store.backend is memory"},
+		{"redis mode without backend", "store: {redis: {mode: cluster}}", "store.redis.mode: is set but store.backend is memory"},
+		{"redis mode", "store: {backend: redis, redis: {url: 'redis://x', mode: ring}}", `store.redis.mode: want standalone, sentinel or cluster, got "ring"`},
+		{"redis sentinel", "store: {backend: redis, redis: {url: 'redis://x:26379', mode: sentinel}}", "store.redis.url: sentinel mode needs master_name"},
+		{"redis cluster scheme", "store: {backend: redis, redis: {url: 'unix:///run/redis.sock', mode: cluster}}", "store.redis.url: invalid URL scheme: unix"},
+		{"redis option", "store: {backend: redis, redis: {url: 'redis://x?pool_sise=10'}}", "store.redis.url: unexpected option: pool_sise"},
+		{"redis retries", "store: {backend: redis, redis: {url: 'redis://x?max_retries=3'}}", "store.redis.url: max_retries is not supported"},
 		{"event detail", "audit: {event_detail: some}", `audit.event_detail: want minimal or full, got "some"`},
 		{"sqlite path", "audit: {dsn: 'sqlite:'}", "audit.dsn: the SQLite path is empty"},
 		{"hook name", "hooks: [{name: Revoke-Key, url: 'https://x', secret: " + testSecret + "}]", "hooks[0].name: must be lowercase letters"},

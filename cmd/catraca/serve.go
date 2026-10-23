@@ -131,7 +131,7 @@ func (c *cli) summary(cfg *config.Config, rs *rules.Ruleset) {
 	}
 	row("ruleset", "%s (version %s, %d rules: %d enforced, %d shadow)", cfg.Rules.Path, rs.Version(), len(rs.Rules()), enforced, len(rs.Rules())-enforced)
 	if cfg.Store.Backend == config.StoreRedis {
-		row("store", "redis at %s, prefix %q", hostOf(cfg.Store.Redis.URL.Value()), cfg.Store.Redis.Prefix)
+		row("store", "redis (%s) at %s, prefix %q", cfg.Store.Redis.Mode, hostOf(cfg.Store.Redis.URL.Value()), cfg.Store.Redis.Prefix)
 	} else {
 		row("store", "memory (one instance; counters are lost on restart)")
 	}

@@ -56,8 +56,9 @@ Catraca sits in the send path and is built on a few principles:
 
 - **Rules in CEL**, kept in git and reviewed like code, with fixtures,
   linting, a version hash in every decision and hot reload.
-- **Signals** over sliding windows, in Redis (one Lua call per decision,
-  Redis Cluster aware) or memory: per account, API key, IP and sender domain.
+- **Signals** over sliding windows, in Redis (one Lua call per decision;
+  standalone, Sentinel or Cluster) or memory: per account, API key, IP and
+  sender domain.
   Velocity, recipient spread, bounce and complaint rates, new and recent IPs,
   keys used from many places, leaked keys. [All signals](docs/signals.md).
 - **A starter ruleset** for email senders: new-account bursts, complaint and

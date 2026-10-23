@@ -20,6 +20,7 @@ import (
 	"github.com/guilhermebsantiago/catraca/internal/audit"
 	"github.com/guilhermebsantiago/catraca/internal/engine"
 	"github.com/guilhermebsantiago/catraca/internal/precision"
+	"github.com/guilhermebsantiago/catraca/internal/store"
 )
 
 // Defaults for fields left out of the file.
@@ -106,8 +107,12 @@ type Store struct {
 // Redis configures the Redis store.
 type Redis struct {
 	// URL is a redis:// or rediss:// URL, for example
-	// "redis://:password@localhost:6379/0".
+	// "redis://:password@localhost:6379/0". Its query parameters set client
+	// options such as pool_size, read_timeout and dial_timeout.
 	URL Secret `yaml:"url"`
+	// Mode is the kind of deployment URL names: "standalone" (the default),
+	// "sentinel" or "cluster".
+	Mode string `yaml:"mode"`
 	// Prefix is prepended to every key. Default "catraca:".
 	Prefix string `yaml:"prefix"`
 }
@@ -292,6 +297,9 @@ func (c *Config) applyDefaults() {
 	}
 	if c.Store.Backend == "" {
 		c.Store.Backend = StoreMemory
+	}
+	if c.Store.Backend == StoreRedis && c.Store.Redis.Mode == "" {
+		c.Store.Redis.Mode = store.RedisStandalone
 	}
 	if c.Audit.DSN == "" {
 		c.Audit.DSN = DefaultAuditDSN

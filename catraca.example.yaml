@@ -39,8 +39,15 @@ store:
   backend: memory
   # backend: redis
   # redis:
-  #   url: ${CATRACA_REDIS_URL}      # redis://:password@localhost:6379/0
+  #   # redis://:password@localhost:6379/0, with connection options as
+  #   # query parameters: ?pool_size=50&read_timeout=1s&dial_timeout=2s
+  #   url: ${CATRACA_REDIS_URL}
+  #   # standalone, sentinel (the URL names the sentinels and adds
+  #   # master_name=...) or cluster (the URL names some of the nodes).
+  #   mode: standalone
   #   prefix: "catraca:"
+  # With a maxmemory limit, run Redis with maxmemory-policy volatile-ttl
+  # (docs/config.md explains why).
 
 audit:
   # The decision log: sqlite:<path> (or a plain path) for one instance,

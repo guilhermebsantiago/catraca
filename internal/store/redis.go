@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"net/url"
 	"strconv"
 	"strings"
 	"time"
@@ -14,11 +15,25 @@ import (
 // DefaultPrefix is the key prefix used when RedisOptions.Prefix is empty.
 const DefaultPrefix = "catraca:"
 
+// Redis deployments OpenRedis connects to, the values of RedisOptions.Mode.
+const (
+	// RedisStandalone is one Redis server, the default.
+	RedisStandalone = "standalone"
+	// RedisSentinel is a primary found through Redis Sentinel: the URL names
+	// the sentinels and its master_name parameter the primary.
+	RedisSentinel = "sentinel"
+	// RedisCluster is a Redis Cluster: the URL names some of its nodes.
+	RedisCluster = "cluster"
+)
+
 // RedisOptions configures a Redis store.
 type RedisOptions struct {
 	// Prefix is prepended to every key, so several Catraca deployments can
 	// share a Redis database. Default DefaultPrefix.
 	Prefix string
+	// Mode is how OpenRedis reads its URL: RedisStandalone (the default),
+	// RedisSentinel or RedisCluster. NewRedis does not use it.
+	Mode string
 }
 
 // Redis is a Store backed by Redis 6.2 or later, so several Catraca instances
@@ -90,17 +105,81 @@ func NewRedis(client redis.UniversalClient, opts RedisOptions) *Redis {
 	return &Redis{client: client, prefix: prefix, single: single}
 }
 
-// OpenRedis returns a store connected to the Redis server at url, for example
-// "redis://user:password@localhost:6379/0" or "rediss://..." for TLS. It does
-// not connect until first used. Close closes the connection.
+// OpenRedis returns a store connected to the Redis deployment at url, which
+// opts.Mode says how to read:
+//
+//	standalone  redis://user:password@localhost:6379/0, rediss:// for TLS, or unix:///path/to/redis.sock
+//	sentinel    redis://sentinel-1:26379/0?master_name=mymaster&addr=sentinel-2:26379&password=...
+//	cluster     redis://user:password@node-1:6379?addr=node-2:6379&addr=node-3:6379
+//
+// Query parameters set the client's options, as go-redis's ParseURL,
+// ParseFailoverURL and ParseClusterURL read them: pool_size, read_timeout,
+// dial_timeout and so on. It does not connect until first used. Close closes
+// the connection.
+//
+// The client never retries a command. go-redis would resend a script call
+// whose reply did not arrive in time, after Redis may have run it, and apply
+// its increments twice; the engine's deadline is the budget of a decision
+// anyway. A URL that sets max_retries is an error.
 func OpenRedis(url string, opts RedisOptions) (*Redis, error) {
-	o, err := redis.ParseURL(url)
+	newClient, err := parseRedisURL(url, opts.Mode)
 	if err != nil {
-		return nil, fmt.Errorf("store: redis url: %w", err)
+		return nil, err
 	}
-	r := NewRedis(redis.NewClient(o), opts)
+	r := NewRedis(newClient(), opts)
 	r.owned = true
 	return r, nil
+}
+
+// CheckRedisURL returns the error OpenRedis would return for url and mode,
+// without connecting. Its message never repeats the URL, which may hold a
+// password.
+func CheckRedisURL(url, mode string) error {
+	_, err := parseRedisURL(url, mode)
+	return err
+}
+
+// parseRedisURL reads url for mode and returns a constructor for its client,
+// with retries turned off.
+func parseRedisURL(rawURL, mode string) (func() redis.UniversalClient, error) {
+	u, err := url.Parse(rawURL)
+	if err != nil {
+		// url.Parse's error repeats the URL, password included, and the
+		// go-redis parsers return it as is.
+		return nil, errors.New("store: redis url: not a valid URL")
+	}
+	if u.Query().Has("max_retries") {
+		return nil, errors.New("store: redis url: max_retries is not supported: Catraca never retries a Redis call, since a retried script call can apply its writes twice")
+	}
+	switch mode {
+	case "", RedisStandalone:
+		o, err := redis.ParseURL(rawURL)
+		if err != nil {
+			return nil, fmt.Errorf("store: redis url: %w", err)
+		}
+		o.MaxRetries = -1
+		return func() redis.UniversalClient { return redis.NewClient(o) }, nil
+	case RedisSentinel:
+		o, err := redis.ParseFailoverURL(rawURL)
+		if err != nil {
+			return nil, fmt.Errorf("store: redis url: %w", err)
+		}
+		if o.MasterName == "" {
+			return nil, errors.New("store: redis url: sentinel mode needs master_name, the name of the primary the sentinels watch")
+		}
+		o.MaxRetries = -1
+		return func() redis.UniversalClient { return redis.NewFailoverClient(o) }, nil
+	case RedisCluster:
+		o, err := redis.ParseClusterURL(rawURL)
+		if err != nil {
+			return nil, fmt.Errorf("store: redis url: %w", err)
+		}
+		// MOVED and ASK redirects are still followed: a redirected call
+		// did not run.
+		o.MaxRetries = -1
+		return func() redis.UniversalClient { return redis.NewClusterClient(o) }, nil
+	}
+	return nil, fmt.Errorf("store: redis mode %q: want %s, %s or %s", mode, RedisStandalone, RedisSentinel, RedisCluster)
 }
 
 // Ping checks that Redis answers.

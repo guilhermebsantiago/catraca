@@ -39,7 +39,7 @@ var backends = []struct {
 	{name: "memory", new: func(testing.TB) store.Store { return store.NewMemory() }},
 	{name: "redis", new: func(tb testing.TB) store.Store {
 		mr := storetest.Miniredis(tb)
-		client := redis.NewClient(&redis.Options{Addr: mr.Addr()})
+		client := redis.NewClient(&redis.Options{Addr: mr.Addr(), MaxRetries: -1})
 		tb.Cleanup(func() { client.Close() })
 		return store.NewRedis(client, store.RedisOptions{})
 	}},

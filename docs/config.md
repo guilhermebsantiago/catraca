@@ -109,20 +109,61 @@ Where signal counters live.
 | field | default | |
 |---|---|---|
 | `backend` | `memory` | `memory` or `redis` |
-| `redis.url` | required for redis | `redis://[:password@]host:6379/0`, `rediss://` for TLS, or `unix://` |
+| `redis.url` | required for redis | where Redis is, read according to `redis.mode`; see below |
+| `redis.mode` | `standalone` | `standalone` for one server, `sentinel` for a primary found through Redis Sentinel, `cluster` for a Redis Cluster |
 | `redis.prefix` | `catraca:` | prepended to every key, so deployments can share a database |
 
 `memory` keeps counters in the process: right for one instance, and they
 start over on restart. Use `redis` (6.2 or later) when several instances
 decide, so they share counters.
 
+The URL for each mode:
+
+| mode | `redis.url` |
+|---|---|
+| `standalone` | `redis://[user:password@]host:6379/0`, `rediss://` for TLS, or `unix:///path/to/redis.sock` |
+| `sentinel` | `redis://sentinel-1:26379/0?master_name=mymaster&addr=sentinel-2:26379&addr=sentinel-3:26379&password=...`: the sentinels, the name of the primary they watch (required), and the primary's password as `password`; a user and password before the host authenticate to the sentinels |
+| `cluster` | `redis://[user:password@]node-1:6379?addr=node-2:6379&addr=node-3:6379`: some of the cluster's nodes |
+
+Query parameters set the client's connection options. The ones worth
+knowing:
+
+| parameter | default | |
+|---|---|---|
+| `pool_size` | 10 per CPU | connections per Redis node. It also bounds how many round trips can be outstanding at once: a decision gives up at `engine.deadline`, but its round trip finishes in the background on its connection, so its writes still count. When Redis stalls, decisions beyond the pool wait for a connection until their deadline and are decided degraded |
+| `read_timeout` | `5s` | how long a connection waits for a reply before it is closed. It frees connections held by an unresponsive Redis; lower it (to `1s`, say) for a faster recovery, but keep it well above Redis's normal latency, since every timeout costs a new connection |
+| `dial_timeout` | `5s` | how long opening a connection may take |
+
+Other parameters of go-redis's
+[`ParseURL`](https://pkg.go.dev/github.com/redis/go-redis/v9#ParseURL)
+(and `ParseFailoverURL`, `ParseClusterURL`) work too, such as
+`write_timeout`, `pool_timeout` and `client_name`; an unknown one is an
+error. `max_retries` is refused: Catraca never retries a Redis call,
+because a script call whose reply was lost may already have run, and
+running it again would count the event twice. The engine's deadline is the
+budget of a decision; the next decision is the retry.
+
 The Redis store runs each decision's reads and writes as one Lua script
-call, so the server must allow scripting (`EVAL` and `EVALSHA`), as Redis,
-Valkey and the managed services do by default. With ACLs, give Catraca's
-user `+@scripting` and the commands the script calls (`+@read +@write`
-cover them) on keys under the prefix. A script that Redis lost after a
-restart or failover is loaded again on first use. [Benchmarks](benchmark.md)
-has what a decision costs.
+call (one per hash slot on a cluster), so the server must allow scripting
+(`EVAL` and `EVALSHA`), as Redis, Valkey and the managed services do by
+default. With ACLs, give Catraca's user `+@scripting` and the commands the
+script calls (`+@read +@write` cover them) on keys under the prefix. A
+script that Redis lost after a restart or failover is loaded again on first
+use. [Benchmarks](benchmark.md) has what a decision costs.
+
+**Memory.** Every key Catraca writes expires on its own, except the marks
+of keys reported leaked, which are kept until deleted. If Redis has a
+`maxmemory` limit, set `maxmemory-policy volatile-ttl`:
+
+- with `noeviction`, the default, a full Redis refuses writes, and the
+  script fails at its first write, so every decision comes back `degraded`
+  until memory frees up;
+- the `allkeys-*` policies may evict the leaked-key marks, and a leaked key
+  would then send again;
+- the `volatile-*` policies evict only keys that expire anyway, so the
+  leaked-key marks stay; `volatile-ttl` evicts first the keys closest to
+  expiring, mostly short-window counters of senders that went quiet, which
+  costs detection the least.
 
 ### audit
 
