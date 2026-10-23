@@ -80,6 +80,10 @@ func (v *validator) explicit(c *Config) {
 		v.add("server.max_body_bytes", "must be at least 1024 bytes, got %d", c.Server.MaxBodyBytes)
 	}
 	v.positive("server.shutdown_timeout", c.Server.ShutdownTimeout)
+	if c.Server.DrainDelay < 0 {
+		// 0s is allowed: it turns the drain off.
+		v.add("server.drain_delay", "must not be negative, got %s; 0s turns the drain off", c.Server.DrainDelay)
+	}
 	v.positive("engine.deadline", c.Engine.Deadline)
 	if v.isSet("gate.min_labeled") && c.Gate.MinLabeled < 1 {
 		v.add("gate.min_labeled", "must be at least 1, got %d", c.Gate.MinLabeled)

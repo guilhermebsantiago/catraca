@@ -21,6 +21,8 @@ import (
 	ossignal "os/signal"
 	"slices"
 	"sync"
+	"sync/atomic"
+	"syscall"
 	"time"
 
 	"github.com/prometheus/client_golang/prometheus"
@@ -80,6 +82,12 @@ type App struct {
 	scan      *secretscan.Handler
 	api       *api.Server
 	deps      *dependencyMonitor
+	// draining is set when Serve's context ends, so /readyz reports not
+	// ready while the server still serves.
+	draining atomic.Bool
+	// drainEnd returns the channel that ends a drain of the given delay:
+	// time.After, or a channel a test controls.
+	drainEnd func(time.Duration) <-chan time.Time
 
 	closeOnce sync.Once
 	closeErr  error
@@ -103,6 +111,7 @@ func New(ctx context.Context, cfg *config.Config, opts Options) (_ *App, err err
 		version:  opts.Version,
 		registry: prometheus.NewRegistry(),
 		holder:   &rules.Holder{},
+		drainEnd: time.After,
 	}
 	defer func() {
 		if err != nil {
@@ -391,14 +400,20 @@ func MissingHooks(rs *rules.Ruleset, hs []config.Hook) []string {
 	return out
 }
 
-// checks are the readiness checks: a ruleset is loaded. They read the
-// server's own state only; see dependencyMonitor for why the store and the
-// audit database are not among them.
+// checks are the readiness checks: a ruleset is loaded and the server is not
+// draining. They read the server's own state only; see dependencyMonitor
+// for why the store and the audit database are not among them.
 func (a *App) checks() []api.Check {
 	return []api.Check{
 		{Name: "rules", Check: func(context.Context) error {
 			if a.holder.Current() == nil {
 				return errors.New("no ruleset loaded")
+			}
+			return nil
+		}},
+		{Name: "shutdown", Check: func(context.Context) error {
+			if a.draining.Load() {
+				return errors.New("draining")
 			}
 			return nil
 		}},
@@ -429,10 +444,11 @@ func (a *App) Run(ctx context.Context) error {
 	return a.Serve(ctx, ln)
 }
 
-// Serve serves HTTP on ln until ctx ends or the server fails, then shuts
-// down within the configured shutdown timeout: it stops accepting requests
-// and waits for those in flight, then closes the rest (see Close). On Unix,
-// SIGHUP reloads the ruleset while it serves.
+// Serve serves HTTP on ln until ctx ends or the server fails. When ctx ends
+// it drains first (see drain), then shuts down within the configured
+// shutdown timeout: it stops accepting requests and waits for those in
+// flight, then closes the rest (see Close). On Unix, SIGHUP reloads the
+// ruleset while it serves.
 func (a *App) Serve(ctx context.Context, ln net.Listener) error {
 	srv := &http.Server{
 		Handler:           a.api,
@@ -451,6 +467,7 @@ func (a *App) Serve(ctx context.Context, ln net.Listener) error {
 	var serveErr error
 	select {
 	case <-ctx.Done():
+		a.drain(srv)
 	case err := <-errc:
 		serveErr = fmt.Errorf("serve HTTP: %w", err)
 	}
@@ -465,6 +482,35 @@ func (a *App) Serve(ctx context.Context, ln net.Listener) error {
 	}
 	a.log.Info("stopped")
 	return serveErr
+}
+
+// drain reports not ready on /readyz and keeps serving for
+// server.drain_delay before the shutdown starts. A load balancer or a
+// Kubernetes Service needs a few seconds to stop sending requests to an
+// instance that is going away; an instance that stopped accepting at once
+// would refuse the requests sent meanwhile. Responses close their
+// connections from now on, so clients holding pooled connections to this
+// instance reconnect, and the new connections go where the load balancer
+// sends them. A second SIGINT or SIGTERM ends the wait early.
+func (a *App) drain(servers ...*http.Server) {
+	a.draining.Store(true)
+	for _, s := range servers {
+		s.SetKeepAlivesEnabled(false)
+	}
+	delay := a.cfg.Server.DrainDelay
+	if delay <= 0 {
+		return
+	}
+	a.log.Info("draining: reporting not ready and still serving until the delay ends; signal again to stop now",
+		"drain_delay", delay)
+	again := make(chan os.Signal, 1)
+	ossignal.Notify(again, os.Interrupt, syscall.SIGTERM)
+	defer ossignal.Stop(again)
+	select {
+	case <-a.drainEnd(delay):
+	case <-again:
+		a.log.Info("second signal: shutting down without the rest of the drain delay")
+	}
 }
 
 // reloadOnSignal reloads the ruleset on SIGHUP, where the platform has it,

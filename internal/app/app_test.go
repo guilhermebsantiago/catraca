@@ -101,6 +101,8 @@ type options struct {
 	rules string
 	// redisURL, when set, keeps counters in Redis instead of memory.
 	redisURL string
+	// drainDelay is server.drain_delay; empty means 0s.
+	drainDelay string
 }
 
 func newHarness(t *testing.T, opts options) *harness {
@@ -110,6 +112,9 @@ func newHarness(t *testing.T, opts options) *harness {
 	h.dbPath = filepath.Join(h.dir, "audit.db")
 	if opts.rules == "" {
 		opts.rules = testRules
+	}
+	if opts.drainDelay == "" {
+		opts.drainDelay = "0s"
 	}
 	h.writeRules(opts.rules)
 
@@ -126,6 +131,7 @@ func newHarness(t *testing.T, opts options) *harness {
 server:
   max_body_bytes: 4096
   shutdown_timeout: 10s
+  drain_delay: %s
 auth:
   tokens:
     - name: test
@@ -150,7 +156,7 @@ secret_scanning:
       secret: %s
 logging:
   level: debug
-`, token, filepath.ToSlash(h.rulesPath), filepath.ToSlash(h.dbPath), h.hook.URL, secret, secret, keys.URL, resolver.URL, secret)
+`, opts.drainDelay, token, filepath.ToSlash(h.rulesPath), filepath.ToSlash(h.dbPath), h.hook.URL, secret, secret, keys.URL, resolver.URL, secret)
 	if opts.redisURL != "" {
 		yaml += fmt.Sprintf("store:\n  backend: redis\n  redis:\n    url: '%s'\n", opts.redisURL)
 	}
@@ -187,6 +193,9 @@ type response struct {
 	status int
 	header http.Header
 	body   []byte
+	// close is set when the server closed the connection after the response
+	// (net/http removes the Connection: close header).
+	close bool
 }
 
 func (r response) json(t *testing.T, v any) {
@@ -256,7 +265,7 @@ func (h *harness) do(method, path, auth string, body any, headers ...string) res
 	if err != nil {
 		h.t.Fatal(err)
 	}
-	return response{status: resp.StatusCode, header: resp.Header, body: data}
+	return response{status: resp.StatusCode, header: resp.Header, body: data, close: resp.Close}
 }
 
 // decide posts an event to /v1/decide and returns the decision.
@@ -643,7 +652,7 @@ func TestReadiness(t *testing.T) {
 	r := h.do("GET", "/readyz", "", nil)
 	var ready api.ReadyResponse
 	r.json(t, &ready)
-	want := map[string]string{"rules": "ok"}
+	want := map[string]string{"rules": "ok", "shutdown": "ok"}
 	if r.status != http.StatusOK || ready.Status != "ready" || fmt.Sprint(ready.Checks) != fmt.Sprint(want) || ready.Dependencies != nil {
 		t.Errorf("readyz: %d %s", r.status, r.body)
 	}
@@ -773,9 +782,15 @@ func TestGitHubSecretScanningBlocksLeakedKey(t *testing.T) {
 		t.Errorf("forged batch: %d %s", bad.status, bad.body)
 	}
 
-	var d decision.Decision
+	// Each attempt sends from its own account, so a leak that takes a while
+	// to land does not also trip the burst rule of a busy account.
+	var (
+		d        decision.Decision
+		attempts int
+	)
 	eventually(t, 10*time.Second, func() bool {
-		d, _ = h.decide(send("acct_leak", "app@leak.example", "api_key_id", "key_leaked"))
+		attempts++
+		d, _ = h.decide(send(fmt.Sprintf("acct_leak_%d", attempts), "app@leak.example", "api_key_id", "key_leaked"))
 		return d.Action == decision.Block
 	})
 	if len(d.Matches) != 1 || d.Matches[0].RuleID != "leaked-key-send" {
@@ -940,6 +955,95 @@ func TestServeShutsDownInOrder(t *testing.T) {
 	}
 	if !strings.Contains(h.logs.String(), `"msg":"stopped"`) {
 		t.Error("no stopped log line")
+	}
+}
+
+// serveOn runs h's app on a new local listener, points h's requests at it,
+// and returns the function that stops it and the channel Serve's result
+// arrives on.
+func (h *harness) serveOn() (stop context.CancelFunc, done <-chan error) {
+	h.t.Helper()
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		h.t.Fatal(err)
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	errc := make(chan error, 1)
+	go func() { errc <- h.app.Serve(ctx, ln) }()
+	h.srv.URL = "http://" + ln.Addr().String()
+	h.t.Cleanup(cancel)
+	return cancel, errc
+}
+
+// waitServe waits for Serve's result.
+func waitServe(t *testing.T, done <-chan error) {
+	t.Helper()
+	select {
+	case err := <-done:
+		if err != nil {
+			t.Fatalf("Serve: %v", err)
+		}
+	case <-time.After(15 * time.Second):
+		t.Fatal("Serve did not return")
+	}
+}
+
+// TestServeDrains checks the drain on shutdown: once the context ends, the
+// server reports not ready, still decides, closes connections after each
+// response, and stops only when the drain is over. The test, not the clock,
+// ends the drain, so a slow machine cannot end it before the checks run.
+func TestServeDrains(t *testing.T) {
+	t.Parallel()
+	h := newHarness(t, options{drainDelay: "1h"})
+	release := make(chan struct{})
+	app.HoldDrain(h.app, release)
+	stop, done := h.serveOn()
+	if r := h.do("GET", "/readyz", "", nil); r.status != http.StatusOK {
+		t.Fatalf("readyz before the shutdown: %d %s", r.status, r.body)
+	}
+
+	stop()
+	var r response
+	eventually(t, 10*time.Second, func() bool {
+		r = h.do("GET", "/readyz", "", nil)
+		return r.status == http.StatusServiceUnavailable
+	})
+	if !strings.Contains(string(r.body), `"shutdown":"draining"`) || !strings.Contains(string(r.body), `"rules":"ok"`) {
+		t.Errorf("readyz while draining: %s", r.body)
+	}
+	d, r := h.decide(send("acct_drain", "a@shop.example"))
+	if d.ID == "" || !r.close {
+		t.Errorf("decide while draining: %+v, connection closed: %t", d, r.close)
+	}
+	select {
+	case err := <-done:
+		t.Fatalf("Serve returned %v before the drain ended", err)
+	case <-time.After(50 * time.Millisecond):
+	}
+	if !strings.Contains(h.logs.String(), `"msg":"draining: reporting not ready`) {
+		t.Errorf("no log line for the drain:\n%s", h.logs)
+	}
+
+	close(release)
+	waitServe(t, done)
+	if !strings.Contains(h.logs.String(), `"msg":"stopped"`) {
+		t.Error("no stopped log line")
+	}
+}
+
+// TestServeDrainDelay checks that the drain lasts at least
+// server.drain_delay on the clock.
+func TestServeDrainDelay(t *testing.T) {
+	t.Parallel()
+	const delay = 200 * time.Millisecond
+	h := newHarness(t, options{drainDelay: delay.String()})
+	stop, done := h.serveOn()
+	h.do("GET", "/healthz", "", nil)
+	stop()
+	start := time.Now()
+	waitServe(t, done)
+	if took := time.Since(start); took < delay {
+		t.Errorf("Serve stopped %v after its context ended, before the %v drain delay", took, delay)
 	}
 }
 

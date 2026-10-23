@@ -28,6 +28,7 @@ const (
 	DefaultListen          = ":8080"
 	DefaultMaxBodyBytes    = 1 << 20
 	DefaultShutdownTimeout = 30 * time.Second
+	DefaultDrainDelay      = 5 * time.Second
 	DefaultRulesPath       = "rules/default.yaml"
 	DefaultAuditDSN        = "sqlite:catraca.db"
 	DefaultHookTimeout     = 10 * time.Second
@@ -73,6 +74,11 @@ type Server struct {
 	// ShutdownTimeout bounds a graceful shutdown: draining requests and
 	// writing queued decisions. Default 30s.
 	ShutdownTimeout time.Duration `yaml:"shutdown_timeout"`
+	// DrainDelay is how long the server keeps serving after SIGTERM, with
+	// /readyz reporting it not ready, before the shutdown starts, so load
+	// balancers stop sending it requests before it stops accepting them.
+	// Default 5s; 0s turns it off.
+	DrainDelay time.Duration `yaml:"drain_delay"`
 }
 
 // Auth configures the bearer tokens the /v1 routes accept.
@@ -273,7 +279,7 @@ func Parse(data []byte, file string, lookup LookupFunc) (*Config, error) {
 	}
 	v := &validator{d: d}
 	v.explicit(cfg)
-	cfg.applyDefaults()
+	cfg.applyDefaults(v.isSet)
 	cfg.resolvePaths(filepath.Dir(file))
 	v.config(cfg)
 	if len(d.errs) > 0 {
@@ -282,7 +288,10 @@ func Parse(data []byte, file string, lookup LookupFunc) (*Config, error) {
 	return cfg, nil
 }
 
-func (c *Config) applyDefaults() {
+// applyDefaults fills in the fields left out of the file. set reports
+// whether a field is written in the file, for the few whose zero value is a
+// valid choice rather than a request for the default.
+func (c *Config) applyDefaults(set func(path string) bool) {
 	if c.Server.Listen == "" {
 		c.Server.Listen = DefaultListen
 	}
@@ -291,6 +300,9 @@ func (c *Config) applyDefaults() {
 	}
 	if c.Server.ShutdownTimeout == 0 {
 		c.Server.ShutdownTimeout = DefaultShutdownTimeout
+	}
+	if !set("server.drain_delay") {
+		c.Server.DrainDelay = DefaultDrainDelay
 	}
 	if c.Rules.Path == "" {
 		c.Rules.Path = DefaultRulesPath

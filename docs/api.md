@@ -576,24 +576,32 @@ true or false positive label per token.
 `/healthz` answers `200 {"status": "ok"}` while the process serves HTTP: use
 it as the liveness probe.
 
-`/readyz` is the readiness probe. It is ready when a ruleset is loaded,
-and otherwise answers `503` with the failing check:
+`/readyz` is the readiness probe. It is ready when a ruleset is loaded and
+the server is not shutting down, and otherwise answers `503` with the
+failing check:
 
 ```sh
 curl -s "$CATRACA/readyz"
 ```
 
 ```json
-{"status": "ready", "checks": {"rules": "ok"}}
+{"status": "ready", "checks": {"rules": "ok", "shutdown": "ok"}}
 ```
 
 ```json
-{"status": "not_ready", "checks": {"rules": "no ruleset loaded"}}
+{"status": "not_ready", "checks": {"rules": "no ruleset loaded", "shutdown": "ok"}}
 ```
 
 A server whose ruleset failed to load at start keeps running, not ready,
 until a reload succeeds, so a broken edit never takes down instances that
 are already serving.
+
+A server that received SIGTERM is not ready while it drains
+(`server.drain_delay`, 5s by default), and still serves every route:
+
+```json
+{"status": "not_ready", "checks": {"rules": "ok", "shutdown": "draining"}}
+```
 
 Readiness looks at the server's own state only. Redis and the audit
 database are shared by every instance: if readiness depended on them, an
@@ -607,7 +615,7 @@ curl -s "$CATRACA/readyz?verbose"
 ```
 
 ```json
-{"status": "ready", "checks": {"rules": "ok"},
+{"status": "ready", "checks": {"rules": "ok", "shutdown": "ok"},
  "dependencies": {
    "audit": {"status": "ok", "since": "2026-10-23T12:00:00Z", "checked_at": "2026-10-23T12:41:05Z", "duration_ms": 0.41},
    "store": {"status": "timeout", "since": "2026-10-23T12:40:10Z", "checked_at": "2026-10-23T12:41:05Z", "duration_ms": 2000}}}

@@ -103,6 +103,22 @@ func TestExampleConfig(t *testing.T) {
 	}
 }
 
+// TestDeployConfigs keeps the configurations in deploy/ valid: the one
+// baked into the image and the one compose.yaml mounts.
+func TestDeployConfigs(t *testing.T) {
+	vars := env(map[string]string{"CATRACA_API_TOKEN": testToken, "CATRACA_FEEDBACK_SECRET": testSecret})
+	for file, want := range map[string]time.Duration{"catraca.yaml": 5 * time.Second, "catraca.compose.yaml": 0} {
+		cfg, err := LoadWith(filepath.Join("..", "..", "deploy", file), vars)
+		if err != nil {
+			t.Errorf("deploy/%s does not load:\n%v", file, err)
+			continue
+		}
+		if cfg.Server.DrainDelay != want {
+			t.Errorf("deploy/%s: drain_delay = %v, want %v", file, cfg.Server.DrainDelay, want)
+		}
+	}
+}
+
 func TestDefaults(t *testing.T) {
 	cfg := mustParse(t, minimal, nil)
 	checks := []struct {
@@ -112,6 +128,7 @@ func TestDefaults(t *testing.T) {
 		{"server.listen", cfg.Server.Listen, ":8080"},
 		{"server.max_body_bytes", cfg.Server.MaxBodyBytes, int64(1 << 20)},
 		{"server.shutdown_timeout", cfg.Server.ShutdownTimeout, 30 * time.Second},
+		{"server.drain_delay", cfg.Server.DrainDelay, 5 * time.Second},
 		{"rules.path", cfg.Rules.Path, "rules/default.yaml"},
 		{"store.backend", cfg.Store.Backend, "memory"},
 		{"audit.dsn", cfg.Audit.DSN.Value(), "sqlite:catraca.db"},
@@ -440,6 +457,7 @@ func TestValidation(t *testing.T) {
 		{"listen port", "server: {listen: 'localhost:'}", "server.listen: the port is missing"},
 		{"body size", "server: {max_body_bytes: 0}", "server.max_body_bytes: must be at least 1024 bytes, got 0"},
 		{"shutdown", "server: {shutdown_timeout: 0s}", "server.shutdown_timeout: must be a positive duration"},
+		{"drain", "server: {drain_delay: -1s}", "server.drain_delay: must not be negative, got -1s"},
 		{"deadline", "engine: {deadline: -1ms}", "engine.deadline: must be a positive duration, got -1ms"},
 		{"min labeled", "gate: {min_labeled: 0}", "gate.min_labeled: must be at least 1, got 0"},
 		{"min precision", "gate: {min_precision: 1.5}", "gate.min_precision: must be greater than 0 and at most 1, got 1.5"},
@@ -478,6 +496,19 @@ func TestValidation(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			requireError(t, parseErrors(t, minimal+tt.yaml+"\n", nil), tt.want)
 		})
+	}
+}
+
+// TestDrainDelayZero checks that 0s, unlike for other durations, is a
+// setting: it turns the drain off.
+func TestDrainDelayZero(t *testing.T) {
+	cfg := mustParse(t, minimal+"server: {drain_delay: 0s}\n", nil)
+	if cfg.Server.DrainDelay != 0 {
+		t.Errorf("drain_delay = %v, want 0", cfg.Server.DrainDelay)
+	}
+	cfg = mustParse(t, minimal+"server: {drain_delay: 15s}\n", nil)
+	if cfg.Server.DrainDelay != 15*time.Second {
+		t.Errorf("drain_delay = %v, want 15s", cfg.Server.DrainDelay)
 	}
 }
 

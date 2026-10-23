@@ -4,6 +4,10 @@
 # Postgres. Secrets come from the environment; see docs/config.md.
 server:
   listen: ${CATRACA_LISTEN:-:8080}
+  # After SIGTERM, keep serving this long while reporting not ready, so load
+  # balancers move traffic away first (docs/config.md). 0s when nothing
+  # balances in front.
+  drain_delay: ${CATRACA_DRAIN_DELAY:-5s}
 
 auth:
   tokens:

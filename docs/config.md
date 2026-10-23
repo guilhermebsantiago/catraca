@@ -74,10 +74,36 @@ is logged or dumped. `config check` shows URLs without their passwords.
 |---|---|---|
 | `listen` | `:8080` | `host:port` to listen on. `:8080` listens on every interface; use `127.0.0.1:8080` to listen locally only |
 | `max_body_bytes` | `1048576` | largest JSON body on the `/v1` routes, at least 1024. Feedback and secret scanning routes have their own limits (1 MiB and 10 MiB) |
-| `shutdown_timeout` | `30s` | how long a graceful shutdown may take: draining requests, finishing accepted leaked-key batches, writing queued decisions |
+| `shutdown_timeout` | `30s` | how long a graceful shutdown may take: finishing requests in flight and accepted leaked-key batches, writing queued decisions |
+| `drain_delay` | `5s` | how long the server keeps serving after SIGTERM or SIGINT, reporting not ready on `/readyz`, before the shutdown starts. `0s` turns it off |
 
 Catraca serves plain HTTP. Put it behind TLS (a load balancer, an ingress or
 a reverse proxy) when traffic leaves the host or a private network.
+
+**Stopping.** On SIGTERM or SIGINT the server first drains: `/readyz`
+answers `503` (`"shutdown": "draining"`), every response closes its
+connection, and requests are still served, for `drain_delay`. Then it stops
+accepting connections and shuts down within `shutdown_timeout`. A second
+signal skips the rest of the drain.
+
+The drain is for load balancers. When Kubernetes stops a pod, it sends
+SIGTERM and removes the pod from the Service at the same time, and kube-proxy,
+ingresses and cloud load balancers take a few seconds to notice; a server
+that stopped accepting at once would refuse the decisions sent to it
+meanwhile. Closing connections moves clients that keep connections open to
+other instances. The image has no shell, so a `preStop` hook that sleeps is
+not an option, and `drain_delay` takes its place.
+
+The default, 5 seconds, covers the usual propagation in Kubernetes and adds
+5 seconds to every stop elsewhere, which is the cheaper mistake: a stop
+that is too slow delays a restart, while a drain that is too short makes
+the platform send without a decision. Set `0s` for one instance with no
+load balancer in front, or for local runs, and raise it when a load
+balancer is slower to deregister (some cloud load balancers need 10 to 15
+seconds). Give the orchestrator time for both phases: in Kubernetes,
+`terminationGracePeriodSeconds` at least `drain_delay` plus
+`shutdown_timeout` (35 seconds with the defaults; Kubernetes defaults to
+30), or the pod is killed before it has written its queued decisions.
 
 ### auth
 

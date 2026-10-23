@@ -350,6 +350,7 @@ func testConfig(t *testing.T, extra string) string {
 	writeFile(t, dir, "rules.yaml", string(rules))
 	return writeFile(t, dir, "catraca.yaml", `server:
   listen: 127.0.0.1:0
+  drain_delay: 0s
 auth:
   tokens:
     - name: platform
@@ -376,7 +377,7 @@ func TestConfigCheck(t *testing.T) {
 	expect(t, runCLI(t, map[string]string{"TOKEN": testToken, "CATRACA_CONFIG": path}, "config", "check"), exitOK, "is valid")
 	expect(t, runCLI(t, nil, "config", "check", "-config", path), exitFailed, "environment variable TOKEN is not set")
 	bad := testConfig(t, "loging:\n  level: debug\n")
-	expect(t, runCLI(t, env, "config", "check", "-config", bad), exitFailed, ":11: loging: unknown field (did you mean logging?)", "1 problem(s)")
+	expect(t, runCLI(t, env, "config", "check", "-config", bad), exitFailed, ":12: loging: unknown field (did you mean logging?)", "1 problem(s)")
 	noRules := testConfig(t, "")
 	if err := os.Remove(filepath.Join(filepath.Dir(noRules), "rules.yaml")); err != nil {
 		t.Fatal(err)

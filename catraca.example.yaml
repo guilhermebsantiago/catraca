@@ -16,7 +16,11 @@ server:
   listen: ${CATRACA_LISTEN:-:8080}
   # Largest JSON body accepted on the /v1 routes, in bytes.
   max_body_bytes: 1048576
-  # How long a graceful shutdown may take: draining requests, finishing
+  # On SIGTERM, keep serving this long while /readyz reports not ready, so
+  # load balancers stop sending requests first. 0s for one instance with no
+  # load balancer in front.
+  drain_delay: 5s
+  # Then, how long a graceful shutdown may take: finishing requests and
   # leaked-key batches and writing queued decisions to the audit log.
   shutdown_timeout: 30s
 

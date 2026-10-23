@@ -268,9 +268,12 @@ scanning routes, which authenticate by signature.
 | POST /v1/secret-scanning/github | GitHub partner endpoint |
 | GET /healthz, /readyz, /metrics | health and Prometheus metrics |
 
-`/readyz` depends on the server's own state only: a ruleset is loaded.
-Redis and the audit database are shared by every instance, so a readiness
-check on them would take every instance out of the load balancer when one
-of them fails, while decisions still work without them. They are checked
-in the background instead, and reported by `/readyz?verbose`, by
-`catraca_dependency_up` and in the log.
+`/readyz` depends on the server's own state only: a ruleset is loaded and
+the server is not draining. Redis and the audit database are shared by
+every instance, so a readiness check on them would take every instance out
+of the load balancer when one of them fails, while decisions still work
+without them. They are checked in the background instead, and reported by
+`/readyz?verbose`, by `catraca_dependency_up` and in the log. On SIGTERM
+the server reports not ready and keeps serving for `server.drain_delay`
+before it stops accepting requests, so load balancers move traffic away
+first.

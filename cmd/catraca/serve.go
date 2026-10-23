@@ -47,8 +47,10 @@ func (c *cli) loadConfig(path string) (*config.Config, int) {
 func (c *cli) serve(ctx context.Context, args []string) int {
 	fs := c.flagSet("serve", `Usage: catraca serve [-config catraca.yaml]
 
-Runs the server until it receives SIGINT or SIGTERM, then shuts down
-gracefully. On Unix, SIGHUP reloads the ruleset. Logs go to stderr.
+Runs the server until it receives SIGINT or SIGTERM, then reports not ready
+for server.drain_delay while it still serves, and shuts down gracefully. A
+second signal skips the rest of the delay. On Unix, SIGHUP reloads the
+ruleset. Logs go to stderr.
 `)
 	path := c.configFlag(fs)
 	if _, code := parse(fs, args, 0, 0); code >= 0 {
@@ -118,6 +120,7 @@ func (c *cli) summary(cfg *config.Config, rs *rules.Ruleset) {
 	}
 
 	row("listen", "%s", cfg.Server.Listen)
+	row("shutdown", "drain %s, then up to %s", cfg.Server.DrainDelay, cfg.Server.ShutdownTimeout)
 	var names []string
 	for _, t := range cfg.Auth.Tokens {
 		names = append(names, t.Name)
