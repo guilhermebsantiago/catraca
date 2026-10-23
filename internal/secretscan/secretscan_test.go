@@ -11,9 +11,11 @@ import (
 	"net/http/httptest"
 	"strconv"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
+	"github.com/guilhermebsantiago/catraca/internal/decision"
 	"github.com/guilhermebsantiago/catraca/internal/event"
 )
 
@@ -495,6 +497,38 @@ func TestDecideFailure(t *testing.T) {
 		t.Errorf("feedback %s, want true_positive", rec.Body)
 	}
 	shutdown(t, h)
+	if out.count(OutcomeDecideFailed) != 1 {
+		t.Errorf("outcomes %v", out.n)
+	}
+}
+
+// validatingDecider refuses invalid events as the engine does, and counts
+// its calls.
+type validatingDecider struct{ calls atomic.Int32 }
+
+func (d *validatingDecider) Decide(_ context.Context, ev event.Event) (decision.Decision, error) {
+	d.calls.Add(1)
+	if err := ev.Validate(); err != nil {
+		return decision.Decision{}, err
+	}
+	return decision.Decision{ID: "dec", Action: decision.Block}, nil
+}
+
+func TestRefusedEventIsNotRetried(t *testing.T) {
+	key := newTestKey(t, "k1")
+	keys := newKeysServer(t, key)
+	dec := &validatingDecider{}
+	var out outcomes
+	h := newTestHandler(t, Config{
+		Decider:  dec,
+		Resolver: &resolver{keys: map[string]Key{"real": {APIKeyID: "key\x00one"}}},
+		KeysURL:  keys.URL, OnOutcome: out.add,
+	})
+	send(t, h, key, batch(t, match{Token: "real", Type: "t"}))
+	shutdown(t, h)
+	if n := dec.calls.Load(); n != 1 {
+		t.Errorf("Decide called %d times, want 1: a refused event is refused again", n)
+	}
 	if out.count(OutcomeDecideFailed) != 1 {
 		t.Errorf("outcomes %v", out.n)
 	}

@@ -65,6 +65,11 @@ engine:
   # Time budget for the signal lookup of one decision. When it runs out the
   # decision is made without the missing signals and marked degraded.
   deadline: 10ms
+  # How far an event's time may be from Catraca's clock. A time further
+  # ahead is replaced by the clock's; an event older than max_event_age is
+  # rejected (168h is the longest counter window).
+  max_future_skew: 5s
+  max_event_age: 168h
 
 gate:
   # A rule may enforce once it has at least min_labeled labeled matches and

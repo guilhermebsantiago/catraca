@@ -88,14 +88,19 @@ func (h *genericHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, err.Error())
 		return
 	}
-	decided, d := h.decideAll(r, "generic", []event.Event{ev})
-	if decided == 0 {
+	res := h.decideAll(r, "generic", []event.Event{ev})
+	switch {
+	case res.invalid != nil:
+		// The platform sent the event, so it can fix it: say what is wrong.
+		writeError(w, http.StatusBadRequest, invalidMessage(res.invalid))
+		return
+	case res.decided == 0:
 		writeError(w, http.StatusInternalServerError, "internal error")
 		return
 	}
 	writeJSON(w, http.StatusAccepted, struct {
 		Decision decision.Decision `json:"decision"`
-	}{d})
+	}{res.last})
 }
 
 // genericEvent validates a generic feedback event and keeps only the fields

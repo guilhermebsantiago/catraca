@@ -243,9 +243,12 @@ Catraca-Signature: t=1760529600,v1=5f1c...e9
 - `type` may be omitted; when present it must be `feedback`.
 - `account_id` and `feedback.kind` (`bounce`, `complaint` or `delivery`) are
   required; bounces also need `bounce_type` (`permanent` or `transient`).
-- `time` defaults to when Catraca receives the event. `from` is the sender
-  address of the original email, so the sender domain's counters see the
-  feedback too.
+- `time` defaults to when Catraca receives the event. A time more than
+  `engine.max_future_skew` ahead of Catraca's clock is replaced by the
+  clock's, and an event older than `engine.max_event_age` (7 days) is
+  answered `400`: see [limits](api.md#limits). `from` is the sender address
+  of the original email, so the sender domain's counters see the feedback
+  too.
 - Fields that do not belong to a feedback event (`to`, `subject`, ...) are
   dropped.
 
@@ -273,7 +276,10 @@ Every handler reports what it did through `OnOutcome`, with a small, fixed
 set of values meant for a metric label: `decided`, `ignored`, `no_account`,
 `invalid_signature`, `topic_not_allowed`, `cert_unavailable`, `malformed`,
 `too_large`, `decide_failed`, `subscription_confirmed`,
-`subscription_failed` and `unsubscribed`. A rising `no_account` usually
+`subscription_failed` and `unsubscribed`. An event the engine refuses, such
+as one over a [limit](api.md#limits) or older than `engine.max_event_age`,
+counts as `malformed`; SES and useSend get a `200` for it, since a retry
+would be refused the same way. A rising `no_account` usually
 means emails are being sent without the tag or header; a rising
 `invalid_signature` means someone other than the provider is posting to the
 endpoint, or a secret was rotated on one side only.

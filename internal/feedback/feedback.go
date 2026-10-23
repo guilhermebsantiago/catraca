@@ -136,38 +136,67 @@ func (b base) readBody(w http.ResponseWriter, r *http.Request) (body []byte, ok 
 	return body, true
 }
 
-// decideAll hands each event to the Decider and reports how many were
-// decided. It keeps going after an error so one bad event does not drop the
-// others.
-func (b base) decideAll(r *http.Request, provider string, evs []event.Event) (decided int, last decision.Decision) {
+// decideResult is what decideAll did with the events of a request.
+type decideResult struct {
+	decided int
+	// failed counts events the Decider failed on in a way a retry may fix.
+	failed int
+	// invalid is the error of the first event the Decider refused as
+	// invalid (event.ErrInvalid), such as one older than the engine
+	// accepts. A retry would be refused the same way.
+	invalid error
+	last    decision.Decision
+}
+
+// decideAll hands each event to the Decider. It keeps going after an error
+// so one bad event does not drop the others.
+func (b base) decideAll(r *http.Request, provider string, evs []event.Event) decideResult {
 	ctx, cancel := context.WithTimeout(context.WithoutCancel(r.Context()), decideTimeout)
 	defer cancel()
+	var res decideResult
 	for _, ev := range evs {
 		d, err := b.decider.Decide(ctx, ev)
-		if err != nil {
+		switch {
+		case errors.Is(err, event.ErrInvalid):
+			b.onOutcome(OutcomeMalformed)
+			b.log.WarnContext(ctx, "feedback: event refused",
+				"provider", provider, "kind", ev.Feedback.Kind, "error", err)
+			if res.invalid == nil {
+				res.invalid = err
+			}
+		case err != nil:
 			b.onOutcome(OutcomeDecideFailed)
 			b.log.ErrorContext(ctx, "feedback: decide failed",
 				"provider", provider, "kind", ev.Feedback.Kind, "error", err)
-			continue
+			res.failed++
+		default:
+			b.onOutcome(OutcomeDecided)
+			res.decided++
+			res.last = d
 		}
-		b.onOutcome(OutcomeDecided)
-		decided++
-		last = d
 	}
-	return decided, last
+	return res
 }
 
 // answerDecided writes the response for a notification whose events were
-// handed to the Decider. When every Decide call failed the provider gets a
-// 500 and retries. When some succeeded it gets a 200: a retry would record
-// those again and inflate the account's bounce or complaint counters, and an
-// inflated counter can block a good sender.
-func answerDecided(w http.ResponseWriter, decided, total int) {
-	if total > 0 && decided == 0 {
+// handed to the Decider. When none was decided and some failed in a way a
+// retry may fix, the provider gets a 500 and retries. Otherwise it gets a
+// 200: a retry would record the decided events again and inflate the
+// account's bounce or complaint counters, an inflated counter can block a
+// good sender, and events refused as invalid would only be refused again.
+func answerDecided(w http.ResponseWriter, res decideResult) {
+	if res.decided == 0 && res.failed > 0 {
 		writeError(w, http.StatusInternalServerError, "internal error")
 		return
 	}
 	writeOK(w)
+}
+
+// invalidMessage returns what an event.ErrInvalid error says is wrong, for
+// the caller: "to has 2000 addresses; ...".
+func invalidMessage(err error) string {
+	msg := strings.TrimPrefix(err.Error(), event.ErrInvalid.Error()+": ")
+	return strings.TrimPrefix(msg, "event: ")
 }
 
 func writeOK(w http.ResponseWriter) {

@@ -108,6 +108,42 @@ func BenchmarkObserveBusy(b *testing.B) {
 	}
 }
 
+// BenchmarkObserveWideSend measures the most store work one event may ask
+// for: a send to event.MaxRecipients recipients, each at a domain of its own.
+// Every distinct recipient domain is added to two distinct sets, so the cost
+// grows with the domains, and on Redis the script that pays it holds the
+// server; the limit on recipients is what bounds it.
+func BenchmarkObserveWideSend(b *testing.B) {
+	to := make([]string, event.MaxRecipients)
+	for i := range to {
+		to[i] = fmt.Sprintf("u@d%d.example", i)
+	}
+	for i, be := range backends {
+		b.Run(be.name, func(b *testing.B) {
+			skipBackend(b, i)
+			c := signal.NewCatalog(be.new(b), signal.Options{})
+			defer c.Close()
+			ctx := context.Background()
+			done := measureRedis(b, i)
+			b.ReportAllocs()
+			n := 0
+			for b.Loop() {
+				ev := event.Event{
+					Type:      event.Send,
+					AccountID: fmt.Sprintf("wide-%d", n%20),
+					Time:      t0.Add(time.Duration(n) * time.Millisecond),
+					To:        to,
+				}
+				if _, err := c.Observe(ctx, ev); err != nil {
+					b.Fatal(err)
+				}
+				n++
+			}
+			done()
+		})
+	}
+}
+
 // measureRedis reads the CPU time of backend i's server, when it has one, and
 // returns a function to call after the loop, which reports the CPU time per
 // iteration as redis-us/op.

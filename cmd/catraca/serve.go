@@ -143,6 +143,7 @@ func (c *cli) summary(cfg *config.Config, rs *rules.Ruleset) {
 	}
 	row("audit", "%s, %s events", dsn, cfg.Audit.EventDetail)
 	row("deadline", "%s", cfg.Engine.Deadline)
+	row("event time", "at most %s ahead of the clock (later is clamped), %s behind (older is rejected)", cfg.Engine.MaxFutureSkew, cfg.Engine.MaxEventAge)
 	row("gate", "%d labeled matches, precision lower bound %.2f", cfg.Gate.MinLabeled, cfg.Gate.MinPrecision)
 	names = nil
 	for _, h := range cfg.Hooks {

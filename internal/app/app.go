@@ -140,13 +140,18 @@ func New(ctx context.Context, cfg *config.Config, opts Options) (_ *App, err err
 		}
 	}
 
+	// Every ingress, the /v1 routes, the feedback endpoints and secret
+	// scanning, decides through this engine, so its time bounds and the
+	// event limits of Validate cover them all.
 	eopts := engine.Options{
-		Catalog:    a.catalog,
-		Rules:      a.holder,
-		Recorder:   a.audit,
-		Deadline:   cfg.Engine.Deadline,
-		Registerer: a.registry,
-		Logger:     log.With("component", "engine"),
+		Catalog:       a.catalog,
+		Rules:         a.holder,
+		Recorder:      a.audit,
+		Deadline:      cfg.Engine.Deadline,
+		MaxFutureSkew: cfg.Engine.MaxFutureSkew,
+		MaxEventAge:   cfg.Engine.MaxEventAge,
+		Registerer:    a.registry,
+		Logger:        log.With("component", "engine"),
 	}
 	if a.hooks != nil {
 		eopts.Dispatcher = a.hooks

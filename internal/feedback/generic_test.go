@@ -161,6 +161,20 @@ func TestGenericDecideFails(t *testing.T) {
 	}
 }
 
+// The platform signs the generic event itself, so when the engine refuses it
+// the platform is told why, and that a retry would not help.
+func TestGenericEventRefused(t *testing.T) {
+	var out outcomes
+	h := newTestGeneric(t, &recorder{refuse: func(event.Event) bool { return true }}, &out)
+	code, body := postSigned(t, h, `{"account_id":"a","time":"1970-01-01T00:00:00Z","feedback":{"kind":"delivery"}}`)
+	if code != http.StatusBadRequest || !strings.Contains(body, `"time 1970-01-01T00:00:00Z is more than 168h0m0s in the past"`) {
+		t.Errorf("status %d body %s, want 400 with the reason", code, body)
+	}
+	if !out.has(OutcomeMalformed) {
+		t.Errorf("outcomes %v, want malformed", out.list)
+	}
+}
+
 func TestNewGenericHandlerValidatesConfig(t *testing.T) {
 	if _, err := NewGenericHandler(GenericConfig{Decider: &recorder{}}); err == nil {
 		t.Error("no secret: want an error")

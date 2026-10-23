@@ -100,7 +100,10 @@ catraca replay <ruleset> <events.jsonl> [--json]
 
 [Backtests](rules.md#backtesting) a ruleset on labeled events, one JSON
 object per line in time order, through a fresh in-memory catalog and the
-production engine. Prints precision, recall and F1 per rule.
+production engine. Prints precision, recall and F1 per rule. Event times are
+used as written: the server's bounds on how far a time may be from its clock
+(`engine.max_future_skew`, `engine.max_event_age`) do not apply to a replay.
+The [limits](api.md#limits) on an event's size do.
 
 ## report
 

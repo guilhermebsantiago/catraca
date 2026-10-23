@@ -65,7 +65,7 @@ ruleset reload adds `details`, one entry per problem. The provider routes
 | status | code | meaning |
 |---|---|---|
 | 400 | `invalid_json` | the body is not the JSON the route expects |
-| 400 | `invalid_event` | the event is missing what its type needs |
+| 400 | `invalid_event` | the event is missing what its type needs, or is over a [limit](#limits) |
 | 400 | `invalid_label` | the label's verdict or `by` is missing or wrong |
 | 400 | `invalid_parameter` | a query parameter is out of range |
 | 401 | `unauthorized` | no token, or not a configured one |
@@ -144,7 +144,7 @@ The event fields:
 | `type` | required | `send`, `feedback`, `account` or `key_leak` |
 | `account_id` | required except for `key_leak` | the platform's account id |
 | `id` | | your id for the event; generated when left out |
-| `time` | | RFC 3339; defaults to when Catraca receives it. Counters slide on event time |
+| `time` | | RFC 3339; defaults to when Catraca receives it. Counters slide on event time. Bounded by Catraca's clock: see [limits](#limits) |
 | `api_key_id`, `ip` | | the key and IP the send used |
 | `from`, `to`, `subject`, `links` | | the email: sender, recipients, subject, the URLs in the body |
 | `feedback` | `feedback` events | `kind` (`bounce`, `complaint`, `delivery`), `bounce_type` (`permanent`, `transient`), `recipient`, `message_id` |
@@ -195,7 +195,8 @@ Errors: `400 invalid_event` or `invalid_json` for an event that cannot be
 decided, `503 no_ruleset` while no ruleset is loaded, `503 unavailable` when
 nothing could be observed (retry). When Catraca is unreachable or answers
 `5xx`, the platform should send anyway: a broken anti-abuse service must not
-stop every good sender.
+stop every good sender. A `400` is about the event itself: the same event
+gets the same answer, so fix the integration rather than retrying.
 
 ```sh
 curl -s -X POST "$CATRACA/v1/decide" -H "Authorization: Bearer $TOKEN" -d '{"type": "send"}'
@@ -204,6 +205,53 @@ curl -s -X POST "$CATRACA/v1/decide" -H "Authorization: Bearer $TOKEN" -d '{"typ
 ```json
 {"error": {"code": "invalid_event", "message": "event: account_id is required"}}
 ```
+
+### Limits
+
+Every event is checked against these limits, whichever route brings it in
+(the feedback and secret scanning endpoints included), and an event over one
+is answered `400 invalid_event` with what is wrong:
+
+| what | limit |
+|---|---|
+| `id`, `account_id`, `api_key_id`, `ip`, attribute names | 256 bytes of valid UTF-8, without control characters (U+0000 to U+001F, U+007F to U+009F) |
+| `to` | 1,000 addresses |
+| `links` | 1,000 links |
+| `attributes` | 64 pairs |
+| any other string: `from`, each address and link, `subject`, attribute values, the fields of `feedback`, `account` and `leak` | 8 KiB, without NUL (U+0000) |
+| `time` | at most `engine.max_future_skew` (5 s) ahead of Catraca's clock and `engine.max_event_age` (7 days) behind it; see below |
+
+```json
+{"error": {"code": "invalid_event", "message": "event: to has 1200 addresses; at most 1000 are accepted"}}
+```
+
+Real email stays far below them: providers take 50 recipients per message
+(SES, Postmark, Resend) up to 1,000 (Mailgun and SendGrid batches), and
+Postfix refuses more than 1,000 by default. They exist because every
+decision shares the store and the audit log. Each distinct recipient domain
+of a send is a few Redis calls inside the script that holds Redis while it
+runs, so an unbounded `to` let one request slow every decision.
+Identifiers become store keys and audit columns: Postgres cannot store NUL,
+and a control character in an id can rewrite a terminal that shows it. Send
+a larger batch as several events.
+
+**Time.** Counters slide on event time and first-seen times keep the
+earliest one, so unbounded, one send dated a month ahead would empty its
+account's windows until the clock caught up, and one event dated 1970 would
+make its account look 56 years old. Catraca bounds event times by its own
+clock:
+
+- A time more than `engine.max_future_skew` ahead is replaced by Catraca's
+  clock: an event cannot come from the future, so it counts when it arrived.
+- A late time is kept, so feedback that arrives hours late lands in the
+  window it belongs to.
+- An event more than `engine.max_event_age` old is rejected: seven days is
+  the longest window, so it could change nothing but first-seen times. A
+  `key_leak` is the exception: it takes Catraca's clock instead, since a key
+  is leaked however long ago it was found.
+
+`catraca_event_times_out_of_bounds_total` counts both. To give Catraca an
+account's real age, send `account.created_at`, not old events.
 
 ### POST /v1/events
 
@@ -537,7 +585,8 @@ Content-Type: application/json
 ```
 
 `401` when the signature does not verify, `400` with what is wrong with the
-event.
+event, including an event over a [limit](#limits) or older than
+`engine.max_event_age`.
 
 ### POST /v1/feedback/ses and POST /v1/feedback/usesend
 
@@ -604,6 +653,7 @@ Prometheus metrics in the text format.
 | `catraca_degraded_decisions_total` | counter | decisions made without some signals |
 | `catraca_decision_duration_seconds` | histogram | time to decide |
 | `catraca_records_dropped_total` | counter | decisions the engine could not hand to the audit log |
+| `catraca_event_times_out_of_bounds_total{bound}` | counter | event times too far from Catraca's clock: `future` ones replaced by the clock's, `past` ones rejected ([limits](#limits)) |
 | `catraca_http_request_duration_seconds{route,status}` | histogram | HTTP requests, by route pattern (`POST /v1/decide`, `unmatched`) and status |
 | `catraca_audit_recorded_total`, `_dropped_total`, `_failed_total` | counter | audit log writes |
 | `catraca_audit_rejected_total` | counter | decisions the audit database refused one at a time while it wrote the rest of their batch, also counted as failed ([details](audit.md#how-decisions-are-written)) |

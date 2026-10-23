@@ -96,6 +96,31 @@ CATRACA_TEST_REDIS_CLUSTER=localhost:7001,localhost:7002,localhost:7003 \
   go test ./internal/signal -run '^$' -bench Observe -benchtime 3000x
 ```
 
+### A send to many domains
+
+The cost of an event grows with its distinct recipient domains: each one is
+added to two distinct sets, four Redis calls apiece, inside the script that
+holds Redis while it runs. `BenchmarkObserveWideSend` sends to the most
+recipients an event may have ([`event.MaxRecipients`](api.md#limits),
+1,000), each at a domain of its own. It was measured while other programs
+loaded the machine, so it is given next to `BenchmarkObserve` on the same
+server in the same run:
+
+| benchmark | Redis CPU per event |
+|---|---|
+| `BenchmarkObserve` (three recipients) | 770 to 940 µs |
+| `BenchmarkObserveWideSend` (1,000 domains) | 25.6 to 26.3 ms |
+
+About 25 µs per distinct domain, so the 1,000 limit bounds one event to
+about 26 ms of Redis time. Before the limit, a 1 MiB body could carry some
+40,000 addresses: about a second during which no other decision got its
+signals.
+
+```sh
+CATRACA_TEST_REDIS_URL=redis://localhost:6379/0 \
+  go test ./internal/signal -run '^$' -bench '^(BenchmarkObserve|BenchmarkObserveWideSend)$/^redis-server$' -benchtime 100x -count 3
+```
+
 ## The Redis store
 
 Before, a send event's batch was about 90 pipelined commands, and every

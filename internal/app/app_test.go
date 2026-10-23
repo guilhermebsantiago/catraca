@@ -5,6 +5,7 @@ import (
 	"context"
 	"crypto/ecdsa"
 	"crypto/elliptic"
+	"crypto/hmac"
 	"crypto/rand"
 	"crypto/sha256"
 	"crypto/x509"
@@ -20,6 +21,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"sync"
 	"testing"
@@ -30,6 +32,7 @@ import (
 	"github.com/guilhermebsantiago/catraca/internal/audit"
 	"github.com/guilhermebsantiago/catraca/internal/config"
 	"github.com/guilhermebsantiago/catraca/internal/decision"
+	"github.com/guilhermebsantiago/catraca/internal/event"
 	"github.com/guilhermebsantiago/catraca/signature"
 )
 
@@ -99,6 +102,9 @@ type harness struct {
 
 type options struct {
 	rules string
+	// maxBodyBytes is server.max_body_bytes; zero means 4096, small enough
+	// to test the limit.
+	maxBodyBytes int
 }
 
 func newHarness(t *testing.T, opts options) *harness {
@@ -108,6 +114,9 @@ func newHarness(t *testing.T, opts options) *harness {
 	h.dbPath = filepath.Join(h.dir, "audit.db")
 	if opts.rules == "" {
 		opts.rules = testRules
+	}
+	if opts.maxBodyBytes == 0 {
+		opts.maxBodyBytes = 4096
 	}
 	h.writeRules(opts.rules)
 
@@ -122,7 +131,7 @@ func newHarness(t *testing.T, opts options) *harness {
 
 	yaml := fmt.Sprintf(`
 server:
-  max_body_bytes: 4096
+  max_body_bytes: %d
   shutdown_timeout: 10s
 auth:
   tokens:
@@ -139,6 +148,8 @@ hooks:
 feedback:
   generic:
     secret: %s
+  usesend:
+    secret: %s
 secret_scanning:
   github:
     enabled: true
@@ -148,7 +159,7 @@ secret_scanning:
       secret: %s
 logging:
   level: debug
-`, token, filepath.ToSlash(h.rulesPath), filepath.ToSlash(h.dbPath), h.hook.URL, secret, secret, keys.URL, resolver.URL, secret)
+`, opts.maxBodyBytes, token, filepath.ToSlash(h.rulesPath), filepath.ToSlash(h.dbPath), h.hook.URL, secret, secret, secret, keys.URL, resolver.URL, secret)
 	cfg, err := config.Parse([]byte(yaml), "", func(string) (string, bool) { return "", false })
 	if err != nil {
 		t.Fatalf("config: %v", err)
@@ -385,6 +396,10 @@ func TestInvalidEvents(t *testing.T) {
 		{"unknown type", `{"type":"email","account_id":"a"}`, 400, "invalid_event", "unknown type email"},
 		{"no account", `{"type":"send"}`, 400, "invalid_event", "account_id is required"},
 		{"feedback without details", `{"type":"feedback","account_id":"a"}`, 400, "invalid_event", "feedback object"},
+		{"NUL in an id", `{"type":"send","account_id":"acct\u0000"}`, 400, "invalid_event", "event: account_id contains the control character U+0000"},
+		{"escape in a key id", `{"type":"send","account_id":"a","api_key_id":"\u001b[2J"}`, 400, "invalid_event", "api_key_id contains the control character U+001B"},
+		{"NUL in the subject", `{"type":"send","account_id":"a","subject":"hi\u0000"}`, 400, "invalid_event", "subject contains NUL"},
+		{"dated 1970", `{"type":"send","account_id":"a","time":"1970-01-01T00:00:00Z"}`, 400, "invalid_event", "event: time 1970-01-01T00:00:00Z is more than 168h0m0s in the past"},
 		{"empty body", ``, 400, "invalid_json", "the body is empty"},
 		{"syntax", `{"type":`, 400, "invalid_json", "truncated"},
 		{"bad syntax", `{"type" "send"}`, 400, "invalid_json", "invalid JSON at byte"},
@@ -654,6 +669,133 @@ func TestReadiness(t *testing.T) {
 func (h *harness) signedFeedback(body string, key string) response {
 	h.t.Helper()
 	return h.do("POST", "/v1/feedback", "", body, signature.Header, signature.Sign(key, time.Now(), []byte(body)))
+}
+
+// useSend posts a useSend webhook about one email of team, signed as useSend
+// signs them.
+func (h *harness) useSend(kind string, createdAt time.Time, team int) response {
+	h.t.Helper()
+	body := fmt.Sprintf(`{"id":"call_1","type":%q,"createdAt":%q,"teamId":%d,"data":{"id":"email_1","from":"news@us.example","to":["someone@mail.example"]}}`,
+		kind, createdAt.UTC().Format(time.RFC3339), team)
+	ts := strconv.FormatInt(time.Now().UnixMilli(), 10)
+	mac := hmac.New(sha256.New, []byte(secret))
+	mac.Write([]byte(ts + "." + body))
+	return h.do("POST", "/v1/feedback/usesend", "", body,
+		"X-UseSend-Signature", "v1="+hex.EncodeToString(mac.Sum(nil)), "X-UseSend-Timestamp", ts)
+}
+
+// TestEventTimeBoundsOnEveryRoute sends events dated a month ahead and in
+// 1970 through every route that takes an event time. A time ahead counts
+// when it arrives, so it cannot empty the counters rules read; a time older
+// than every counter is refused, so it cannot make an account look old.
+// Secret scanning stamps events with the time it receives them.
+func TestEventTimeBoundsOnEveryRoute(t *testing.T) {
+	t.Parallel()
+	h := newHarness(t, options{})
+	ahead := time.Now().Add(30 * 24 * time.Hour)
+	epoch := time.Unix(0, 0)
+
+	// POST /v1/decide: the send dated ahead is the first of four in a minute.
+	first, _ := h.decide(send("acct_skew", "hi@skew.example", "time", ahead))
+	var d decision.Decision
+	for range 3 {
+		d, _ = h.decide(send("acct_skew", "hi@skew.example"))
+	}
+	if d.Action != decision.Throttle {
+		t.Errorf("fourth send in a minute, the first dated a month ahead: %+v", d)
+	}
+	var entry audit.Entry
+	eventually(t, 5*time.Second, func() bool {
+		r := h.do("GET", "/v1/decisions/"+first.ID, token, nil)
+		if r.status != http.StatusOK {
+			return false
+		}
+		r.json(t, &entry)
+		return true
+	})
+	if off := time.Since(entry.Event.Time); off < -time.Minute || off > time.Minute {
+		t.Errorf("stored event time %s, want the time it arrived", entry.Event.Time)
+	}
+
+	// POST /v1/events.
+	r := h.do("POST", "/v1/events", token, map[string]any{"type": "account", "account_id": "acct_old", "time": epoch, "account": map[string]any{"action": "signup"}})
+	if code, msg := r.apiError(t); r.status != http.StatusBadRequest || code != "invalid_event" || !strings.Contains(msg, "in the past") {
+		t.Errorf("account event dated 1970: %d %s", r.status, r.body)
+	}
+
+	// POST /v1/feedback: complaints dated ahead and now both count.
+	for _, at := range []time.Time{ahead, time.Now()} {
+		body := fmt.Sprintf(`{"account_id":"acct_gen","time":%q,"feedback":{"kind":"complaint"}}`, at.UTC().Format(time.RFC3339))
+		if r := h.signedFeedback(body, secret); r.status != http.StatusAccepted {
+			t.Fatalf("generic complaint at %s: %d %s", at, r.status, r.body)
+		}
+	}
+	if d, _ := h.decide(send("acct_gen", "news@gen.example")); d.Action != decision.Hold {
+		t.Errorf("send after two complaints, one dated a month ahead: %+v", d)
+	}
+	r = h.signedFeedback(`{"account_id":"acct_gen","time":"1970-01-01T00:00:00Z","feedback":{"kind":"complaint"}}`, secret)
+	if r.status != http.StatusBadRequest || !strings.Contains(string(r.body), "in the past") {
+		t.Errorf("generic complaint dated 1970: %d %s", r.status, r.body)
+	}
+
+	// POST /v1/feedback/usesend: the same, for the account that is team 4242.
+	for _, at := range []time.Time{ahead, time.Now()} {
+		if r := h.useSend("email.complained", at, 4242); r.status != http.StatusOK {
+			t.Fatalf("useSend complaint at %s: %d %s", at, r.status, r.body)
+		}
+	}
+	if d, _ := h.decide(send("4242", "news@us.example")); d.Action != decision.Hold {
+		t.Errorf("send after two useSend complaints, one dated a month ahead: %+v", d)
+	}
+	// Refused, and acknowledged so that useSend does not retry it.
+	if r := h.useSend("email.complained", epoch, 4242); r.status != http.StatusOK {
+		t.Errorf("useSend complaint dated 1970: %d %s", r.status, r.body)
+	}
+
+	m := string(h.do("GET", "/metrics", "", nil).body)
+	for _, want := range []string{
+		`catraca_event_times_out_of_bounds_total{bound="future"} 3`,
+		`catraca_event_times_out_of_bounds_total{bound="past"} 3`,
+		`catraca_feedback_outcomes_total{outcome="malformed",provider="generic"} 1`,
+		`catraca_feedback_outcomes_total{outcome="malformed",provider="usesend"} 1`,
+	} {
+		if !strings.Contains(m, want) {
+			t.Errorf("metrics lack %s", want)
+		}
+	}
+}
+
+func TestEventLimits(t *testing.T) {
+	t.Parallel()
+	h := newHarness(t, options{maxBodyBytes: 1 << 20})
+	to := func(n int) []string {
+		addrs := make([]string, n)
+		for i := range addrs {
+			addrs[i] = fmt.Sprintf("u%d@d%d.example", i, i)
+		}
+		return addrs
+	}
+	h.decide(send("acct_wide", "news@wide.example", "to", to(event.MaxRecipients)))
+	tests := []struct {
+		name string
+		ev   map[string]any
+		msg  string
+	}{
+		{"too many recipients", send("acct_wide", "news@wide.example", "to", to(event.MaxRecipients+1)), "event: to has 1001 addresses; at most 1000 are accepted"},
+		{"too many links", send("acct_wide", "news@wide.example", "links", to(event.MaxLinks+1)), "event: links has 1001 links"},
+		{"account id too long", send(strings.Repeat("a", event.MaxIDBytes+1), "news@wide.example"), "event: account_id is 257 bytes; at most 256 are accepted"},
+		{"subject too long", send("acct_wide", "news@wide.example", "subject", strings.Repeat("s", event.MaxTextBytes+1)), "event: subject is 8193 bytes"},
+	}
+	for _, tt := range tests {
+		r := h.do("POST", "/v1/decide", token, tt.ev)
+		if r.status != http.StatusBadRequest {
+			t.Errorf("%s: status %d, want 400", tt.name, r.status)
+			continue
+		}
+		if code, msg := r.apiError(t); code != "invalid_event" || !strings.HasPrefix(msg, tt.msg) {
+			t.Errorf("%s: %s %q, want invalid_event %q", tt.name, code, msg, tt.msg)
+		}
+	}
 }
 
 func TestGenericFeedbackChangesLaterDecisions(t *testing.T) {
