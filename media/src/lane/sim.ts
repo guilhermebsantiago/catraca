@@ -81,6 +81,31 @@ export function schedule(items: LaneItem[], t0: number): Slot[] {
 
 export const scheduleEnd = (slots: Slot[]) => (slots.length ? slots[slots.length - 1].next : 0);
 
+// The same lane, placed by when each event takes its color: the video puts
+// every click on a beat of its music. Gaps between clicks leave the rotor
+// still, with the next event waiting at the arm. A block meets the arm 120 ms
+// before its click; the queue steps up while it falls.
+export function scheduleAt(entries: {item: LaneItem; click: number}[]): Slot[] {
+	return entries.map(({item, click}, index) => {
+		if (item.action === 'block') {
+			const start = click - MOTION.click;
+			return {item, index, start, turnStart: NaN, click, next: start + PITCH, stepStart: click, stepEnd: click + PITCH - TURN};
+		}
+		const turnStart = click - TURN;
+		const wait = item.action === 'throttle' ? (item.wait ?? 1500) : 0;
+		return {
+			item,
+			index,
+			start: turnStart - wait,
+			turnStart,
+			click,
+			next: turnStart + PITCH,
+			stepStart: turnStart + TURN / 2,
+			stepEnd: turnStart + PITCH,
+		};
+	});
+}
+
 // Rotor angle in degrees (SVG, so negative is counterclockwise on screen).
 export function rotorAngle(slots: Slot[], t: number): number {
 	let turns = 0;

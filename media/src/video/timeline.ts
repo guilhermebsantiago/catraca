@@ -1,28 +1,53 @@
-// The launch video's clock. One lane runs through scenes 2 to 6, playing the
-// demo's live decisions in the order Catraca made them; each scene starts
-// when its first event reaches the rotor, so the story and the lane stay in
-// step. Long runs of identical decisions are left out (the burst's first 96
-// allowed sends and its last 39 throttled ones), which the scenes say.
+// The launch video's clock. It is cut to its music (scripts/score.mjs):
+// 125 BPM, so one beat is the lane's 480 ms pitch and every decision clicks
+// on a beat. Scenes start on bars; the lane plays the demo's live decisions
+// in the order Catraca made them, with runs left out (most of the burst's
+// sends, the throttles after the first, and the allowed sends at the end of
+// the complaints phase).
 
 import {LaneEntry, S, phase, toItem} from '../data';
-import {LaneItem, schedule, scheduleEnd, slotOf} from '../lane/sim';
+import {LaneItem, Slot, scheduleAt, slotOf} from '../lane/sim';
 
-export const FPS = 30;
+export const FPS = 60;
 export const WIDTH = 1920;
 export const HEIGHT = 1080;
 
-// Lane geometry for scenes 2 to 6.
-export const LANE = {ax: 318, ay: 370, m: 38};
+export const BEAT = 480;
+export const BAR = 4 * BEAT;
+// Bar n, beat b (both from 1), in ms.
+export const at = (bar: number, beat = 1) => (bar - 1) * BAR + (beat - 1) * BEAT;
+// Beat g counted from 0.
+export const beat = (g: number) => g * BEAT;
 
-const THROTTLE_WAIT = 1700;
+export const DURATION_MS = 64000;
+export const DURATION_FRAMES = Math.round((DURATION_MS * FPS) / 1000);
 
-const item = (e: LaneEntry, tag?: string): LaneItem => {
-	const it = toItem(e, tag);
-	if (it.action === 'throttle') it.wait = THROTTLE_WAIT;
-	return it;
+export const SCENES = {
+	problem: 0,
+	stop: at(5, 3), // traffic stops with the music
+	logo: at(7),
+	ask: at(9),
+	legend: at(11),
+	rule: at(12),
+	burst: at(13),
+	complaints: at(16),
+	leak: at(19),
+	shadow: at(22),
+	gate: at(24),
+	promote: at(26),
+	numbers: at(27),
+	features: at(29),
+	close: at(30),
+	final: at(32),
+	end: DURATION_MS,
 };
 
-function laneItems() {
+// Lane geometry from the logo on: the rotor's axis and module, px.
+export const LANE = {ax: 470, ay: 600, m: 48};
+
+const item = (e: LaneEntry, tag?: string): LaneItem => toItem(e, tag);
+
+function laneEntries() {
 	const flow = phase('flow');
 	const burst = phase('burst');
 	const complaints = phase('complaints');
@@ -32,61 +57,51 @@ function laneItems() {
 	const signup = burst[0];
 	const sends = burst.filter((e) => e.account_id === signup.account_id && e.type === 'send');
 	const firstThrottle = sends.findIndex((e) => e.action === 'throttle');
-	const after = burst.filter((e) => e.account_id !== signup.account_id);
+	const holdAt = complaints.findIndex((e) => e.action === 'hold');
+	const blockAt = leak.findIndex((e) => e.action === 'block');
 
-	let shadowN = 0;
-	const items: LaneItem[] = [
-		...flow.map((e, i) => item(e, i === 0 ? 'flow' : undefined)),
-		item(signup, 'burst'),
-		...sends.slice(firstThrottle - 4, firstThrottle).map((e) => item(e)),
-		item(sends[firstThrottle], 'throttle'),
-		...after.map((e) => item(e)),
-		...complaints.map((e, i) => item(e, i === 0 ? 'complaints' : e.action === 'hold' ? 'hold' : undefined)),
-		...leak.map((e, i) => item(e, i === 0 ? 'leak' : e.action === 'block' ? 'block' : undefined)),
-		...shadow.map((e) => item(e, e.shadow?.length ? `shadow${++shadowN}` : undefined)),
-	];
-	const shadowStart = items.length - shadow.length;
-	// Events still waiting when the lane leaves the screen.
-	const tail = shadow.slice(1, 7).map((e) => ({...item(e), tag: undefined}));
-	return {items: [...items, ...tail], shadowStart};
+	const out: {item: LaneItem; click: number; e: LaneEntry}[] = [];
+	const put = (g: number, it: LaneItem, e: LaneEntry) => out.push({item: it, click: beat(g), e});
+	flow.forEach((e, i) => put(33 + i, item(e, i === 0 ? 'flow' : e.action === 'flag' ? 'flag' : undefined), e));
+	put(47, item(signup, 'signup'), signup);
+	// Sends 1 to 4, then 97 to 100; send 101 is the first throttled. Its
+	// countdown fills bar 15 and it passes on bar 16.
+	sends.slice(0, 4).forEach((e, i) => put(48 + i, item(e, `send${i + 1}`), e));
+	sends.slice(firstThrottle - 4, firstThrottle).forEach((e, i) => put(52 + i, item(e, `send${firstThrottle - 3 + i}`), e));
+	put(60, {...item(sends[firstThrottle], 'throttle'), wait: BAR}, sends[firstThrottle]);
+	complaints.slice(0, holdAt + 1).forEach((e, i) => put(61 + i, item(e, i === holdAt ? 'hold' : `c${i}`), e));
+	leak.forEach((e, i) => put(73 + i, item(e, i === 0 ? 'leak' : i === blockAt ? 'block' : undefined), e));
+	let n = 0;
+	shadow.forEach((e, i) => put(85 + i, item(e, e.shadow?.length ? `shadow${++n}` : undefined), e));
+	return {entries: out, sends, firstThrottle};
 }
 
-const built = laneItems();
-export const LANE_T0 = 4850; // the first passage starts
-export const laneSlots = schedule(built.items, LANE_T0);
-
+const built = laneEntries();
+export const laneSlots: Slot[] = scheduleAt(built.entries);
 export const slot = (tag: string) => slotOf(laneSlots, tag);
+// The recorded decision behind each slot.
+export const laneData: LaneEntry[] = built.entries.map((x) => x.e);
+export const signupAccount = built.sends[0].account_id;
 
-// Complaint rounds: complaint n arrives as the event before the
-// newsletter's n-th send starts passing.
+// What the burst's counter shows: account.sends_1m after each send passes.
+export const burstCount = (t: number) => {
+	let n = 0;
+	for (const s of laneSlots) {
+		const m = s.item.tag?.match(/^send(\d+)$/);
+		if (m && t >= s.click) n = Number(m[1]);
+	}
+	const th = slot('throttle');
+	if (t >= th.start) n = built.firstThrottle + 1;
+	// Between send 4 and send 97, the run left out, counted through.
+	const a = slot('send4').click;
+	const b = slot(`send${built.firstThrottle - 3}`).click;
+	if (t > a && t < b) n = Math.max(n, Math.floor(4 + ((t - a) / (b - a)) * (built.firstThrottle - 4 - 4)));
+	return n;
+};
+export const firstThrottleAt = S.burst.first_throttle_at;
+
+// Complaint n arrives a beat before the newsletter's n-th send is decided.
 export const complaintRounds = (() => {
-	const c = phase('complaints');
-	const base = laneSlots.indexOf(slot('complaints'));
-	const rounds: {arrive: number; decided: number; action: string; n: number}[] = [];
-	c.forEach((e, i) => {
-		if (e.account_id !== 'acct_fernway') return;
-		const n = rounds.length;
-		const s = laneSlots[base + i];
-		rounds.push({arrive: laneSlots[base + i - 1].start, decided: s.click, action: S.complaints[n].next_send_action, n: n + 1});
-	});
-	return rounds;
+	const fern = laneSlots.filter((s) => /^c\d+$|^hold$/.test(s.item.tag ?? '') && laneData[s.index].account_id === 'acct_fernway');
+	return fern.map((s, i) => ({n: i + 1, arrive: s.click - BEAT, decided: s.click, action: S.complaints[i].next_send_action}));
 })();
-
-const lead = 350;
-export const SCENES = (() => {
-	const s2 = 4350;
-	const s3 = slot('burst').start - lead;
-	const s4 = slot('complaints').start - lead;
-	const s5 = slot('leak').start - lead;
-	const s6 = laneSlots[built.shadowStart].start - lead;
-	// The reviewer's two labels need a moment on screen before the report.
-	const report = slot('shadow3').click + 2700;
-	const close = report + 5500;
-	const end = close + 4700;
-	return {s1: 0, s2, s3, s4, s5, s6, report, close, end};
-})();
-
-export const DURATION_FRAMES = Math.ceil((SCENES.end * FPS) / 1000);
-
-
-export const laneEnd = scheduleEnd(laneSlots);

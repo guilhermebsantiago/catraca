@@ -7,14 +7,18 @@
   "scripts": {
     "studio": "remotion studio src/index.ts",
     "typecheck": "tsc --noEmit",
-    "render": "node scripts/render.mjs"
+    "render": "node scripts/render.mjs",
+    "score": "node scripts/score.mjs"
   },
   "dependencies": {
-    "@remotion/cli": "4.0.530",
-    "@remotion/fonts": "4.0.530",
+    "@remotion/cli": "4.0.538",
+    "@remotion/fonts": "4.0.538",
+    "@remotion/media": "4.0.538",
+    "@remotion/transitions": "4.0.538",
+    "motion": "14.6.0",
     "react": "19.3.0",
     "react-dom": "19.3.0",
-    "remotion": "4.0.530"
+    "remotion": "4.0.538"
   },
   "devDependencies": {
     "@types/react": "19.2.18",

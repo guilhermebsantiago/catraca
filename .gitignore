@@ -8,3 +8,4 @@
 coverage.out
 node_modules/
 __pycache__/
+/media/public/audio/
