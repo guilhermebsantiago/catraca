@@ -97,9 +97,19 @@ func (s *Server) auditError(w http.ResponseWriter, r *http.Request, id string, e
 	case errors.Is(err, audit.ErrRuleNotMatched):
 		writeError(w, http.StatusUnprocessableEntity, "rule_not_matched", "the label names a rule that did not match the decision")
 	default:
-		s.log.ErrorContext(r.Context(), "audit log request failed", "decision_id", id, "error", err)
-		writeError(w, http.StatusInternalServerError, "internal", "the audit log could not be read")
+		s.auditFailed(w, r, "audit log request failed", err, "decision_id", id)
 	}
+}
+
+// auditFailed answers a request the audit log could not serve: 503 while it
+// is unavailable, 500 for any other failure, which is logged.
+func (s *Server) auditFailed(w http.ResponseWriter, r *http.Request, msg string, err error, attrs ...any) {
+	if errors.Is(err, ErrAuditUnavailable) {
+		writeError(w, http.StatusServiceUnavailable, "audit_unavailable", "the audit log is not available yet; decisions are still made; retry later")
+		return
+	}
+	s.log.ErrorContext(r.Context(), msg, append(attrs, "error", err)...)
+	writeError(w, http.StatusInternalServerError, "internal", "the audit log could not be read")
 }
 
 func (s *Server) getRules(w http.ResponseWriter, r *http.Request) {
@@ -196,8 +206,7 @@ func (s *Server) review(w http.ResponseWriter, r *http.Request) {
 	s.flush(r)
 	items, err := s.audit.ReviewQueue(r.Context(), id, mode, limit)
 	if err != nil {
-		s.log.ErrorContext(r.Context(), "review queue failed", "rule_id", id, "error", err)
-		writeError(w, http.StatusInternalServerError, "internal", "the audit log could not be read")
+		s.auditFailed(w, r, "review queue failed", err, "rule_id", id)
 		return
 	}
 	writeJSON(w, http.StatusOK, ReviewResponse{RuleID: id, Mode: mode, Items: items})
@@ -233,8 +242,7 @@ func (s *Server) ruleStats(w http.ResponseWriter, r *http.Request) {
 	s.flush(r)
 	stats, err := s.audit.RuleStats(r.Context(), since)
 	if err != nil {
-		s.log.ErrorContext(r.Context(), "rule stats failed", "error", err)
-		writeError(w, http.StatusInternalServerError, "internal", "the audit log could not be read")
+		s.auditFailed(w, r, "rule stats failed", err)
 		return
 	}
 	writeJSON(w, http.StatusOK, StatsResponse{
@@ -247,7 +255,7 @@ func (s *Server) ruleStats(w http.ResponseWriter, r *http.Request) {
 // flush writes queued decisions, so stats and the review queue include the
 // ones just made. A failure only makes the answer slightly stale.
 func (s *Server) flush(r *http.Request) {
-	if err := s.audit.Flush(r.Context()); err != nil {
+	if err := s.audit.Flush(r.Context()); err != nil && !errors.Is(err, ErrAuditUnavailable) {
 		s.log.WarnContext(r.Context(), "audit flush failed; answering without queued decisions", "error", err)
 	}
 }

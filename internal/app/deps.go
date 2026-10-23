@@ -158,6 +158,8 @@ func (m *dependencyMonitor) record(name string, err error, took time.Duration) {
 	switch {
 	case errors.Is(err, errCheckTimeout):
 		status = "timeout"
+	case errors.Is(err, errAuditNotOpen):
+		status = "not_open"
 	case err != nil:
 		status = "unavailable"
 	}

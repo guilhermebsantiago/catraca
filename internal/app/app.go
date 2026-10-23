@@ -73,7 +73,7 @@ type App struct {
 
 	store   store.Store
 	catalog signal.Catalog
-	audit   *audit.DB
+	audit   *auditLog
 	hooks   *hooks.Dispatcher
 	// stopHooks cancels hooks.Run; hooksDone is closed when it returns.
 	stopHooks context.CancelFunc
@@ -98,8 +98,10 @@ type App struct {
 // the audit database in the background. A ruleset that fails to load does
 // not stop it: the error is logged, /readyz reports not ready and decisions
 // answer 503 until a reload succeeds, so an edit that breaks the file never
-// takes down a running deployment. An audit database that cannot be opened
-// does.
+// takes down a running deployment. A SQLite audit database that cannot be
+// opened does. A Postgres one opens in the background, retried while it is
+// unreachable, and the server decides without the audit log meanwhile; an
+// error that waiting cannot fix stops Serve (see auditLog).
 func New(ctx context.Context, cfg *config.Config, opts Options) (_ *App, err error) {
 	log := opts.Logger
 	if log == nil {
@@ -142,7 +144,8 @@ func New(ctx context.Context, cfg *config.Config, opts Options) (_ *App, err err
 	if err != nil {
 		return nil, err
 	}
-	a.audit, err = audit.Open(ctx, cfg.Audit.DSN.Value(), audit.Options{EventMode: mode, Logger: log.With("component", "audit")})
+	alog := log.With("component", "audit")
+	a.audit, err = openAuditLog(ctx, cfg.Audit.DSN.Value(), audit.Options{EventMode: mode, Logger: alog}, alog)
 	if err != nil {
 		return nil, fmt.Errorf("open the audit database: %w", err)
 	}
@@ -427,9 +430,7 @@ func (a *App) dependencies() []dependency {
 	if p, ok := a.store.(interface{ Ping(context.Context) error }); ok {
 		deps = append(deps, dependency{name: "store", check: p.Ping})
 	}
-	deps = append(deps, dependency{name: "audit", check: func(ctx context.Context) error {
-		return a.audit.SQL().PingContext(ctx)
-	}})
+	deps = append(deps, dependency{name: "audit", check: a.audit.Ping})
 	return deps
 }
 
@@ -470,6 +471,9 @@ func (a *App) Serve(ctx context.Context, ln net.Listener) error {
 		a.drain(srv)
 	case err := <-errc:
 		serveErr = fmt.Errorf("serve HTTP: %w", err)
+	case err := <-a.audit.failed():
+		a.log.Error("the audit database cannot be opened, and waiting will not fix it; stopping", "error", err)
+		serveErr = err
 	}
 	a.log.Info("shutting down", "timeout", a.cfg.Server.ShutdownTimeout)
 	sctx, cancel := context.WithTimeout(context.Background(), a.cfg.Server.ShutdownTimeout)
@@ -539,7 +543,9 @@ func (a *App) reloadOnSignal() (stop func()) {
 }
 
 // Close shuts down everything but the HTTP server, which must already be
-// stopped, in dependency order, once the dependency checks have stopped:
+// stopped, in dependency order, once the dependency checks have stopped and
+// the audit database, if it is still being opened, is given up on (the
+// decisions waiting for it are dropped, and counted):
 //
 //  1. secret scanning finishes the tokens it accepted, which still need the
 //     engine;
@@ -555,6 +561,9 @@ func (a *App) Close(ctx context.Context) error {
 		var errs []error
 		if a.deps != nil {
 			a.deps.close()
+		}
+		if a.audit != nil {
+			a.audit.stopOpening()
 		}
 		if a.scan != nil {
 			if err := a.scan.Shutdown(ctx); err != nil {

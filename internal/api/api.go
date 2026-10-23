@@ -44,6 +44,11 @@ type RuleSource interface {
 	Current() *rules.Ruleset
 }
 
+// ErrAuditUnavailable is returned, wrapped, by an AuditLog that cannot be
+// used yet, such as an audit database still being opened. The routes that
+// need the log answer 503 audit_unavailable.
+var ErrAuditUnavailable = errors.New("api: the audit log is not available")
+
 // AuditLog is the part of the decision log the API reads and labels.
 // *audit.DB is one.
 type AuditLog interface {

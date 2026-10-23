@@ -392,31 +392,54 @@ func TestServe(t *testing.T) {
 	expect(t, runCLI(t, nil, "serve", "-config", testConfig(t, "")), exitFailed, "TOKEN is not set")
 	expect(t, runCLI(t, env, "serve", "-config", filepath.Join(t.TempDir(), "none.yaml")), exitError)
 
-	// A config whose audit database cannot be opened fails to start.
-	path := testConfig(t, "")
-	data, _ := os.ReadFile(path)
-	unreachable := strings.Replace(string(data), "db.internal:5432", "127.0.0.1:1", 1)
-	if err := os.WriteFile(path, []byte(unreachable), 0o600); err != nil {
-		t.Fatal(err)
+	withDSN := func(dsn string) string {
+		path := testConfig(t, "")
+		data, _ := os.ReadFile(path)
+		edited := strings.Replace(string(data), "postgres://catraca:hunter2@db.internal:5432/catraca", dsn, 1)
+		if err := os.WriteFile(path, []byte(edited), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		return path
 	}
-	expect(t, runCLI(t, env, "serve", "-config", path), exitError, "catraca could not start")
+
+	// A SQLite database that cannot be opened stops it from starting.
+	expect(t, runCLI(t, env, "serve", "-config", withDSN("sqlite:"+filepath.ToSlash(t.TempDir())+"/no/such/dir/audit.db")), exitError, "catraca could not start")
+
+	// An audit database that waiting cannot fix, here a DSN Postgres
+	// refuses, stops it soon after it starts.
+	expect(t, runCLI(t, env, "serve", "-config", withDSN("postgres://catraca:hunter2@127.0.0.1:1/catraca?connect_timeout=soon")), exitError,
+		"the audit database cannot be opened", "catraca stopped with an error")
+
+	// An unreachable Postgres does not: the server decides without the
+	// audit log while it retries.
+	errb := serveUntilStopped(t, env, withDSN("postgres://catraca:hunter2@127.0.0.1:1/catraca?sslmode=disable"),
+		"the audit database is unreachable")
+	if strings.Contains(errb, "hunter2") {
+		t.Errorf("the logs show the database password:\n%s", errb)
+	}
 
 	// With a SQLite database it starts, and stops when its context ends.
-	path = testConfig(t, "")
-	data, _ = os.ReadFile(path)
-	sqlite := strings.Replace(string(data), "postgres://catraca:hunter2@db.internal:5432/catraca", "sqlite:audit.db", 1)
-	if err := os.WriteFile(path, []byte(sqlite), 0o600); err != nil {
-		t.Fatal(err)
+	path := withDSN("sqlite:audit.db")
+	serveUntilStopped(t, env, path, "catraca is listening")
+	if _, err := os.Stat(filepath.Join(filepath.Dir(path), "audit.db")); err != nil {
+		t.Errorf("the audit database was not created next to the config: %v", err)
 	}
+}
+
+// serveUntilStopped runs catraca serve with the configuration at path until
+// its log shows want, then stops it, checks that it stopped cleanly and
+// returns its log.
+func serveUntilStopped(t *testing.T, env map[string]string, path, want string) string {
+	t.Helper()
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	var out, errb syncBuffer
 	done := make(chan int, 1)
 	go func() { done <- run(ctx, []string{"serve", "-config", path}, &out, &errb, lookup(env)) }()
-	deadline := time.Now().Add(10 * time.Second)
-	for !strings.Contains(errb.String(), "catraca is listening") {
+	deadline := time.Now().Add(20 * time.Second)
+	for !strings.Contains(errb.String(), want) {
 		if time.Now().After(deadline) {
-			t.Fatalf("serve did not start:\n%s", errb.String())
+			t.Fatalf("serve did not log %q:\n%s", want, errb.String())
 		}
 		time.Sleep(10 * time.Millisecond)
 	}
@@ -426,12 +449,10 @@ func TestServe(t *testing.T) {
 		if code != exitOK || !strings.Contains(errb.String(), `"msg":"stopped"`) {
 			t.Errorf("serve: exit %d\n%s", code, errb.String())
 		}
-	case <-time.After(15 * time.Second):
+	case <-time.After(20 * time.Second):
 		t.Fatal("serve did not stop")
 	}
-	if _, err := os.Stat(filepath.Join(filepath.Dir(path), "audit.db")); err != nil {
-		t.Errorf("the audit database was not created next to the config: %v", err)
-	}
+	return errb.String()
 }
 
 // syncBuffer is a bytes.Buffer safe for a server's concurrent log writes.

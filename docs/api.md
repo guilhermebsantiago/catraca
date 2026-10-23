@@ -78,6 +78,7 @@ ruleset reload adds `details`, one entry per problem. The provider routes
 | 500 | `internal` | the audit log could not be read; details are in the server log |
 | 503 | `no_ruleset` | no ruleset is loaded: decisions cannot be made |
 | 503 | `unavailable` | the event could not be decided; retry it |
+| 503 | `audit_unavailable` | the audit database has not opened yet (see [audit](config.md#audit)); decisions are still made, the routes that read or label them answer this until it opens |
 
 **Decisions.** `POST /v1/decide` and `POST /v1/events` answer
 `{"decision": {...}}`:
@@ -623,9 +624,10 @@ curl -s "$CATRACA/readyz?verbose"
 
 The server checks each dependency every 5 seconds in the background, all at
 once and each within 2 seconds, so `?verbose` answers from the last checks
-and never waits on a dependency itself. `status` is `ok`, `unavailable` or
-`timeout` (`unknown` before the first check); `since` is when it took that
-value. Only Redis is listed as `store`; the memory store is not a
+and never waits on a dependency itself. `status` is `ok`, `unavailable`,
+`timeout`, `not_open` for an audit database still being opened (see
+[audit](config.md#audit)), or `unknown` before the first check; `since` is
+when it took that value. Only Redis is listed as `store`; the memory store is not a
 dependency. The reason for a failure is in the log, once when a dependency
 goes down and once when it is back. The same checks feed
 `catraca_dependency_up` and the other metrics below.

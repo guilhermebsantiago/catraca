@@ -103,6 +103,8 @@ type options struct {
 	redisURL string
 	// drainDelay is server.drain_delay; empty means 0s.
 	drainDelay string
+	// auditDSN replaces the SQLite audit database in the test's directory.
+	auditDSN string
 }
 
 func newHarness(t *testing.T, opts options) *harness {
@@ -115,6 +117,9 @@ func newHarness(t *testing.T, opts options) *harness {
 	}
 	if opts.drainDelay == "" {
 		opts.drainDelay = "0s"
+	}
+	if opts.auditDSN == "" {
+		opts.auditDSN = "sqlite:" + filepath.ToSlash(h.dbPath)
 	}
 	h.writeRules(opts.rules)
 
@@ -139,7 +144,7 @@ auth:
 rules:
   path: '%s'
 audit:
-  dsn: 'sqlite:%s'
+  dsn: '%s'
 hooks:
   - name: revoke_key
     url: %s
@@ -156,7 +161,7 @@ secret_scanning:
       secret: %s
 logging:
   level: debug
-`, opts.drainDelay, token, filepath.ToSlash(h.rulesPath), filepath.ToSlash(h.dbPath), h.hook.URL, secret, secret, keys.URL, resolver.URL, secret)
+`, opts.drainDelay, token, filepath.ToSlash(h.rulesPath), opts.auditDSN, h.hook.URL, secret, secret, keys.URL, resolver.URL, secret)
 	if opts.redisURL != "" {
 		yaml += fmt.Sprintf("store:\n  backend: redis\n  redis:\n    url: '%s'\n", opts.redisURL)
 	}
@@ -700,9 +705,9 @@ func TestReadinessIgnoresDependencies(t *testing.T) {
 		r = h.do("GET", "/readyz?verbose", "", nil)
 		ready = api.ReadyResponse{}
 		r.json(t, &ready)
-		return ready.Dependencies["store"].Status == "unavailable"
+		return ready.Dependencies["store"].Status == "unavailable" && ready.Dependencies["audit"].Status == "ok"
 	})
-	if r.status != http.StatusOK || ready.Status != "ready" || ready.Dependencies["audit"].Status != "ok" {
+	if r.status != http.StatusOK || ready.Status != "ready" {
 		t.Errorf("readyz?verbose with Redis down: %d %s", r.status, r.body)
 	}
 	if strings.Contains(string(r.body), ln.Addr().String()) {
@@ -714,6 +719,50 @@ func TestReadinessIgnoresDependencies(t *testing.T) {
 	if !strings.Contains(h.logs.String(), "a dependency is unavailable") {
 		t.Error("no log of the store going down")
 	}
+}
+
+// TestServesWhileTheAuditDatabaseIsUnreachable starts the server with a
+// Postgres audit database that refuses connections: it starts, is ready,
+// decides, answers 503 where the audit log is needed, and says so in its
+// dependencies, metrics and logs.
+func TestServesWhileTheAuditDatabaseIsUnreachable(t *testing.T) {
+	t.Parallel()
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	ln.Close() // nothing listens there now
+	h := newHarness(t, options{auditDSN: "postgres://catraca:pw@" + ln.Addr().String() + "/catraca?sslmode=disable"})
+
+	if r := h.do("GET", "/readyz", "", nil); r.status != http.StatusOK {
+		t.Errorf("readyz: %d %s", r.status, r.body)
+	}
+	d, _ := h.decide(send("acct", "win@spam.example"))
+	if d.Action != decision.Block {
+		t.Errorf("decision without the audit log: %+v", d)
+	}
+	if r := h.do("GET", "/v1/decisions/"+d.ID, token, nil); r.status != http.StatusServiceUnavailable || r.errorCode(t) != "audit_unavailable" {
+		t.Errorf("GET decision: %d %s", r.status, r.body)
+	}
+	if r := h.do("GET", "/v1/stats/rules", token, nil); r.status != http.StatusServiceUnavailable || r.errorCode(t) != "audit_unavailable" {
+		t.Errorf("GET stats: %d %s", r.status, r.body)
+	}
+	var ready api.ReadyResponse
+	eventually(t, 10*time.Second, func() bool {
+		r := h.do("GET", "/readyz?verbose", "", nil)
+		ready = api.ReadyResponse{}
+		r.json(t, &ready)
+		return ready.Dependencies["audit"].Status == "not_open"
+	})
+	if ready.Status != "ready" {
+		t.Errorf("readyz?verbose: %+v", ready)
+	}
+	if m := string(h.do("GET", "/metrics", "", nil).body); !strings.Contains(m, `catraca_dependency_up{dependency="audit"} 0`) {
+		t.Error("metrics do not show the audit database down")
+	}
+	eventually(t, 10*time.Second, func() bool {
+		return strings.Contains(h.logs.String(), "the audit database is unreachable; deciding without the audit log")
+	})
 }
 
 // signedFeedback posts a generic feedback event signed with secret.

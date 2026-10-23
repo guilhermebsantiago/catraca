@@ -201,8 +201,41 @@ The decision log, labels and the webhook outbox. See [audit](audit.md).
 | `event_detail` | `minimal` | `minimal` keeps no message content; `full` also keeps the whole event as sent |
 
 Use SQLite for one instance and Postgres for several. Opening the database
-applies migrations. A database that cannot be opened stops the server from
-starting.
+applies migrations.
+
+**When the database cannot be opened.** SQLite is a local file, so a
+failure to open it (a missing directory, a permission) is a configuration
+problem, and the server does not start.
+
+A Postgres database that cannot be reached when the server starts (the
+connection is refused or times out, Postgres is starting up or out of
+connections) does not stop it. Exiting would only hand the problem to the
+orchestrator: Kubernetes restarts a crashing container with a backoff of
+up to five minutes and keeps it down that long after the database is back.
+Instead the server opens the database in the background, retrying with
+backoff from 1 to 30 seconds, and serves decisions meanwhile, ready like
+any other instance: decisions do not depend on the audit log, and this is
+what happens anyway when Postgres fails after the server started. Until the
+database opens:
+
+- the decisions made meanwhile wait in the engine's queue (4096 of them)
+  and are written once it opens; those beyond it are dropped and counted
+  in `catraca_records_dropped_total`;
+- the effects of enforced rules are written to the outbox if it opens
+  within 5 seconds, and are otherwise logged and counted in
+  `catraca_hooks_enqueue_errors_total`;
+- `GET /v1/decisions/{id}`, labels, the review queue and the rule stats
+  answer `503 audit_unavailable`.
+
+Each failed attempt is logged at error level with the reason,
+`/readyz?verbose` shows `audit` as `not_open`, and
+`catraca_dependency_up{dependency="audit"}` is 0, which is the alert to
+set. An error that waiting cannot fix (a malformed DSN, a wrong password, a
+database that does not exist, a schema newer than this build) still stops
+the server, right after it starts. A host name that does not resolve counts
+as unreachable, since DNS is often what comes up last. Against a host that
+drops packets, each attempt waits for the operating system to give up on
+the connection; add `connect_timeout=5` to the DSN to bound it.
 
 ### engine
 

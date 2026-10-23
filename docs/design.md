@@ -208,6 +208,11 @@ hash of the subject): no message content. Labels attach to a decision:
 reviewer's verdict on a shadow match), with who, why and when. Labels are
 per decision and rule.
 
+Recording is off the decision path, so the audit database being down
+degrades traceability, not decisions: a Postgres database that cannot be
+reached when the server starts is opened in the background, retried with
+backoff, while decisions are made and queued for it.
+
 ## Precision gate
 
 For each rule and window: matches, labeled matches, true positives, false
