@@ -172,6 +172,7 @@ func New(ctx context.Context, cfg *config.Config, opts Options) (_ *App, err err
 	if a.engine, err = engine.New(eopts); err != nil {
 		return nil, err
 	}
+	a.audit.handedOver = a.engine.Sync
 
 	a.deps = newDependencyMonitor(a.dependencies(), a.registry, log)
 	a.deps.start()

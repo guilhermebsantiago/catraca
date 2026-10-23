@@ -551,13 +551,7 @@ func TestReviewQueue(t *testing.T) {
 		r.json(t, &out)
 		return out
 	}
-	// The engine hands decisions to the audit log from a goroutine of its
-	// own, which a loaded machine may run after this request.
-	var q api.ReviewResponse
-	eventually(t, 10*time.Second, func() bool {
-		q = review("?mode=shadow&limit=10")
-		return len(q.Items) > 0
-	})
+	q := review("?mode=shadow&limit=10")
 	if q.RuleID != "wide-send" || q.Mode != decision.Shadow || len(q.Items) != 1 {
 		t.Fatalf("queue = %+v", q)
 	}

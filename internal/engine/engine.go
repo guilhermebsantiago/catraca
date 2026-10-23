@@ -54,8 +54,9 @@ var (
 // context that is never canceled. While it blocks, decisions wait in a
 // bounded queue; when the queue is full they are dropped and counted in
 // catraca_records_dropped_total, so a slow audit database never slows sends.
-// The decision shares its slices with the one Decide returns, so neither
-// side may modify them.
+// Engine.Sync waits for the decisions made so far to reach Record. The
+// decision shares its slices with the one Decide returns, so neither side
+// may modify them.
 type Recorder interface {
 	Record(ctx context.Context, ev event.Event, d decision.Decision)
 }
@@ -260,7 +261,7 @@ func (e *Engine) Decide(ctx context.Context, ev event.Event) (decision.Decision,
 	d.LatencyMicros = elapsed.Microseconds()
 	e.metrics.observe(d, elapsed)
 
-	if e.records != nil && !e.records.push(recordJob{context.WithoutCancel(ctx), ev, d}) {
+	if e.records != nil && !e.records.push(recordJob{ctx: context.WithoutCancel(ctx), ev: ev, d: d}) {
 		e.metrics.dropped.Inc()
 		if e.dropLog.allow(start) {
 			e.log.Warn("recorder queue is full; dropping decisions from the audit log", "decision_id", d.ID)
@@ -270,6 +271,22 @@ func (e *Engine) Decide(ctx context.Context, ev event.Event) (decision.Decision,
 		e.dispatcher.Dispatch(context.WithoutCancel(ctx), ev, d)
 	}
 	return d, nil
+}
+
+// Sync returns once every decision Decide returned before the call has been
+// handed to the Recorder, or dropped because the queue was full, or with
+// ctx's error when ctx ends first. Decide queues decisions for the Recorder
+// without waiting, so a caller that answered a decision and is then asked
+// for it, such as a read of the audit log sent right after the response,
+// calls Sync first to see it. Sync does not wait for the Recorder to finish
+// whatever it does with a decision, such as writing it to a database. It
+// returns at once without a Recorder, and after Close once the queue is
+// drained.
+func (e *Engine) Sync(ctx context.Context) error {
+	if e.records == nil {
+		return nil
+	}
+	return e.records.sync(ctx)
 }
 
 // Close stops the Recorder goroutine after it records the decisions already
