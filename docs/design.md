@@ -22,7 +22,7 @@ Principles, in order:
 ## Packages
 
 ```
-cmd/catraca          CLI: serve, config check, rules check|test|gate, replay, report, label
+cmd/catraca          CLI: serve, config check, rules check|test|gate, replay, report, label, outbox list|retry|stats
 internal/event       Event types (shared)
 internal/decision    Decision, Match, Action, Mode, OnError (shared)
 internal/signal      Signal Set + Catalog interface (shared); catalog impl

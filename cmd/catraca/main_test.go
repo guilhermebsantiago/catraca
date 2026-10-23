@@ -77,6 +77,8 @@ func TestUsageAndVersion(t *testing.T) {
 	expect(t, runCLI(t, nil, "help"), exitOK, "rules gate")
 	expect(t, runCLI(t, nil, "deploy"), exitUsage, `unknown command "deploy"`)
 	expect(t, runCLI(t, nil, "rules"), exitUsage, "Usage: catraca rules <check|test|gate>")
+	expect(t, runCLI(t, nil, "outbox"), exitUsage, "Usage: catraca outbox <list|retry|stats>")
+	expect(t, runCLI(t, nil, "outbox", "drain"), exitUsage, `unknown command "drain"`)
 	expect(t, runCLI(t, nil, "rules", "lint"), exitUsage, `unknown command "lint"`)
 	expect(t, runCLI(t, nil, "config", "-h"), exitOK, "catraca config <check>")
 	expect(t, runCLI(t, nil, "rules", "check", "-h"), exitOK, "--strict", "Flags:")
@@ -278,6 +280,117 @@ func TestReplay(t *testing.T) {
 	expect(t, runCLI(t, nil, "replay", rules, bad), exitFailed, "line 1")
 	expect(t, runCLI(t, nil, "replay", rules, filepath.Join(dir, "none.jsonl")), exitError)
 	expect(t, runCLI(t, nil, "replay", rules), exitUsage)
+}
+
+// outboxDB creates a SQLite audit database whose outbox holds, for
+// revoke_key, a pending delivery, one dead three days ago and one dead half
+// an hour ago, and for notify a dead and a delivered one. It returns the
+// path and the delivery ids by decision.
+func outboxDB(t *testing.T) (string, map[string]int64) {
+	t.Helper()
+	path := filepath.Join(t.TempDir(), "audit.db")
+	ctx := context.Background()
+	db, err := audit.Open(ctx, "sqlite:"+path, audit.Options{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close(ctx)
+	now := time.Now()
+	created := now.Add(-4 * 24 * time.Hour)
+	effects := map[string]string{"pending": "revoke_key", "dead-old": "revoke_key", "dead-new": "revoke_key",
+		"dead-notify": "notify", "delivered": "notify"}
+	ids := map[string]int64{}
+	for decision, effect := range effects {
+		if _, err := db.Enqueue(ctx, []audit.Delivery{{DecisionID: decision, Effect: effect, Payload: []byte(`{}`), CreatedAt: created}}); err != nil {
+			t.Fatal(err)
+		}
+		ds, err := db.Deliveries(ctx, decision)
+		if err != nil || len(ds) != 1 {
+			t.Fatalf("Deliveries(%s) = %v, %v", decision, ds, err)
+		}
+		ids[decision] = ds[0].ID
+	}
+	for _, err := range []error{
+		db.MarkDead(ctx, ids["dead-old"], audit.Attempt{At: now.Add(-3 * 24 * time.Hour), Error: "dial tcp: connection refused"}),
+		db.MarkDead(ctx, ids["dead-new"], audit.Attempt{At: now.Add(-30 * time.Minute), StatusCode: 500, Error: "HTTP 500"}),
+		db.MarkDead(ctx, ids["dead-notify"], audit.Attempt{At: now.Add(-30 * time.Minute), StatusCode: 503, Error: "HTTP 503: down\nfor maintenance"}),
+		db.MarkDelivered(ctx, ids["delivered"], audit.Attempt{At: now.Add(-30 * time.Minute), StatusCode: 204}),
+	} {
+		if err != nil {
+			t.Fatal(err)
+		}
+	}
+	return path, ids
+}
+
+func TestOutbox(t *testing.T) {
+	path, ids := outboxDB(t)
+	outbox := func(args ...string) result {
+		t.Helper()
+		return runCLI(t, nil, append([]string{"outbox"}, append(args, "--audit", path)...)...)
+	}
+	lacks := func(r result, s ...string) {
+		t.Helper()
+		for _, x := range s {
+			if strings.Contains(r.stdout, x) {
+				t.Errorf("output has %q\n%s", x, r)
+			}
+		}
+	}
+	id := func(decision string) string { return fmt.Sprint(ids[decision]) }
+
+	r := outbox("list", "--status", "dead")
+	expect(t, r, exitOK, "ID  DECISION", "dead-new", "dead-old", "dead-notify", "HTTP 503: down for maintenance", "dial tcp: connection refused")
+	lacks(r, "pending", "delivered")
+	r = outbox("list", "--status", "dead", "--hook", "revoke_key", "--since", "24h")
+	expect(t, r, exitOK, "dead-new")
+	lacks(r, "dead-old", "dead-notify")
+	expect(t, outbox("list", "--limit", "1"), exitOK, "showing the first 1; raise --limit")
+	r = outbox("list", "--json")
+	var listed []audit.Delivery
+	if err := json.Unmarshal([]byte(r.stdout), &listed); err != nil || len(listed) != 5 {
+		t.Errorf("list --json = %v, %v\n%s", listed, err, r)
+	}
+	expect(t, outbox("list", "--status", "lost"), exitUsage, "--status must be pending, dead or delivered")
+	expect(t, outbox("list", "--limit", "0"), exitUsage, "--limit must be at least 1")
+	expect(t, runCLI(t, nil, "outbox", "list"), exitUsage, "--audit is required")
+	expect(t, runCLI(t, nil, "outbox", "list", "--audit", filepath.Join(t.TempDir(), "none.db")), exitError, "does not exist")
+
+	r = outbox("stats", "--json")
+	var stats []audit.EffectStats
+	if err := json.Unmarshal([]byte(r.stdout), &stats); err != nil || len(stats) != 2 {
+		t.Fatalf("stats --json = %v, %v\n%s", stats, err, r)
+	}
+	if n, rk := stats[0], stats[1]; n.Effect != "notify" || n.Dead != 1 || n.Delivered != 1 || n.Pending != 0 ||
+		rk.Effect != "revoke_key" || rk.Pending != 1 || rk.Due != 1 || rk.Dead != 2 {
+		t.Errorf("stats = %+v", stats)
+	}
+	expect(t, outbox("stats"), exitOK, "HOOK        PENDING  DUE  OLDEST PENDING  DEAD  DELIVERED", "revoke_key  1        1    96h0m")
+
+	// Of three ids, one is dead and requeued, one delivered and one unknown.
+	r = outbox("retry", id("dead-old"), id("delivered"), "999999")
+	expect(t, r, exitFailed, "requeued 1 of 3 deliveries: "+id("dead-old"), "delivery "+id("delivered")+" is delivered, not dead: left alone",
+		"delivery 999999 does not exist")
+	r = outbox("list", "--status", "pending")
+	expect(t, r, exitOK, "dead-old")
+	var requeued []audit.Delivery
+	if err := json.Unmarshal([]byte(outbox("list", "--status", "pending", "--json").stdout), &requeued); err != nil {
+		t.Fatal(err)
+	}
+	for _, d := range requeued {
+		if d.DecisionID == "dead-old" && (d.Attempts != 0 || d.RequeuedAt.IsZero() || time.Since(d.RequeuedAt) > time.Hour) {
+			t.Errorf("requeued delivery = %+v", d)
+		}
+	}
+
+	expect(t, outbox("retry", "--dead", "--hook", "notify"), exitOK, "requeued 1 dead deliveries for notify")
+	expect(t, outbox("retry", "--dead", "--since", "1h"), exitOK, "requeued 1 dead deliveries that died since")
+	expect(t, outbox("retry", "--dead"), exitOK, "requeued 0 dead deliveries")
+
+	expect(t, outbox("retry"), exitUsage, "name the deliveries to requeue by id, or pass --dead")
+	expect(t, outbox("retry", "--dead", "1"), exitUsage, "pass delivery ids or --dead, not both")
+	expect(t, outbox("retry", "--hook", "notify", "1"), exitUsage, "pass --dead with them")
+	expect(t, outbox("retry", "abc"), exitUsage, `"abc" is not a delivery id`)
 }
 
 // labelRequest is what the fake server saw of the last label request.

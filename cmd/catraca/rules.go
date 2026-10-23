@@ -160,9 +160,9 @@ func (c *cli) gate(g gateFlags) (precision.Gate, int) {
 	return gate, -1
 }
 
-// openAudit opens the audit database for reading stats. A SQLite file must
-// exist already: opening creates missing files, and an empty new database
-// would make every rule look unlabeled.
+// openAudit opens the audit database, applying its migrations. A SQLite
+// file must exist already: opening creates missing files, and an empty new
+// database would make every rule look unlabeled and the outbox empty.
 func (c *cli) openAudit(ctx context.Context, dsn string) (*audit.DB, int) {
 	if dsn == "" {
 		c.errorf("--audit is required (or set CATRACA_AUDIT_DSN)")
