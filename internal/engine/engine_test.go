@@ -108,12 +108,25 @@ func (r *chanRecorder) Record(ctx context.Context, ev event.Event, d decision.De
 type fakeDispatcher struct {
 	mu    sync.Mutex
 	calls []recorded
+	// errs and deadlines are what each call's context said when it came
+	// in: its error and its deadline, zero without one.
+	errs      []error
+	deadlines []time.Time
+	// hang makes Dispatch wait for its context to end, like a dispatcher
+	// stuck on a slow outbox.
+	hang bool
 }
 
 func (f *fakeDispatcher) Dispatch(ctx context.Context, ev event.Event, d decision.Decision) {
+	deadline, _ := ctx.Deadline()
 	f.mu.Lock()
-	defer f.mu.Unlock()
 	f.calls = append(f.calls, recorded{ctx, ev, d})
+	f.errs = append(f.errs, ctx.Err())
+	f.deadlines = append(f.deadlines, deadline)
+	f.mu.Unlock()
+	if f.hang {
+		<-ctx.Done()
+	}
 }
 
 const testRuleset = `version: 1
@@ -779,7 +792,9 @@ func TestDecideDispatchesEnforcedEffects(t *testing.T) {
 
 	h.cat.set.Key = map[string]any{"leaked": true}
 	ctx, cancel := context.WithCancel(context.Background())
+	start := time.Now()
 	d, err := h.eng.Decide(ctx, sendEvent())
+	end := time.Now()
 	cancel()
 	if err != nil {
 		t.Fatal(err)
@@ -791,8 +806,56 @@ func TestDecideDispatchesEnforcedEffects(t *testing.T) {
 	if call.d.ID != d.ID || !slices.Equal(call.d.Effects(), []string{"revoke_key"}) || call.ev.ID != d.EventID {
 		t.Errorf("dispatched %+v", call.d)
 	}
-	if call.ctx.Err() != nil {
+	if h.disp.errs[0] != nil {
 		t.Error("dispatcher context is canceled with the caller's")
+	}
+	checkBudget(t, h.disp.deadlines[0], start, end, DefaultDeadline)
+}
+
+// checkBudget checks that a dispatch made between start and end had budget
+// to spend: its deadline is budget after some moment in between.
+func checkBudget(t *testing.T, deadline, start, end time.Time, budget time.Duration) {
+	t.Helper()
+	if deadline.IsZero() || deadline.Before(start.Add(budget)) || deadline.After(end.Add(budget)) {
+		t.Errorf("dispatch deadline %v after the call started, want %v", deadline.Sub(start), budget)
+	}
+}
+
+// TestDecideBoundsTheDispatch checks that a dispatcher stuck on a slow
+// outbox holds a decision up for no longer than the dispatch budget.
+func TestDecideBoundsTheDispatch(t *testing.T) {
+	h := newHarness(t, Options{DispatchTimeout: time.Millisecond})
+	h.disp.hang = true
+	h.cat.set.Key = map[string]any{"leaked": true}
+	done := make(chan decision.Decision, 1)
+	go func() {
+		d, err := h.eng.Decide(context.Background(), sendEvent())
+		if err != nil {
+			t.Error(err)
+		}
+		done <- d
+	}()
+	select {
+	case d := <-done:
+		if d.Action != decision.Block {
+			t.Errorf("decision = %+v, want the block", d)
+		}
+	case <-time.After(20 * time.Second):
+		t.Fatal("Decide waited for a dispatcher past its budget")
+	}
+
+	for _, tt := range []struct {
+		opts Options
+		want time.Duration
+	}{
+		{Options{DispatchTimeout: time.Hour}, time.Hour},
+		{Options{Deadline: 25 * time.Millisecond}, 25 * time.Millisecond},
+	} {
+		h := newHarness(t, tt.opts)
+		h.cat.set.Key = map[string]any{"leaked": true}
+		start := time.Now()
+		h.decide(t, sendEvent())
+		checkBudget(t, h.disp.deadlines[0], start, time.Now(), tt.want)
 	}
 }
 
