@@ -36,6 +36,10 @@ const DefaultMaxBodyBytes = 1 << 20
 // Decider decides events. *engine.Engine is one.
 type Decider interface {
 	Decide(ctx context.Context, ev event.Event) (decision.Decision, error)
+	// DecideWithoutStore decides as Decide does when the store misses the
+	// deadline, without waiting for it. It answers the decisions admission
+	// control sheds; see Admission.
+	DecideWithoutStore(ctx context.Context, ev event.Event) (decision.Decision, error)
 }
 
 // RuleSource provides the ruleset decisions are made with. *rules.Holder is
@@ -133,6 +137,8 @@ type Options struct {
 	Logger *slog.Logger
 	// MaxBodyBytes limits /v1 JSON bodies. Default DefaultMaxBodyBytes.
 	MaxBodyBytes int64
+	// Admission bounds the decisions and feedback requests in flight.
+	Admission Admission
 	// Now returns the current time; nil means time.Now.
 	Now func() time.Time
 }
@@ -156,6 +162,11 @@ type Server struct {
 	maxBody      int64
 	now          func() time.Time
 	duration     *prometheus.HistogramVec
+
+	// decisions and feedback hold the admission slots; see Admission.
+	decisions, feedback *limiter
+	admission           admissionMetrics
+	deadline            time.Duration
 }
 
 type tokenHash struct {
@@ -214,6 +225,9 @@ func New(opts Options) (*Server, error) {
 			return nil, fmt.Errorf("api: register metrics: %w", err)
 		}
 	}
+	if err := s.newAdmission(opts.Admission, opts.Registerer); err != nil {
+		return nil, fmt.Errorf("api: admission: %w", err)
+	}
 
 	s.handle(s.mux, "POST /v1/decide", s.authed(s.decide(http.StatusOK)))
 	s.handle(s.mux, "POST /v1/events", s.authed(s.decide(http.StatusAccepted)))
@@ -224,9 +238,9 @@ func New(opts Options) (*Server, error) {
 	s.handle(s.mux, "GET /v1/rules/{id}/review", s.authed(s.review))
 	s.handle(s.mux, "GET /v1/stats/rules", s.authed(s.ruleStats))
 
-	s.handle(s.mux, "POST /v1/feedback", provider("generic feedback", "feedback.generic", opts.GenericFeedback))
-	s.handle(s.mux, "POST /v1/feedback/ses", provider("SES feedback", "feedback.ses", opts.SESFeedback))
-	s.handle(s.mux, "POST /v1/feedback/usesend", provider("useSend feedback", "feedback.usesend", opts.UseSendFeedback))
+	s.handle(s.mux, routeFeedback, provider("generic feedback", "feedback.generic", s.admitFeedback(routeFeedback, opts.GenericFeedback)))
+	s.handle(s.mux, routeFeedbackSES, provider("SES feedback", "feedback.ses", s.admitFeedback(routeFeedbackSES, opts.SESFeedback)))
+	s.handle(s.mux, routeFeedbackUseSend, provider("useSend feedback", "feedback.usesend", s.admitFeedback(routeFeedbackUseSend, opts.UseSendFeedback)))
 	s.handle(s.mux, "POST /v1/secret-scanning/github", provider("GitHub secret scanning", "secret_scanning.github", opts.GitHubSecretScanning))
 
 	var metrics http.Handler = provider("metrics", "a Prometheus registry", nil)

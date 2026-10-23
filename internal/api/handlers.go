@@ -23,14 +23,18 @@ type DecisionResponse struct {
 }
 
 // decide answers POST /v1/decide (status 200) and POST /v1/events (202).
-// Any valid event gets its decision; the caller acts on its action.
+// Any valid event gets its decision; the caller acts on its action. The
+// decision is made within the admission limit; see Admission.
 func (s *Server) decide(status int) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		var ev event.Event
 		if !s.readJSON(w, r, &ev) {
 			return
 		}
-		d, err := s.decider.Decide(r.Context(), ev)
+		d, ok, err := s.decideAdmitted(w, r, ev)
+		if !ok {
+			return
+		}
 		switch {
 		case errors.Is(err, engine.ErrInvalidEvent):
 			writeError(w, http.StatusBadRequest, "invalid_event", strings.TrimPrefix(err.Error(), engine.ErrInvalidEvent.Error()+": "))
@@ -38,8 +42,19 @@ func (s *Server) decide(status int) http.HandlerFunc {
 		case errors.Is(err, engine.ErrNoRuleset):
 			writeError(w, http.StatusServiceUnavailable, "no_ruleset", "no ruleset is loaded; fix the ruleset file and reload it")
 			return
+		case errors.Is(err, engine.ErrWithoutStore):
+			// A key_leak shed by admission control; counted, not logged.
+			w.Header().Set("Retry-After", "1")
+			writeError(w, http.StatusServiceUnavailable, "overloaded",
+				"too many events are being decided; send this one again after Retry-After")
+			return
 		case err != nil:
-			s.log.ErrorContext(r.Context(), "decide failed", "event_type", ev.Type, "error", err)
+			// The store breaker being open is counted and logged by the
+			// engine when it opens.
+			if !errors.Is(err, engine.ErrBreakerOpen) {
+				s.log.ErrorContext(r.Context(), "decide failed", "event_type", ev.Type, "error", err)
+			}
+			w.Header().Set("Retry-After", "1")
 			writeError(w, http.StatusServiceUnavailable, "unavailable", "the event could not be decided; retry it")
 			return
 		}
