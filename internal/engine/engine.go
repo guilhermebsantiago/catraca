@@ -89,6 +89,9 @@ type Options struct {
 	// during Observe the decision is degraded and rules run on the signals
 	// Observe returned; during MarkLeaked, Decide returns an error.
 	Deadline time.Duration
+	// Breaker configures the circuit breaker around those two calls; see
+	// BreakerOptions.
+	Breaker BreakerOptions
 	// RecordQueue is how many decisions may wait for the Recorder; zero
 	// means DefaultRecordQueue.
 	RecordQueue int
@@ -134,6 +137,7 @@ type Engine struct {
 	fakeClock bool
 	log       *slog.Logger
 	metrics   *metrics
+	breaker   *breaker
 	records   *recordQueue
 	ids       idSource
 
@@ -175,6 +179,9 @@ func New(opts Options) (*Engine, error) {
 	if e.log == nil {
 		e.log = slog.New(slog.DiscardHandler)
 	}
+	if e.breaker, err = newBreaker(opts.Breaker, e.now, e.log, opts.Registerer); err != nil {
+		return nil, err
+	}
 	if opts.Recorder != nil {
 		e.records = newRecordQueue(opts.Recorder, cmp.Or(opts.RecordQueue, DefaultRecordQueue))
 	}
@@ -198,7 +205,25 @@ func New(opts Options) (*Engine, error) {
 // Decide returns an error only when nothing was observed, so the caller may
 // retry: the event is invalid (ErrInvalidEvent), no ruleset is loaded
 // (ErrNoRuleset), or a leaked key could not be recorded.
+//
+// The store calls of steps 2 and 3 go through a circuit breaker (see
+// BreakerOptions): while it is open they are skipped, as DecideWithoutStore
+// skips them.
 func (e *Engine) Decide(ctx context.Context, ev event.Event) (decision.Decision, error) {
+	return e.decide(ctx, ev, false)
+}
+
+// DecideWithoutStore decides ev as Decide does when the store misses the
+// deadline, without calling the store: the decision is degraded, each
+// rule's on_error applies and keys the catalog knows leaked stay leaked,
+// and a key_leak event fails with ErrWithoutStore, the catalog keeping the
+// key in memory. It costs no round trip, so the HTTP API answers with it
+// the decisions it sheds when too many are in flight.
+func (e *Engine) DecideWithoutStore(ctx context.Context, ev event.Event) (decision.Decision, error) {
+	return e.decide(ctx, ev, true)
+}
+
+func (e *Engine) decide(ctx context.Context, ev event.Event, withoutStore bool) (decision.Decision, error) {
 	start := e.now()
 	mono := monotime.Now()
 	if err := ev.Validate(); err != nil {
@@ -224,19 +249,26 @@ func (e *Engine) Decide(ctx context.Context, ev event.Event) (decision.Decision,
 	// remembers the key either way, and the error tells the caller to send
 	// the event again.
 	if ev.Type == event.KeyLeak {
-		mctx, cancel := context.WithTimeout(ctx, e.deadline)
+		mctx, call, cancel := e.storeContext(ctx, withoutStore)
 		err := e.catalog.MarkLeaked(mctx, ev.APIKeyID)
 		cancel()
+		e.storeDone(ctx, call, err)
 		if err != nil {
+			if call.skip {
+				err = call.cause
+			}
 			return decision.Decision{}, fmt.Errorf("engine: mark key %s leaked: %w", ev.APIKeyID, err)
 		}
 	}
 
-	octx, cancel := context.WithTimeout(ctx, e.deadline)
+	octx, call, cancel := e.storeContext(ctx, withoutStore)
 	set, err := e.catalog.Observe(octx, ev)
 	cancel()
+	e.storeDone(ctx, call, err)
 	degraded := err != nil
-	if degraded && e.observeLog.allow(start) {
+	// A skipped call is counted, and logged when the breaker opens, rather
+	// than logged for every decision.
+	if degraded && !call.skip && e.observeLog.allow(start) {
 		e.log.Warn("signals unavailable; deciding degraded", "error", err, "event_type", ev.Type)
 	}
 
