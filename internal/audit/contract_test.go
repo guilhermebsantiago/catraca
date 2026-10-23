@@ -98,6 +98,14 @@ func runContract(t *testing.T, newDSN func(t *testing.T) string) {
 	t.Run("Outbox", func(t *testing.T) { testOutbox(t, fresh(t)) })
 	t.Run("OutboxClaimLimit", func(t *testing.T) { testOutboxClaimLimit(t, fresh(t)) })
 	t.Run("OutboxConcurrentClaims", func(t *testing.T) { testOutboxConcurrentClaims(t, fresh(t)) })
+	t.Run("OutboxClaimPerEffect", func(t *testing.T) { testOutboxClaimPerEffect(t, fresh(t)) })
+	t.Run("OutboxExpire", func(t *testing.T) { testOutboxExpire(t, fresh(t)) })
+	t.Run("OutboxBacklog", func(t *testing.T) { testOutboxBacklog(t, fresh(t)) })
+	t.Run("OutboxRequeue", func(t *testing.T) { testOutboxRequeue(t, fresh(t)) })
+	t.Run("MigrateOutbox", func(t *testing.T) {
+		dsn := newDSN(t)
+		testMigrateOutbox(t, dsn, func(opts Options) *DB { return open(t, dsn, opts) })
+	})
 	t.Run("CloseDrainsAndReopen", func(t *testing.T) {
 		dsn := newDSN(t)
 		testCloseDrainsAndReopen(t, dsn, func(opts Options) *DB { return open(t, dsn, opts) })
@@ -571,13 +579,18 @@ func testOutbox(t *testing.T, db *DB) {
 		t.Error("Enqueue without effect: want an error")
 	}
 
+	// claim claims for each hook in turn, revoke_key first.
 	claim := func(at time.Time) []Delivery {
 		t.Helper()
-		ds, err := db.Claim(ctx, at, 10, time.Minute)
-		if err != nil {
-			t.Fatalf("Claim: %v", err)
+		var all []Delivery
+		for _, effect := range []string{"revoke_key", "notify"} {
+			ds, err := db.Claim(ctx, ClaimRequest{Effect: effect, Now: at, Limit: 10, Lease: time.Minute})
+			if err != nil {
+				t.Fatalf("Claim(%s): %v", effect, err)
+			}
+			all = append(all, ds...)
 		}
-		return ds
+		return all
 	}
 	ds := claim(t0)
 	if len(ds) != 2 || ds[0].Effect != "revoke_key" || ds[1].Effect != "notify" {
@@ -661,18 +674,374 @@ func testOutboxClaimLimit(t *testing.T, db *DB) {
 	if _, err := db.Enqueue(ctx, ds); err != nil {
 		t.Fatal(err)
 	}
-	got, err := db.Claim(ctx, t0.Add(time.Hour), 3, time.Minute)
+	claim := func(at time.Time, limit int) []Delivery {
+		t.Helper()
+		got, err := db.Claim(ctx, ClaimRequest{Effect: "notify", Now: at, Limit: limit, Lease: time.Minute})
+		if err != nil {
+			t.Fatal(err)
+		}
+		return got
+	}
+	if got := claim(t0.Add(time.Hour), 3); len(got) != 3 || got[0].DecisionID != "d0" || got[2].DecisionID != "d2" {
+		t.Errorf("Claim(3) = %+v, want the 3 oldest", got)
+	}
+	if got := claim(t0.Add(2*time.Second), 10); len(got) != 0 {
+		t.Errorf("Claim before d3 is due = %+v", got)
+	}
+	if got := claim(t0, 0); len(got) != 0 {
+		t.Errorf("Claim(0) = %+v", got)
+	}
+}
+
+// testOutboxClaimPerEffect checks that each hook claims only its own
+// deliveries, however many older ones another hook has waiting, and that
+// deliveries past their max age are left for Expire.
+func testOutboxClaimPerEffect(t *testing.T, db *DB) {
+	ctx := context.Background()
+	var ds []Delivery
+	for i := range 5 {
+		ds = append(ds, Delivery{DecisionID: fmt.Sprintf("slow%d", i), Effect: "notify", Payload: []byte(`{}`),
+			CreatedAt: t0.Add(time.Duration(i) * time.Second)})
+	}
+	ds = append(ds, Delivery{DecisionID: "fast", Effect: "revoke_key", Payload: []byte(`{}`), CreatedAt: t0.Add(time.Minute)})
+	if _, err := db.Enqueue(ctx, ds); err != nil {
+		t.Fatal(err)
+	}
+	claim := func(r ClaimRequest) []string {
+		t.Helper()
+		r.Lease = time.Minute
+		got, err := db.Claim(ctx, r)
+		if err != nil {
+			t.Fatalf("Claim(%+v): %v", r, err)
+		}
+		var ids []string
+		for _, d := range got {
+			if d.Effect != r.Effect {
+				t.Errorf("Claim(%s) returned a delivery for %s", r.Effect, d.Effect)
+			}
+			ids = append(ids, d.DecisionID)
+		}
+		return ids
+	}
+	now := t0.Add(time.Hour)
+	if got := claim(ClaimRequest{Effect: "revoke_key", Now: now, Limit: 1}); !reflect.DeepEqual(got, []string{"fast"}) {
+		t.Errorf("Claim(revoke_key) = %v, want fast, ahead of the older notify deliveries", got)
+	}
+	if got := claim(ClaimRequest{Effect: "notify", Now: now, Limit: 10, QueuedAfter: t0.Add(3 * time.Second)}); !reflect.DeepEqual(got, []string{"slow3", "slow4"}) {
+		t.Errorf("Claim(notify, queued after 3s) = %v, want slow3 and slow4", got)
+	}
+	if got := claim(ClaimRequest{Effect: "suspend_account", Now: now, Limit: 10}); len(got) != 0 {
+		t.Errorf("Claim(an effect without deliveries) = %v", got)
+	}
+}
+
+// testOutboxExpire checks that Expire gives up the due deliveries of one
+// effect queued before the cutoff, keeps the error of their last attempt,
+// leaves attempts in flight alone and works through more rows than one
+// statement changes.
+func testOutboxExpire(t *testing.T, db *DB) {
+	ctx := context.Background()
+	enqueue := func(id, effect string, at time.Time) {
+		t.Helper()
+		if _, err := db.Enqueue(ctx, []Delivery{{DecisionID: id, Effect: effect, Payload: []byte(`{}`), CreatedAt: at}}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	get := func(id string) Delivery {
+		t.Helper()
+		ds, err := db.Deliveries(ctx, id)
+		if err != nil || len(ds) != 1 {
+			t.Fatalf("Deliveries(%s) = %v, %v", id, ds, err)
+		}
+		return ds[0]
+	}
+	claim := func(at time.Time, limit int, lease time.Duration) []Delivery {
+		t.Helper()
+		ds, err := db.Claim(ctx, ClaimRequest{Effect: "notify", Now: at, Limit: limit, Lease: lease})
+		if err != nil {
+			t.Fatal(err)
+		}
+		return ds
+	}
+
+	// failed was attempted once and waits for its retry; inflight is being
+	// attempted when Expire runs.
+	enqueue("inflight", "notify", t0.Add(-2*time.Second))
+	enqueue("failed", "notify", t0.Add(-time.Second))
+	if ds := claim(t0, 2, time.Minute); len(ds) != 2 {
+		t.Fatalf("claimed %+v", ds)
+	}
+	if err := db.Retry(ctx, get("failed").ID, Attempt{At: t0, StatusCode: 503, Error: "HTTP 503"}, t0.Add(time.Hour)); err != nil {
+		t.Fatal(err)
+	}
+	at := t0.Add(2 * time.Hour)
+	if ds := claim(at, 1, time.Hour); len(ds) != 1 || ds[0].DecisionID != "inflight" {
+		t.Fatalf("claimed %+v, want inflight", ds)
+	}
+	enqueue("never", "notify", t0)
+	enqueue("recent", "notify", t0.Add(90*time.Minute))
+	enqueue("other", "revoke_key", t0)
+	enqueue("done", "notify", t0)
+	if err := db.MarkDelivered(ctx, get("done").ID, Attempt{At: t0, StatusCode: 200}); err != nil {
+		t.Fatal(err)
+	}
+
+	n, err := db.Expire(ctx, "notify", t0.Add(time.Hour), Attempt{At: at, Error: "older than max_age 1h"})
+	if err != nil || n != 2 {
+		t.Fatalf("Expire = %d, %v; want failed and never", n, err)
+	}
+	if d := get("never"); d.Status != DeliveryDead || d.LastError != "older than max_age 1h" || d.LastStatusCode != 0 || !d.UpdatedAt.Equal(at) {
+		t.Errorf("never = %+v", d)
+	}
+	if d := get("failed"); d.Status != DeliveryDead || d.LastError != "older than max_age 1h; last attempt: HTTP 503" || d.LastStatusCode != 503 {
+		t.Errorf("failed = %+v, want the reason and the last attempt's error", d)
+	}
+	for id, want := range map[string]DeliveryStatus{"inflight": DeliveryPending, "recent": DeliveryPending,
+		"other": DeliveryPending, "done": DeliveryDelivered} {
+		if d := get(id); d.Status != want {
+			t.Errorf("%s = %s, want %s", id, d.Status, want)
+		}
+	}
+
+	// More than one statement's worth.
+	var bulk []Delivery
+	for i := range expireBatch*2 + 1 {
+		bulk = append(bulk, Delivery{DecisionID: fmt.Sprintf("bulk%04d", i), Effect: "bulk", Payload: []byte(`{}`), CreatedAt: t0})
+	}
+	if _, err := db.Enqueue(ctx, bulk); err != nil {
+		t.Fatal(err)
+	}
+	if n, err := db.Expire(ctx, "bulk", t0.Add(time.Second), Attempt{At: at, Error: "no hook"}); err != nil || n != len(bulk) {
+		t.Errorf("Expire(bulk) = %d, %v; want %d", n, err, len(bulk))
+	}
+}
+
+// testOutboxBacklog checks the pending counts per effect, which delivered
+// and dead deliveries are not part of.
+func testOutboxBacklog(t *testing.T, db *DB) {
+	ctx := context.Background()
+	if bl, err := db.Backlog(ctx, t0); err != nil || len(bl) != 0 {
+		t.Fatalf("Backlog of an empty outbox = %+v, %v", bl, err)
+	}
+	var ds []Delivery
+	for i, effect := range []string{"notify", "notify", "notify", "notify", "notify", "revoke_key"} {
+		ds = append(ds, Delivery{DecisionID: fmt.Sprintf("d%d", i), Effect: effect, Payload: []byte(`{}`),
+			CreatedAt: t0.Add(time.Duration(i) * time.Minute)})
+	}
+	if _, err := db.Enqueue(ctx, ds); err != nil {
+		t.Fatal(err)
+	}
+	// d0 is delivered, d1 dead and d2 waits out a backoff; d3 and d4 are due.
+	claimed, err := db.Claim(ctx, ClaimRequest{Effect: "notify", Now: t0.Add(time.Hour), Limit: 3, Lease: time.Minute})
+	if err != nil || len(claimed) != 3 {
+		t.Fatalf("Claim = %+v, %v", claimed, err)
+	}
+	at := t0.Add(time.Hour)
+	if err := errors.Join(
+		db.MarkDelivered(ctx, claimed[0].ID, Attempt{At: at, StatusCode: 200}),
+		db.MarkDead(ctx, claimed[1].ID, Attempt{At: at, StatusCode: 500}),
+		db.Retry(ctx, claimed[2].ID, Attempt{At: at, StatusCode: 500}, at.Add(time.Hour)),
+	); err != nil {
+		t.Fatal(err)
+	}
+
+	bl, err := db.Backlog(ctx, at)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(got) != 3 || got[0].DecisionID != "d0" || got[2].DecisionID != "d2" {
-		t.Errorf("Claim(3) = %+v, want the 3 oldest", got)
+	want := []Backlog{
+		{Effect: "notify", Pending: 3, Due: 2, Oldest: t0.Add(2 * time.Minute)},
+		{Effect: "revoke_key", Pending: 1, Due: 1, Oldest: t0.Add(5 * time.Minute)},
 	}
-	if got, _ := db.Claim(ctx, t0.Add(2*time.Second), 10, time.Minute); len(got) != 0 {
-		t.Errorf("Claim before d3 is due = %+v", got)
+	if !reflect.DeepEqual(bl, want) {
+		t.Errorf("Backlog:\n got %+v\nwant %+v", bl, want)
 	}
-	if got, _ := db.Claim(ctx, t0, 0, time.Minute); len(got) != 0 {
-		t.Errorf("Claim(0) = %+v", got)
+	stats, err := db.OutboxStats(ctx, at)
+	if err != nil {
+		t.Fatal(err)
+	}
+	wantStats := []EffectStats{{Backlog: want[0], Dead: 1, Delivered: 1}, {Backlog: want[1]}}
+	if !reflect.DeepEqual(stats, wantStats) {
+		t.Errorf("OutboxStats:\n got %+v\nwant %+v", stats, wantStats)
+	}
+}
+
+// testOutboxRequeue checks listing deliveries and requeueing dead ones,
+// which starts their attempts and their max age over.
+func testOutboxRequeue(t *testing.T, db *DB) {
+	ctx := context.Background()
+	ds := []Delivery{
+		{DecisionID: "dead1", Effect: "notify", Payload: []byte(`{}`), CreatedAt: t0},
+		{DecisionID: "dead2", Effect: "revoke_key", Payload: []byte(`{}`), CreatedAt: t0},
+		{DecisionID: "dead3", Effect: "notify", Payload: []byte(`{}`), CreatedAt: t0},
+		{DecisionID: "delivered", Effect: "notify", Payload: []byte(`{}`), CreatedAt: t0},
+		{DecisionID: "pending", Effect: "notify", Payload: []byte(`{}`), CreatedAt: t0.Add(time.Minute)},
+	}
+	if _, err := db.Enqueue(ctx, ds); err != nil {
+		t.Fatal(err)
+	}
+	ids := map[string]int64{}
+	for _, d := range ds {
+		got, err := db.Deliveries(ctx, d.DecisionID)
+		if err != nil || len(got) != 1 {
+			t.Fatalf("Deliveries(%s) = %v, %v", d.DecisionID, got, err)
+		}
+		ids[d.DecisionID] = got[0].ID
+	}
+	for i, id := range []string{"dead1", "dead2", "dead3"} {
+		if err := db.MarkDead(ctx, ids[id], Attempt{At: t0.Add(time.Duration(i+1) * time.Hour), StatusCode: 503, Error: "HTTP 503"}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := db.MarkDelivered(ctx, ids["delivered"], Attempt{At: t0, StatusCode: 200}); err != nil {
+		t.Fatal(err)
+	}
+
+	list := func(f DeliveryFilter, limit int) string {
+		t.Helper()
+		got, err := db.ListDeliveries(ctx, f, limit)
+		if err != nil {
+			t.Fatalf("ListDeliveries(%+v): %v", f, err)
+		}
+		var out []string
+		for _, d := range got {
+			out = append(out, d.DecisionID)
+		}
+		return strings.Join(out, ",")
+	}
+	for _, tt := range []struct {
+		f     DeliveryFilter
+		limit int
+		want  string
+	}{
+		{DeliveryFilter{Status: DeliveryDead}, 10, "dead3,dead2,dead1"},
+		{DeliveryFilter{Status: DeliveryDead}, 2, "dead3,dead2"},
+		{DeliveryFilter{Status: DeliveryDead, Effect: "notify"}, 10, "dead3,dead1"},
+		{DeliveryFilter{Status: DeliveryDead, Since: t0.Add(2 * time.Hour)}, 10, "dead3,dead2"},
+		{DeliveryFilter{Status: DeliveryPending}, 10, "pending"},
+		{DeliveryFilter{IDs: []int64{ids["dead1"], ids["pending"]}}, 10, "dead1,pending"},
+		{DeliveryFilter{}, 10, "dead3,dead2,dead1,pending,delivered"},
+	} {
+		if got := list(tt.f, tt.limit); got != tt.want {
+			t.Errorf("ListDeliveries(%+v, %d) = %s, want %s", tt.f, tt.limit, got, tt.want)
+		}
+	}
+	if _, err := db.ListDeliveries(ctx, DeliveryFilter{Status: "lost"}, 10); err == nil {
+		t.Error("ListDeliveries with an unknown status: want an error")
+	}
+
+	// Only the dead one of these is requeued; the rest are not dead or do
+	// not exist.
+	at := t0.Add(5 * time.Hour)
+	got, err := db.Requeue(ctx, DeliveryFilter{IDs: []int64{ids["dead1"], ids["delivered"], ids["pending"], 999999}}, at)
+	if err != nil || !reflect.DeepEqual(got, []int64{ids["dead1"]}) {
+		t.Fatalf("Requeue(ids) = %v, %v; want dead1 alone", got, err)
+	}
+	d, err := db.Deliveries(ctx, "dead1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if r := d[0]; r.Status != DeliveryPending || r.Attempts != 0 || !r.NextAttemptAt.Equal(at) || !r.RequeuedAt.Equal(at) ||
+		!r.QueuedAt().Equal(at) || !r.CreatedAt.Equal(t0) || r.LastError != "HTTP 503" {
+		t.Errorf("requeued = %+v", r)
+	}
+	// Its max age starts over: a claim that skips deliveries queued before
+	// an hour ago takes it.
+	claimed, err := db.Claim(ctx, ClaimRequest{Effect: "notify", Now: at, Limit: 10, Lease: time.Minute, QueuedAfter: at.Add(-time.Hour)})
+	if err != nil || len(claimed) != 1 || claimed[0].DecisionID != "dead1" || claimed[0].Attempts != 1 {
+		t.Errorf("Claim after the requeue = %+v, %v; want dead1 on attempt 1", claimed, err)
+	}
+
+	if got, err := db.Requeue(ctx, DeliveryFilter{Effect: "notify", Since: t0.Add(2 * time.Hour)}, at); err != nil || !reflect.DeepEqual(got, []int64{ids["dead3"]}) {
+		t.Errorf("Requeue(notify since 2h) = %v, %v; want dead3", got, err)
+	}
+	if _, err := db.Requeue(ctx, DeliveryFilter{Status: DeliveryPending}, at); err == nil {
+		t.Error("Requeue of pending deliveries: want an error")
+	}
+	if got, err := db.Requeue(ctx, DeliveryFilter{}, at); err != nil || !reflect.DeepEqual(got, []int64{ids["dead2"]}) {
+		t.Errorf("Requeue(every dead one) = %v, %v; want dead2", got, err)
+	}
+	if got, err := db.Requeue(ctx, DeliveryFilter{}, at); err != nil || len(got) != 0 {
+		t.Errorf("Requeue with nothing dead = %v, %v", got, err)
+	}
+
+	// More than one statement's worth.
+	var bulk []Delivery
+	for i := range expireBatch + 7 {
+		bulk = append(bulk, Delivery{DecisionID: fmt.Sprintf("bulk%04d", i), Effect: "bulk", Payload: []byte(`{}`), CreatedAt: t0})
+	}
+	if _, err := db.Enqueue(ctx, bulk); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.Expire(ctx, "bulk", t0.Add(time.Second), Attempt{At: at, Error: "no hook"}); err != nil {
+		t.Fatal(err)
+	}
+	if got, err := db.Requeue(ctx, DeliveryFilter{Effect: "bulk"}, at); err != nil || len(got) != len(bulk) {
+		t.Errorf("Requeue(bulk) = %d ids, %v; want %d", len(got), err, len(bulk))
+	}
+}
+
+// testMigrateOutbox upgrades a database at schema version 2 that has a
+// delivery in its outbox: the delivery keeps working, never requeued.
+func testMigrateOutbox(t *testing.T, dsn string, open func(Options) *DB) {
+	ctx := context.Background()
+	driver, source, d := "pgx", dsn, postgresDialect
+	if strings.HasPrefix(dsn, "sqlite:") {
+		driver, source, d = "sqlite", strings.TrimPrefix(dsn, "sqlite:"), sqliteDialect
+	}
+	raw, err := sql.Open(driver, source)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { raw.Close() })
+	ms, err := loadMigrations(d.migrations)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := raw.ExecContext(ctx, `CREATE TABLE schema_migrations (
+    version       BIGINT PRIMARY KEY,
+    name          TEXT NOT NULL,
+    applied_at_us BIGINT NOT NULL
+)`); err != nil {
+		t.Fatal(err)
+	}
+	for _, m := range ms {
+		if m.version > 2 {
+			break
+		}
+		if _, err := raw.ExecContext(ctx, m.sql); err != nil {
+			t.Fatalf("%s: %v", m.name, err)
+		}
+		if _, err := raw.ExecContext(ctx, fmt.Sprintf("INSERT INTO schema_migrations (version, name, applied_at_us) VALUES (%d, '%s', 0)", m.version, m.name)); err != nil {
+			t.Fatal(err)
+		}
+	}
+	us := toMicros(t0)
+	if _, err := raw.ExecContext(ctx, fmt.Sprintf(`INSERT INTO outbox (decision_id, effect, payload, status, attempts, next_attempt_at_us, created_at_us, updated_at_us)
+VALUES ('old', 'notify', '{}', 'pending', 0, %d, %d, %d)`, us, us, us)); err != nil {
+		t.Fatal(err)
+	}
+	raw.Close()
+
+	db := open(Options{})
+	got, err := db.Deliveries(ctx, "old")
+	if err != nil || len(got) != 1 {
+		t.Fatalf("Deliveries after the upgrade = %+v, %v", got, err)
+	}
+	if !got[0].RequeuedAt.IsZero() || !got[0].QueuedAt().Equal(t0) {
+		t.Errorf("an old delivery = %+v, want it never requeued, queued when created", got[0])
+	}
+	claimed, err := db.Claim(ctx, ClaimRequest{Effect: "notify", Now: t0, Limit: 1, Lease: time.Minute, QueuedAfter: t0.Add(-time.Hour)})
+	if err != nil || len(claimed) != 1 {
+		t.Errorf("Claim after the upgrade = %+v, %v", claimed, err)
+	}
+	index := "SELECT COUNT(*) FROM sqlite_master WHERE type = 'index' AND name = 'outbox_effect_due'"
+	if db.Backend() == "postgres" {
+		index = "SELECT COUNT(*) FROM pg_indexes WHERE schemaname = current_schema() AND indexname = 'outbox_effect_due'"
+	}
+	var n int
+	if err := db.SQL().QueryRowContext(ctx, index).Scan(&n); err != nil || n != 1 {
+		t.Errorf("the outbox_effect_due index: %d, %v", n, err)
 	}
 }
 
@@ -980,7 +1349,7 @@ func testOutboxConcurrentClaims(t *testing.T, db *DB) {
 	for range 6 {
 		wg.Go(func() {
 			for {
-				got, err := db.Claim(ctx, t0, 4, time.Hour)
+				got, err := db.Claim(ctx, ClaimRequest{Effect: "notify", Now: t0, Limit: 4, Lease: time.Hour})
 				if err != nil {
 					t.Errorf("Claim: %v", err)
 					return

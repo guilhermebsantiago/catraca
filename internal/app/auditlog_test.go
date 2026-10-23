@@ -156,8 +156,11 @@ func TestAuditLogGivesUpOnClose(t *testing.T) {
 	if got := l.RecorderStats().Dropped; got != 2 {
 		t.Errorf("dropped = %d, want 2", got)
 	}
-	if _, err := l.Claim(context.Background(), time.Now(), 1, time.Second); !errors.Is(err, api.ErrAuditUnavailable) {
+	if _, err := l.Claim(context.Background(), audit.ClaimRequest{Effect: "notify", Now: time.Now(), Limit: 1, Lease: time.Second}); !errors.Is(err, api.ErrAuditUnavailable) {
 		t.Errorf("Claim after Close = %v", err)
+	}
+	if _, err := l.Backlog(context.Background(), time.Now()); !errors.Is(err, api.ErrAuditUnavailable) {
+		t.Errorf("Backlog after Close = %v", err)
 	}
 }
 
