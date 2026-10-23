@@ -1,7 +1,8 @@
 // Package audit is Catraca's decision log: every decision with a minimal copy
 // of its event, the labels people give it, and the per-rule counts the
 // precision gate reads. It also holds the outbox of webhook deliveries, so an
-// effect is durable in the same database as the decision behind it.
+// effect is durable in the same database as the decision behind it, and the
+// queue of leaked-key reports from secret scanning.
 //
 // Two backends share one schema and one implementation: SQLite (pure Go, the
 // default, for a single instance) and Postgres (for several instances). Open
@@ -159,9 +160,9 @@ type Options struct {
 	FlushInterval time.Duration
 	// Pool bounds the connections to the database.
 	Pool Pool
-	// Retention is how long decisions without a label and finished webhook
-	// deliveries are kept; older ones are deleted in the background. Zero
-	// keeps everything.
+	// Retention is how long decisions without a label, finished webhook
+	// deliveries and done or dead leak reports are kept; older ones are
+	// deleted in the background. Zero keeps everything.
 	Retention time.Duration
 	// LabeledRetention is how long labeled decisions are kept, with their
 	// labels. Zero keeps them forever: the precision gate and backtests

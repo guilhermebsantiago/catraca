@@ -127,6 +127,11 @@ func runContract(t *testing.T, newDSN func(t *testing.T) string) {
 		db := open(t, newDSN(t), Options{Retention: 48 * time.Hour, LabeledRetention: 7 * 24 * time.Hour})
 		testRetention(t, db)
 	})
+	t.Run("LeakReports", func(t *testing.T) { testLeakReports(t, fresh(t)) })
+	t.Run("LeakReportsConcurrentClaims", func(t *testing.T) { testLeakReportsConcurrentClaims(t, fresh(t)) })
+	t.Run("LeakReportRetention", func(t *testing.T) {
+		testLeakReportRetention(t, open(t, newDSN(t), Options{Retention: 48 * time.Hour}))
+	})
 }
 
 // logBuffer collects log lines from the writer goroutine for a test to read.
@@ -1004,5 +1009,292 @@ func testOutboxConcurrentClaims(t *testing.T, db *DB) {
 		if n != 1 {
 			t.Errorf("delivery %d was claimed %d times", id, n)
 		}
+	}
+}
+
+// leakReport is a report of a token named after key, received at at.
+func leakReport(key string, at time.Time) LeakReport {
+	return LeakReport{Key: key, TokenSHA256: "sha-" + key, SealedToken: "sealed-" + key, Type: "acme_api_key",
+		Source: "commit", URL: "https://github.com/octo/repo/blob/main/" + key, ReceivedAt: at}
+}
+
+// leakReportsByKey returns the stored reports by key.
+func leakReportsByKey(t *testing.T, db *DB, keys ...string) map[string]LeakReport {
+	t.Helper()
+	rs, err := db.LeakReportsByKey(context.Background(), keys)
+	if err != nil {
+		t.Fatalf("LeakReportsByKey: %v", err)
+	}
+	out := map[string]LeakReport{}
+	for _, r := range rs {
+		out[r.Key] = r
+	}
+	return out
+}
+
+func testLeakReports(t *testing.T, db *DB) {
+	ctx := context.Background()
+	n, err := db.AddLeakReports(ctx, []LeakReport{leakReport("r1", t0), leakReport("r2", t0.Add(time.Second)), leakReport("r1", t0)})
+	if err != nil || n != 2 {
+		t.Fatalf("AddLeakReports = %d, %v; want 2, the repeated report once", n, err)
+	}
+	if n, err := db.AddLeakReports(ctx, []LeakReport{leakReport("r2", t0.Add(time.Hour))}); err != nil || n != 0 {
+		t.Fatalf("AddLeakReports of a stored report = %d, %v; want 0", n, err)
+	}
+	if _, err := db.AddLeakReports(ctx, []LeakReport{{Key: "r3"}}); err == nil {
+		t.Error("AddLeakReports without a token hash: want an error")
+	}
+	stored := leakReportsByKey(t, db, "r1", "r2", "unknown")
+	if len(stored) != 2 {
+		t.Fatalf("LeakReportsByKey = %+v, want r1 and r2", stored)
+	}
+	if r := stored["r1"]; r.TokenSHA256 != "sha-r1" || r.SealedToken != "sealed-r1" || r.Type != "acme_api_key" ||
+		r.Source != "commit" || r.URL != "https://github.com/octo/repo/blob/main/r1" || r.Status != LeakReportPending ||
+		r.Attempts != 0 || !r.ReceivedAt.Equal(t0) || !r.QueuedAt.Equal(t0) || !r.NextAttemptAt.Equal(t0) {
+		t.Errorf("r1 = %+v", r)
+	}
+	if !stored["r2"].ReceivedAt.Equal(t0.Add(time.Second)) {
+		t.Errorf("r2 = %+v, want the first delivery's time", stored["r2"])
+	}
+	if s, err := db.LeakReportStats(ctx); err != nil || s.Pending != 2 || s.Dead != 0 || !s.OldestPending.Equal(t0) {
+		t.Errorf("LeakReportStats = %+v, %v; want 2 pending since t0", s, err)
+	}
+
+	claim := func(at time.Time) []LeakReport {
+		t.Helper()
+		rs, err := db.ClaimLeakReports(ctx, at, 10, time.Minute)
+		if err != nil {
+			t.Fatalf("ClaimLeakReports: %v", err)
+		}
+		return rs
+	}
+	rs := claim(t0.Add(time.Second))
+	if len(rs) != 2 || rs[0].Key != "r1" || rs[1].Key != "r2" {
+		t.Fatalf("claim = %+v, want r1 then r2", rs)
+	}
+	r1, r2 := rs[0], rs[1]
+	if r1.Attempts != 1 || r1.SealedToken != "sealed-r1" || !r1.NextAttemptAt.Equal(t0.Add(time.Second+time.Minute)) {
+		t.Errorf("claimed r1 = %+v", r1)
+	}
+	if rs := claim(t0.Add(30 * time.Second)); len(rs) != 0 {
+		t.Errorf("leased reports were claimed again: %+v", rs)
+	}
+
+	// r1's token resolved but its decision failed: the key is kept and the
+	// sealed token goes. r2's token did not resolve: it keeps its token.
+	if err := db.RetryLeakReport(ctx, r1.ID, LeakAttempt{At: t0.Add(2 * time.Second), Attempt: 1, APIKeyID: "key_1",
+		AccountID: "acct_1", Error: "engine down"}, t0.Add(2*time.Minute)); err != nil {
+		t.Fatal(err)
+	}
+	if err := db.RetryLeakReport(ctx, r2.ID, LeakAttempt{At: t0.Add(2 * time.Second), Attempt: 1, Error: "resolver down"},
+		t0.Add(90*time.Second)); err != nil {
+		t.Fatal(err)
+	}
+	stored = leakReportsByKey(t, db, "r1", "r2")
+	if r := stored["r1"]; r.APIKeyID != "key_1" || r.AccountID != "acct_1" || r.SealedToken != "" || r.LastError != "engine down" ||
+		r.Status != LeakReportPending || !r.NextAttemptAt.Equal(t0.Add(2*time.Minute)) {
+		t.Errorf("r1 after a retry with its key = %+v", r)
+	}
+	if r := stored["r2"]; r.APIKeyID != "" || r.SealedToken != "sealed-r2" || r.LastError != "resolver down" {
+		t.Errorf("r2 after a retry without a key = %+v", r)
+	}
+
+	rs = claim(t0.Add(2 * time.Minute))
+	if len(rs) != 2 || rs[0].Attempts != 2 || rs[1].Attempts != 2 || rs[0].APIKeyID != "key_1" {
+		t.Fatalf("claim after the retries = %+v, want both on attempt 2, r1 with its key", rs)
+	}
+	// A worker whose lease ran out reports its first attempt late: the
+	// second claim is the one that counts.
+	if err := db.RetryLeakReport(ctx, r2.ID, LeakAttempt{At: t0.Add(3 * time.Minute), Attempt: 1, Error: "late"}, t0); err != nil {
+		t.Fatal(err)
+	}
+	if err := db.MarkLeakReportDead(ctx, r2.ID, LeakAttempt{At: t0.Add(3 * time.Minute), Attempt: 1, Error: "late"}); err != nil {
+		t.Fatal(err)
+	}
+	if r := leakReportsByKey(t, db, "r2")["r2"]; r.Status != LeakReportPending || r.LastError != "resolver down" ||
+		!r.NextAttemptAt.Equal(t0.Add(3*time.Minute)) {
+		t.Errorf("r2 after a stale attempt reported = %+v, want it untouched", r)
+	}
+
+	if err := db.FinishLeakReport(ctx, r1.ID, LeakAttempt{At: t0.Add(150 * time.Second), Attempt: 2, Outcome: "leaked",
+		APIKeyID: "key_1", AccountID: "acct_1", DecisionID: "dec_1"}); err != nil {
+		t.Fatal(err)
+	}
+	if err := db.MarkLeakReportDead(ctx, r2.ID, LeakAttempt{At: t0.Add(150 * time.Second), Attempt: 2, Outcome: "resolve_failed",
+		Error: "resolver down"}); err != nil {
+		t.Fatal(err)
+	}
+	// Settled reports are not claimed, and a late failure cannot reopen a
+	// done one.
+	if rs := claim(t0.Add(time.Hour)); len(rs) != 0 {
+		t.Errorf("settled reports were claimed: %+v", rs)
+	}
+	if err := db.RetryLeakReport(ctx, r1.ID, LeakAttempt{At: t0.Add(time.Hour), Attempt: 2, Error: "late"}, t0); err != nil {
+		t.Fatal(err)
+	}
+	stored = leakReportsByKey(t, db, "r1", "r2")
+	if r := stored["r1"]; r.Status != LeakReportDone || r.Outcome != "leaked" || r.DecisionID != "dec_1" || r.APIKeyID != "key_1" ||
+		r.LastError != "" || r.Attempts != 2 || !r.UpdatedAt.Equal(t0.Add(150*time.Second)) {
+		t.Errorf("r1 done = %+v", r)
+	}
+	if r := stored["r2"]; r.Status != LeakReportDead || r.Outcome != "resolve_failed" || r.SealedToken != "sealed-r2" || r.Attempts != 2 {
+		t.Errorf("r2 dead = %+v, want it to keep its token for a retry", r)
+	}
+	if s, err := db.LeakReportStats(ctx); err != nil || s.Pending != 0 || s.Dead != 1 || !s.OldestPending.IsZero() {
+		t.Errorf("LeakReportStats = %+v, %v; want 1 dead", s, err)
+	}
+
+	list := func(f LeakReportFilter) []string {
+		t.Helper()
+		rs, err := db.ListLeakReports(ctx, f)
+		if err != nil {
+			t.Fatalf("ListLeakReports: %v", err)
+		}
+		var keys []string
+		for _, r := range rs {
+			keys = append(keys, r.Key)
+		}
+		return keys
+	}
+	if got := list(LeakReportFilter{}); fmt.Sprint(got) != "[r2 r1]" {
+		t.Errorf("list = %v, want newest first", got)
+	}
+	if got := list(LeakReportFilter{Status: LeakReportDead}); fmt.Sprint(got) != "[r2]" {
+		t.Errorf("list dead = %v", got)
+	}
+	if got := list(LeakReportFilter{Limit: 1}); fmt.Sprint(got) != "[r2]" {
+		t.Errorf("list limit 1 = %v", got)
+	}
+
+	// Requeueing takes dead reports only, and counts their attempts and age
+	// afresh.
+	requeued := t0.Add(2 * time.Hour)
+	if n, err := db.RequeueLeakReports(ctx, requeued, []int64{r1.ID, r2.ID, 404}); err != nil || n != 1 {
+		t.Fatalf("RequeueLeakReports = %d, %v; want 1", n, err)
+	}
+	if r := leakReportsByKey(t, db, "r2")["r2"]; r.Status != LeakReportPending || r.Attempts != 0 || r.Outcome != "" ||
+		!r.QueuedAt.Equal(requeued) || !r.NextAttemptAt.Equal(requeued) || !r.ReceivedAt.Equal(t0.Add(time.Second)) ||
+		r.SealedToken != "sealed-r2" {
+		t.Errorf("r2 requeued = %+v", r)
+	}
+	if r := leakReportsByKey(t, db, "r1")["r1"]; r.Status != LeakReportDone {
+		t.Errorf("r1 after a requeue = %+v, want it still done", r)
+	}
+	rs = claim(requeued)
+	if len(rs) != 1 || rs[0].Key != "r2" || rs[0].Attempts != 1 {
+		t.Fatalf("claim after the requeue = %+v", rs)
+	}
+	if err := db.FinishLeakReport(ctx, rs[0].ID, LeakAttempt{At: requeued, Attempt: 1, Outcome: "not_found"}); err != nil {
+		t.Fatal(err)
+	}
+	if r := leakReportsByKey(t, db, "r2")["r2"]; r.Status != LeakReportDone || r.Outcome != "not_found" || r.SealedToken != "" {
+		t.Errorf("r2 done = %+v, want its token gone", r)
+	}
+
+	// Values Postgres text cannot hold are made storable, so that one of
+	// them cannot refuse its batch every time GitHub sends it.
+	odd := leakReport("odd", t0)
+	odd.URL, odd.Type = "https://github.com/\x00octo", "type\xff"
+	if n, err := db.AddLeakReports(ctx, []LeakReport{odd}); err != nil || n != 1 {
+		t.Fatalf("AddLeakReports with NUL and invalid UTF-8 = %d, %v", n, err)
+	}
+	rs = claim(requeued)
+	if len(rs) != 1 || rs[0].URL != "https://github.com/octo" {
+		t.Fatalf("claim odd = %+v", rs)
+	}
+	long := strings.Repeat("é", 2000) + string([]byte{0xff, 0})
+	if err := db.RetryLeakReport(ctx, rs[0].ID, LeakAttempt{At: requeued, Attempt: 1, APIKeyID: "key\x00", Error: long},
+		requeued.Add(time.Minute)); err != nil {
+		t.Fatalf("Retry with a long, invalid error: %v", err)
+	}
+}
+
+func testLeakReportsConcurrentClaims(t *testing.T, db *DB) {
+	ctx := context.Background()
+	const total = 60
+	var rs []LeakReport
+	for i := range total {
+		rs = append(rs, leakReport(fmt.Sprintf("r%d", i), t0))
+	}
+	if _, err := db.AddLeakReports(ctx, rs); err != nil {
+		t.Fatal(err)
+	}
+	var mu sync.Mutex
+	seen := map[int64]int{}
+	var wg sync.WaitGroup
+	for range 6 {
+		wg.Go(func() {
+			for {
+				got, err := db.ClaimLeakReports(ctx, t0, 4, time.Hour)
+				if err != nil {
+					t.Errorf("ClaimLeakReports: %v", err)
+					return
+				}
+				if len(got) == 0 {
+					return
+				}
+				mu.Lock()
+				for _, r := range got {
+					seen[r.ID]++
+				}
+				mu.Unlock()
+			}
+		})
+	}
+	wg.Wait()
+	if len(seen) != total {
+		t.Errorf("claimed %d distinct reports, want %d", len(seen), total)
+	}
+	for id, n := range seen {
+		if n != 1 {
+			t.Errorf("report %d was claimed %d times", id, n)
+		}
+	}
+}
+
+// testLeakReportRetention runs retention by hand on a DB that keeps
+// finished rows for 48h.
+func testLeakReportRetention(t *testing.T, db *DB) {
+	ctx := context.Background()
+	// The background loop uses the real clock; this test sets its own.
+	db.stopPruning()
+	<-db.pruned
+
+	settle := func(key string, status LeakReportStatus, at time.Time) {
+		t.Helper()
+		if _, err := db.AddLeakReports(ctx, []LeakReport{leakReport(key, t0)}); err != nil {
+			t.Fatal(err)
+		}
+		if status == LeakReportPending {
+			return
+		}
+		rs, err := db.ClaimLeakReports(ctx, t0, 1, time.Minute)
+		if err != nil || len(rs) != 1 || rs[0].Key != key {
+			t.Fatalf("claim %s = %+v, %v", key, rs, err)
+		}
+		a := LeakAttempt{At: at, Attempt: 1, Outcome: "not_found"}
+		if status == LeakReportDone {
+			err = db.FinishLeakReport(ctx, rs[0].ID, a)
+		} else {
+			err = db.MarkLeakReportDead(ctx, rs[0].ID, a)
+		}
+		if err != nil {
+			t.Fatal(err)
+		}
+	}
+	settle("done-old", LeakReportDone, t0)
+	settle("dead-old", LeakReportDead, t0)
+	settle("done-recent", LeakReportDone, t0.Add(4*24*time.Hour))
+	settle("pending-old", LeakReportPending, t0)
+
+	if err := db.prune(ctx, t0.Add(5*24*time.Hour)); err != nil {
+		t.Fatalf("prune: %v", err)
+	}
+	left := leakReportsByKey(t, db, "done-old", "dead-old", "done-recent", "pending-old")
+	if _, ok := left["done-recent"]; !ok || len(left) != 2 || left["pending-old"].Status != LeakReportPending {
+		t.Errorf("reports left = %v, want the recent one and the pending one", left)
+	}
+	if s := db.RetentionStats(); s.LeakReports != 2 || s.Errors != 0 {
+		t.Errorf("RetentionStats = %+v, want 2 leak reports", s)
 	}
 }

@@ -9,8 +9,8 @@ import (
 )
 
 // Retention deletes what Options.Retention expires in the background, in
-// small batches, so the log and the outbox stop growing until the disk is
-// full. Labeled decisions are kept for Options.LabeledRetention, forever by
+// small batches, so the log, the outbox and the leak reports stop growing
+// until the disk is full. Labeled decisions are kept for Options.LabeledRetention, forever by
 // default, because the precision gate counts labels over all time.
 
 const (
@@ -39,13 +39,15 @@ type RetentionStats struct {
 	// Deliveries were delivered or dead webhook deliveries deleted from the
 	// outbox.
 	Deliveries uint64
+	// LeakReports were done or dead leaked-key reports deleted.
+	LeakReports uint64
 	// Errors counts runs that failed. Each is logged, and the next run
 	// retries.
 	Errors uint64
 }
 
 type retentionCounters struct {
-	decisions, deliveries, errors atomic.Uint64
+	decisions, deliveries, leakReports, errors atomic.Uint64
 	// from is the decision time, in unix microseconds, where the search
 	// for unlabeled decisions to delete starts: everything older was
 	// deleted by an earlier run of this process or is labeled, and the
@@ -58,9 +60,10 @@ type retentionCounters struct {
 // without a retention.
 func (db *DB) RetentionStats() RetentionStats {
 	return RetentionStats{
-		Decisions:  db.retention.decisions.Load(),
-		Deliveries: db.retention.deliveries.Load(),
-		Errors:     db.retention.errors.Load(),
+		Decisions:   db.retention.decisions.Load(),
+		Deliveries:  db.retention.deliveries.Load(),
+		LeakReports: db.retention.leakReports.Load(),
+		Errors:      db.retention.errors.Load(),
 	}
 }
 
@@ -82,8 +85,9 @@ func (db *DB) pruneLoop(ctx context.Context) {
 }
 
 // prune deletes the rows the retention settings expire at now: unlabeled
-// decisions and finished deliveries older than Retention, and, when
-// LabeledRetention is set, every decision older than that.
+// decisions, finished deliveries and done or dead leak reports older than
+// Retention, and, when LabeledRetention is set, every decision older than
+// that.
 func (db *DB) prune(ctx context.Context, now time.Time) error {
 	var errs []error
 	var decisions, deliveries int
@@ -128,11 +132,22 @@ func (db *DB) prune(ctx context.Context, now time.Time) error {
 		errs = append(errs, fmt.Errorf("delete finished deliveries: %w", err))
 	}
 
+	var leakReports int
+	err = inBatches(ctx, func(ctx context.Context) (int, error) {
+		n, err := db.deleteLeakReports(ctx, cutoff)
+		leakReports += n
+		return n, err
+	})
+	if err != nil {
+		errs = append(errs, fmt.Errorf("delete finished leak reports: %w", err))
+	}
+
 	db.retention.decisions.Add(uint64(decisions))
 	db.retention.deliveries.Add(uint64(deliveries))
-	if decisions > 0 || deliveries > 0 {
+	db.retention.leakReports.Add(uint64(leakReports))
+	if decisions > 0 || deliveries > 0 || leakReports > 0 {
 		db.log.Info("audit: deleted expired rows", "decisions", decisions, "deliveries", deliveries,
-			"retention", db.opts.Retention.String())
+			"leak_reports", leakReports, "retention", db.opts.Retention.String())
 	}
 	return errors.Join(errs...)
 }
