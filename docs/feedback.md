@@ -61,6 +61,11 @@ it cannot fetch the signing certificate and 500 when it could not record any
 event of a notification, so those are retried; everything else, including
 forgeries and notifications without an account, gets a final answer.
 
+On every feedback endpoint, when more requests are in flight than
+`server.max_inflight`, the server answers `503` with `Retry-After` before it
+looks at the request, so providers send it again later
+([admission](config.md#admission)).
+
 ### Setup with a configuration set (recommended)
 
 Event publishing through a configuration set is the only SES feature that

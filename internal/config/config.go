@@ -29,6 +29,9 @@ const (
 	DefaultMaxBodyBytes    = 1 << 20
 	DefaultShutdownTimeout = 30 * time.Second
 	DefaultDrainDelay      = 5 * time.Second
+	DefaultMaxInflight     = 256
+	DefaultInflightWait    = 2 * time.Millisecond
+	DefaultInflightLimit   = InflightAdaptive
 	DefaultRulesPath       = "rules/default.yaml"
 	DefaultAuditDSN        = "sqlite:catraca.db"
 	DefaultHookTimeout     = 10 * time.Second
@@ -40,6 +43,12 @@ const (
 const (
 	StoreMemory = "memory"
 	StoreRedis  = "redis"
+)
+
+// Kinds of decision limit, the values of server.inflight_limit.
+const (
+	InflightAdaptive = "adaptive"
+	InflightStatic   = "static"
 )
 
 // Config is the server configuration. The zero value is not useful; get one
@@ -83,6 +92,17 @@ type Server struct {
 	// balancers stop sending it requests before it stops accepting them.
 	// Default 5s; 0s turns it off.
 	DrainDelay time.Duration `yaml:"drain_delay"`
+	// MaxInflight is the most decisions in flight at once on /v1/decide
+	// and /v1/events together, and apart, the most requests on the feedback
+	// routes. Default 256.
+	MaxInflight int `yaml:"max_inflight"`
+	// InflightWait is how long a request over the limit waits for a slot
+	// before it is shed. Default 2ms; 0s sheds at once.
+	InflightWait time.Duration `yaml:"inflight_wait"`
+	// InflightLimit is "adaptive" (the default): the decision limit drops
+	// when decisions take the whole engine deadline and climbs back as they
+	// speed up, never above MaxInflight. "static" keeps it at MaxInflight.
+	InflightLimit string `yaml:"inflight_limit"`
 }
 
 // Auth configures the bearer tokens the /v1 routes accept.
@@ -183,6 +203,27 @@ type Engine struct {
 	// be; an older event is rejected. Default 168h, the longest counter
 	// window.
 	MaxEventAge time.Duration `yaml:"max_event_age"`
+	// Breaker is the circuit breaker around the store calls of decisions.
+	Breaker Breaker `yaml:"breaker"`
+}
+
+// Breaker configures the store's circuit breaker; see
+// engine.BreakerOptions.
+type Breaker struct {
+	// FailureThreshold is how many store calls in a row must fail or miss
+	// the deadline to open the breaker. Default 20.
+	FailureThreshold int `yaml:"failure_threshold"`
+	// Cooldown is how long the breaker stays open, deciding without the
+	// store, before it probes the store. Default 2s.
+	Cooldown time.Duration `yaml:"cooldown"`
+	// Probes is how many decisions the half-open breaker lets through, all
+	// of which must succeed for it to close. Default 5.
+	Probes int `yaml:"probes"`
+}
+
+// Options returns the engine's breaker options.
+func (b Breaker) Options() engine.BreakerOptions {
+	return engine.BreakerOptions{Failures: b.FailureThreshold, Cooldown: b.Cooldown, Probes: b.Probes}
 }
 
 // Gate is the precision gate a rule must clear before it enforces.
@@ -349,6 +390,15 @@ func (c *Config) applyDefaults(set func(path string) bool) {
 	if !set("server.drain_delay") {
 		c.Server.DrainDelay = DefaultDrainDelay
 	}
+	if c.Server.MaxInflight == 0 {
+		c.Server.MaxInflight = DefaultMaxInflight
+	}
+	if !set("server.inflight_wait") {
+		c.Server.InflightWait = DefaultInflightWait
+	}
+	if c.Server.InflightLimit == "" {
+		c.Server.InflightLimit = DefaultInflightLimit
+	}
 	if c.Rules.Path == "" {
 		c.Rules.Path = DefaultRulesPath
 	}
@@ -384,6 +434,15 @@ func (c *Config) applyDefaults(set func(path string) bool) {
 	}
 	if c.Engine.MaxEventAge == 0 {
 		c.Engine.MaxEventAge = engine.DefaultMaxEventAge
+	}
+	if c.Engine.Breaker.FailureThreshold == 0 {
+		c.Engine.Breaker.FailureThreshold = engine.DefaultBreakerFailures
+	}
+	if c.Engine.Breaker.Cooldown == 0 {
+		c.Engine.Breaker.Cooldown = engine.DefaultBreakerCooldown
+	}
+	if c.Engine.Breaker.Probes == 0 {
+		c.Engine.Breaker.Probes = engine.DefaultBreakerProbes
 	}
 	if c.Gate.MinLabeled == 0 {
 		c.Gate.MinLabeled = precision.DefaultMinLabeled

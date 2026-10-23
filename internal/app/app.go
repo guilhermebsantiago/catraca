@@ -161,6 +161,7 @@ func New(ctx context.Context, cfg *config.Config, opts Options) (_ *App, err err
 		Rules:         a.holder,
 		Recorder:      a.audit,
 		Deadline:      cfg.Engine.Deadline,
+		Breaker:       cfg.Engine.Breaker.Options(),
 		MaxFutureSkew: cfg.Engine.MaxFutureSkew,
 		MaxEventAge:   cfg.Engine.MaxEventAge,
 		Registerer:    a.registry,
@@ -189,6 +190,12 @@ func New(ctx context.Context, cfg *config.Config, opts Options) (_ *App, err err
 		Registerer:    a.registry,
 		Logger:        log,
 		MaxBodyBytes:  cfg.Server.MaxBodyBytes,
+		Admission: api.Admission{
+			MaxInflight: cfg.Server.MaxInflight,
+			Wait:        cfg.Server.InflightWait,
+			Static:      cfg.Server.InflightLimit == config.InflightStatic,
+			Deadline:    cfg.Engine.Deadline,
+		},
 	}
 	for _, t := range cfg.Auth.Tokens {
 		aopts.Tokens = append(aopts.Tokens, api.Token{Name: t.Name, Value: t.Token.Value()})

@@ -187,7 +187,12 @@ and the expected matches, so a rule change comes with a test like code does.
    more than `engine.max_event_age` old is rejected, except a key_leak,
    which takes the clock's. Replays trust event times.
 2. `Observe` signals under the configured deadline (default 10 ms). On error,
-   mark the decision degraded and continue with what was returned.
+   mark the decision degraded and continue with what was returned. The
+   store calls go through a circuit breaker: after a run of failures or
+   deadline misses (20 by default) it opens, and for a cooldown decisions
+   skip the store and are degraded at once, the same decision a deadline
+   miss gives, instead of each one waiting out the deadline; then a few
+   probes reach the store, and the breaker closes when they all succeed.
 3. Evaluate every rule. A matching enforced rule contributes its action; a
    matching shadow rule is recorded in `Shadow`. An evaluation error follows
    `on_error`: open skips the rule, closed counts it as matched (`Errored`):
@@ -196,13 +201,16 @@ and the expected matches, so a rule change comes with a test like code does.
 4. The action is the most severe enforced match; Throttle carries the largest
    retry_after among enforced throttles.
 5. For key_leak events, call `Catalog.MarkLeaked` before evaluating, under
-   the same deadline as `Observe`. When it fails, the catalog still holds
-   the key in memory, and `Decide` returns an error so the caller sends the
-   event again.
+   the same deadline and breaker as `Observe`. When it fails, at once while
+   the breaker is open, the catalog still holds the key in memory, and
+   `Decide` returns an error so the caller sends the event again.
 6. Hand the decision to the Recorder (non-blocking) and, when enforced
    matches that are not `Errored` have effects, to the Dispatcher.
 7. Metrics: decisions by action, matches by rule and mode, errors by rule,
-   degraded decisions, latency histogram.
+   degraded decisions, latency histogram, the breaker's state.
+
+`DecideWithoutStore` makes the decision of step 2 without calling the
+store at all, for the HTTP layer to shed load with.
 
 ## Audit and labels
 
@@ -283,6 +291,16 @@ scanning routes, which authenticate by signature.
 | POST /v1/feedback, /v1/feedback/ses, /v1/feedback/usesend | feedback |
 | POST /v1/secret-scanning/github | GitHub partner endpoint |
 | GET /healthz, /readyz, /metrics | health and Prometheus metrics, on `server.admin_addr` when it is set |
+
+Admission control bounds the decisions in flight on `/v1/decide` and
+`/v1/events`, with a limit that adapts to how fast decisions finish (AIMD:
+it drops when decisions take the whole deadline). A request that finds no
+slot within a short wait is shed to `DecideWithoutStore`: a degraded
+decision, the fail-safe answer before a send, rather than an error that
+would stop good senders or come back as retries. Feedback and key_leak
+events, which that decision would not record, are answered 503 with
+Retry-After instead. The feedback endpoints have slots of their own, and
+secret scanning and labels are not limited.
 
 `/readyz` depends on the server's own state only: a ruleset is loaded and
 the server is not draining. Redis and the audit database are shared by
