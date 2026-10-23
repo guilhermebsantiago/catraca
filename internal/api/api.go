@@ -62,12 +62,31 @@ type Token struct {
 	Value string
 }
 
-// Check is one readiness check. Its error message is shown on /readyz,
-// which needs no token, so it should say what is wrong without details
-// such as hostnames.
+// Check is one readiness check. It answers from the server's own state,
+// fast, without calling another service: readiness decides whether a load
+// balancer sends the server requests, and a check on a service every
+// instance shares, such as Redis, would take them all out at once when that
+// service fails, turning degraded decisions into no decisions. Report
+// shared services with Options.Dependencies instead. Its error message is
+// shown on /readyz, which needs no token, so it should say what is wrong
+// without details such as hostnames.
 type Check struct {
 	Name  string
 	Check func(context.Context) error
+}
+
+// DependencyStatus is the last check of a service the server uses but does
+// not need in order to be ready, such as the store or the audit database, as
+// GET /readyz?verbose shows it.
+type DependencyStatus struct {
+	// Status is "ok" or what is wrong, without details such as hostnames.
+	Status string `json:"status"`
+	// Since is when Status took its current value.
+	Since time.Time `json:"since,omitzero"`
+	// CheckedAt is when the last check ended, and DurationMS how long it
+	// took.
+	CheckedAt  time.Time `json:"checked_at,omitzero"`
+	DurationMS float64   `json:"duration_ms"`
 }
 
 // Options configure a Server. Decider, Rules, Audit and at least one Token
@@ -90,8 +109,12 @@ type Options struct {
 	GenericFeedback      http.Handler
 	GitHubSecretScanning http.Handler
 
-	// Checks run on GET /readyz.
+	// Checks run on GET /readyz: the server is ready when all of them pass.
 	Checks []Check
+	// Dependencies returns the latest health of the services the server
+	// uses, by name, for GET /readyz?verbose. They never make it not ready.
+	// Nil leaves them out.
+	Dependencies func() map[string]DependencyStatus
 	// Gatherer is served on GET /metrics. Nil answers 404.
 	Gatherer prometheus.Gatherer
 	// Registerer receives the HTTP request duration histogram. Nil keeps
@@ -108,18 +131,19 @@ type Options struct {
 // Server is the HTTP handler for every route. It is safe for concurrent
 // use.
 type Server struct {
-	mux      *http.ServeMux
-	decider  Decider
-	rules    RuleSource
-	reloadFn func() (*rules.Ruleset, error)
-	audit    AuditLog
-	gate     precision.Gate
-	tokens   []tokenHash
-	checks   []Check
-	log      *slog.Logger
-	maxBody  int64
-	now      func() time.Time
-	duration *prometheus.HistogramVec
+	mux          *http.ServeMux
+	decider      Decider
+	rules        RuleSource
+	reloadFn     func() (*rules.Ruleset, error)
+	audit        AuditLog
+	gate         precision.Gate
+	tokens       []tokenHash
+	checks       []Check
+	dependencies func() map[string]DependencyStatus
+	log          *slog.Logger
+	maxBody      int64
+	now          func() time.Time
+	duration     *prometheus.HistogramVec
 }
 
 type tokenHash struct {
@@ -140,16 +164,17 @@ func New(opts Options) (*Server, error) {
 		return nil, errors.New("api: at least one API token is required")
 	}
 	s := &Server{
-		mux:      http.NewServeMux(),
-		decider:  opts.Decider,
-		rules:    opts.Rules,
-		reloadFn: opts.Reload,
-		audit:    opts.Audit,
-		gate:     opts.Gate,
-		checks:   opts.Checks,
-		log:      opts.Logger,
-		maxBody:  opts.MaxBodyBytes,
-		now:      opts.Now,
+		mux:          http.NewServeMux(),
+		decider:      opts.Decider,
+		rules:        opts.Rules,
+		reloadFn:     opts.Reload,
+		audit:        opts.Audit,
+		gate:         opts.Gate,
+		checks:       opts.Checks,
+		dependencies: opts.Dependencies,
+		log:          opts.Logger,
+		maxBody:      opts.MaxBodyBytes,
+		now:          opts.Now,
 	}
 	for _, t := range opts.Tokens {
 		if t.Value == "" {
@@ -250,29 +275,30 @@ func (s *Server) healthz(w http.ResponseWriter, _ *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]string{"status": "ok"})
 }
 
-// readyTimeout bounds all readiness checks together, so a probe gets an
-// answer before it times out itself.
-const readyTimeout = 2 * time.Second
+// ReadyResponse is the body of GET /readyz.
+type ReadyResponse struct {
+	// Status is "ready" (200) or "not_ready" (503).
+	Status string `json:"status"`
+	// Checks has the result of each readiness check: "ok" or what is wrong.
+	Checks map[string]string `json:"checks"`
+	// Dependencies is the health of the services the server uses, with
+	// ?verbose only. It does not affect Status.
+	Dependencies map[string]DependencyStatus `json:"dependencies,omitempty"`
+}
 
 func (s *Server) readyz(w http.ResponseWriter, r *http.Request) {
-	ctx, cancel := context.WithTimeout(r.Context(), readyTimeout)
-	defer cancel()
-	results := make(map[string]string, len(s.checks))
-	ready := true
+	resp := ReadyResponse{Status: "ready", Checks: make(map[string]string, len(s.checks))}
+	status := http.StatusOK
 	for _, c := range s.checks {
-		if err := c.Check(ctx); err != nil {
-			ready = false
-			results[c.Name] = err.Error()
+		if err := c.Check(r.Context()); err != nil {
+			status, resp.Status = http.StatusServiceUnavailable, "not_ready"
+			resp.Checks[c.Name] = err.Error()
 			continue
 		}
-		results[c.Name] = "ok"
+		resp.Checks[c.Name] = "ok"
 	}
-	status, word := http.StatusOK, "ready"
-	if !ready {
-		status, word = http.StatusServiceUnavailable, "not_ready"
+	if r.URL.Query().Has("verbose") && s.dependencies != nil {
+		resp.Dependencies = s.dependencies()
 	}
-	writeJSON(w, status, struct {
-		Status string            `json:"status"`
-		Checks map[string]string `json:"checks"`
-	}{word, results})
+	writeJSON(w, status, resp)
 }

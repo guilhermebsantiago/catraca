@@ -186,6 +186,25 @@ func TestUnconfiguredRoutes(t *testing.T) {
 	}
 }
 
+func TestReadyzVerbose(t *testing.T) {
+	checked := time.Date(2026, 10, 23, 12, 0, 0, 0, time.UTC)
+	s := newTestServer(t, deciderFunc(nil), nil, func(o *Options) {
+		o.Checks = []Check{{Name: "rules", Check: func(context.Context) error { return nil }}}
+		o.Dependencies = func() map[string]DependencyStatus {
+			return map[string]DependencyStatus{"store": {Status: "timeout", Since: checked, CheckedAt: checked, DurationMS: 2000}}
+		}
+	})
+	rec := serve(s, "GET", "/readyz", "")
+	if rec.Code != 200 || strings.Contains(rec.Body.String(), "dependencies") {
+		t.Errorf("readyz: %d %s", rec.Code, rec.Body)
+	}
+	rec = serve(s, "GET", "/readyz?verbose", "")
+	want := `{"status":"ready","checks":{"rules":"ok"},"dependencies":{"store":{"status":"timeout","since":"2026-10-23T12:00:00Z","checked_at":"2026-10-23T12:00:00Z","duration_ms":2000}}}`
+	if rec.Code != 200 || strings.TrimSpace(rec.Body.String()) != want {
+		t.Errorf("readyz?verbose: %d %s\nwant %s", rec.Code, rec.Body, want)
+	}
+}
+
 func TestRetryAfterSeconds(t *testing.T) {
 	for d, want := range map[time.Duration]string{
 		0:                       "1",

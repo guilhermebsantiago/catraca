@@ -79,17 +79,19 @@ type App struct {
 	engine    *engine.Engine
 	scan      *secretscan.Handler
 	api       *api.Server
+	deps      *dependencyMonitor
 
 	closeOnce sync.Once
 	closeErr  error
 }
 
 // New builds an App from cfg. It loads the ruleset, opens the store and the
-// audit database and starts webhook delivery. A ruleset that fails to load
-// does not stop it: the error is logged, /readyz reports not ready and
-// decisions answer 503 until a reload succeeds, so an edit that breaks the
-// file never takes down a running deployment. An audit database that cannot
-// be opened does.
+// audit database, starts webhook delivery and starts checking the store and
+// the audit database in the background. A ruleset that fails to load does
+// not stop it: the error is logged, /readyz reports not ready and decisions
+// answer 503 until a reload succeeds, so an edit that breaks the file never
+// takes down a running deployment. An audit database that cannot be opened
+// does.
 func New(ctx context.Context, cfg *config.Config, opts Options) (_ *App, err error) {
 	log := opts.Logger
 	if log == nil {
@@ -157,6 +159,9 @@ func New(ctx context.Context, cfg *config.Config, opts Options) (_ *App, err err
 		return nil, err
 	}
 
+	a.deps = newDependencyMonitor(a.dependencies(), a.registry, log)
+	a.deps.start()
+
 	aopts := api.Options{
 		Decider:      a.engine,
 		Rules:        a.holder,
@@ -164,6 +169,7 @@ func New(ctx context.Context, cfg *config.Config, opts Options) (_ *App, err err
 		Audit:        a.audit,
 		Gate:         cfg.Gate.Precision(),
 		Checks:       a.checks(),
+		Dependencies: a.deps.statuses,
 		Gatherer:     a.registry,
 		Registerer:   a.registry,
 		Logger:       log,
@@ -385,8 +391,9 @@ func MissingHooks(rs *rules.Ruleset, hs []config.Hook) []string {
 	return out
 }
 
-// checks are the readiness checks: a ruleset is loaded, and the store and
-// the audit database answer.
+// checks are the readiness checks: a ruleset is loaded. They read the
+// server's own state only; see dependencyMonitor for why the store and the
+// audit database are not among them.
 func (a *App) checks() []api.Check {
 	return []api.Check{
 		{Name: "rules", Check: func(context.Context) error {
@@ -395,25 +402,20 @@ func (a *App) checks() []api.Check {
 			}
 			return nil
 		}},
-		{Name: "store", Check: func(ctx context.Context) error {
-			p, ok := a.store.(interface{ Ping(context.Context) error })
-			if !ok {
-				return nil
-			}
-			if err := p.Ping(ctx); err != nil {
-				a.log.Warn("readiness: the store is unreachable", "error", err)
-				return errors.New("unreachable")
-			}
-			return nil
-		}},
-		{Name: "audit", Check: func(ctx context.Context) error {
-			if err := a.audit.SQL().PingContext(ctx); err != nil {
-				a.log.Warn("readiness: the audit database is unreachable", "error", err)
-				return errors.New("unreachable")
-			}
-			return nil
-		}},
 	}
+}
+
+// dependencies are the services the dependency monitor checks: Redis, when
+// it is the store, and the audit database.
+func (a *App) dependencies() []dependency {
+	var deps []dependency
+	if p, ok := a.store.(interface{ Ping(context.Context) error }); ok {
+		deps = append(deps, dependency{name: "store", check: p.Ping})
+	}
+	deps = append(deps, dependency{name: "audit", check: func(ctx context.Context) error {
+		return a.audit.SQL().PingContext(ctx)
+	}})
+	return deps
 }
 
 // Run listens on the configured address and serves until ctx ends, then
@@ -491,7 +493,7 @@ func (a *App) reloadOnSignal() (stop func()) {
 }
 
 // Close shuts down everything but the HTTP server, which must already be
-// stopped, in dependency order:
+// stopped, in dependency order, once the dependency checks have stopped:
 //
 //  1. secret scanning finishes the tokens it accepted, which still need the
 //     engine;
@@ -505,6 +507,9 @@ func (a *App) reloadOnSignal() (stop func()) {
 func (a *App) Close(ctx context.Context) error {
 	a.closeOnce.Do(func() {
 		var errs []error
+		if a.deps != nil {
+			a.deps.close()
+		}
 		if a.scan != nil {
 			if err := a.scan.Shutdown(ctx); err != nil {
 				errs = append(errs, fmt.Errorf("stop secret scanning: %w", err))

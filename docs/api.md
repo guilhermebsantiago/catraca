@@ -576,25 +576,51 @@ true or false positive label per token.
 `/healthz` answers `200 {"status": "ok"}` while the process serves HTTP: use
 it as the liveness probe.
 
-`/readyz` is the readiness probe. It is ready when a ruleset is loaded, the
-store answers (Redis `PING`; the memory store always does) and the audit
-database answers, and otherwise `503` with the failing check:
+`/readyz` is the readiness probe. It is ready when a ruleset is loaded,
+and otherwise answers `503` with the failing check:
 
 ```sh
 curl -s "$CATRACA/readyz"
 ```
 
 ```json
-{"status": "ready", "checks": {"audit": "ok", "rules": "ok", "store": "ok"}}
+{"status": "ready", "checks": {"rules": "ok"}}
 ```
 
 ```json
-{"status": "not_ready", "checks": {"audit": "ok", "rules": "no ruleset loaded", "store": "ok"}}
+{"status": "not_ready", "checks": {"rules": "no ruleset loaded"}}
 ```
 
 A server whose ruleset failed to load at start keeps running, not ready,
 until a reload succeeds, so a broken edit never takes down instances that
 are already serving.
+
+Readiness looks at the server's own state only. Redis and the audit
+database are shared by every instance: if readiness depended on them, an
+outage of either would take every instance out of the load balancer at
+once, while Catraca can still decide without them (degraded without Redis,
+unrecorded without the audit database). Their health is reported
+separately, with `?verbose`:
+
+```sh
+curl -s "$CATRACA/readyz?verbose"
+```
+
+```json
+{"status": "ready", "checks": {"rules": "ok"},
+ "dependencies": {
+   "audit": {"status": "ok", "since": "2026-10-23T12:00:00Z", "checked_at": "2026-10-23T12:41:05Z", "duration_ms": 0.41},
+   "store": {"status": "timeout", "since": "2026-10-23T12:40:10Z", "checked_at": "2026-10-23T12:41:05Z", "duration_ms": 2000}}}
+```
+
+The server checks each dependency every 5 seconds in the background, all at
+once and each within 2 seconds, so `?verbose` answers from the last checks
+and never waits on a dependency itself. `status` is `ok`, `unavailable` or
+`timeout` (`unknown` before the first check); `since` is when it took that
+value. Only Redis is listed as `store`; the memory store is not a
+dependency. The reason for a failure is in the log, once when a dependency
+goes down and once when it is back. The same checks feed
+`catraca_dependency_up` and the other metrics below.
 
 ### GET /metrics
 
@@ -617,12 +643,16 @@ Prometheus metrics in the text format.
 | `catraca_ruleset_info{version}` | gauge | 1, labeled with the current ruleset version |
 | `catraca_ruleset_rules{mode}` | gauge | rules by mode |
 | `catraca_ruleset_loads_total{result}` | counter | loads at start and reloads, `ok` or `error` |
+| `catraca_dependency_up{dependency}` | gauge | 1 when the last check of `store` (Redis) or `audit` succeeded, else 0 |
+| `catraca_dependency_check_duration_seconds{dependency}` | gauge | how long the last check took; a timeout counts as 2s |
+| `catraca_dependency_check_failures_total{dependency}` | counter | checks that failed or timed out |
 | `catraca_build_info{version,goversion}` | gauge | 1, labeled with the build |
 
 plus the standard `go_*` and `process_*` metrics. Worth alerting on:
 `catraca_degraded_decisions_total` and `catraca_audit_dropped_total` rising,
-`catraca_hooks_dead_total`, `catraca_ruleset_loads_total{result="error"}`,
-and the `decide_failed` and `resolve_failed` outcomes.
+`catraca_dependency_up` at 0, `catraca_hooks_dead_total`,
+`catraca_ruleset_loads_total{result="error"}`, and the `decide_failed` and
+`resolve_failed` outcomes.
 
 ```sh
 curl -s "$CATRACA/metrics" | grep '^catraca_decisions_total'

@@ -99,6 +99,8 @@ type harness struct {
 
 type options struct {
 	rules string
+	// redisURL, when set, keeps counters in Redis instead of memory.
+	redisURL string
 }
 
 func newHarness(t *testing.T, opts options) *harness {
@@ -149,6 +151,9 @@ secret_scanning:
 logging:
   level: debug
 `, token, filepath.ToSlash(h.rulesPath), filepath.ToSlash(h.dbPath), h.hook.URL, secret, secret, keys.URL, resolver.URL, secret)
+	if opts.redisURL != "" {
+		yaml += fmt.Sprintf("store:\n  backend: redis\n  redis:\n    url: '%s'\n", opts.redisURL)
+	}
 	cfg, err := config.Parse([]byte(yaml), "", func(string) (string, bool) { return "", false })
 	if err != nil {
 		t.Fatalf("config: %v", err)
@@ -636,17 +641,69 @@ func TestReadiness(t *testing.T) {
 	t.Parallel()
 	h := newHarness(t, options{})
 	r := h.do("GET", "/readyz", "", nil)
-	var ready struct {
-		Status string            `json:"status"`
-		Checks map[string]string `json:"checks"`
-	}
+	var ready api.ReadyResponse
 	r.json(t, &ready)
-	want := map[string]string{"rules": "ok", "store": "ok", "audit": "ok"}
-	if r.status != http.StatusOK || ready.Status != "ready" || fmt.Sprint(ready.Checks) != fmt.Sprint(want) {
+	want := map[string]string{"rules": "ok"}
+	if r.status != http.StatusOK || ready.Status != "ready" || fmt.Sprint(ready.Checks) != fmt.Sprint(want) || ready.Dependencies != nil {
 		t.Errorf("readyz: %d %s", r.status, r.body)
 	}
 	if r := h.do("GET", "/healthz", "", nil); r.status != http.StatusOK || !strings.Contains(string(r.body), `"ok"`) {
 		t.Errorf("healthz: %d %s", r.status, r.body)
+	}
+
+	// The memory store is not a dependency; the audit database is.
+	eventually(t, 5*time.Second, func() bool {
+		r = h.do("GET", "/readyz?verbose", "", nil)
+		ready = api.ReadyResponse{}
+		r.json(t, &ready)
+		return ready.Dependencies["audit"].Status == "ok"
+	})
+	if _, ok := ready.Dependencies["store"]; ok || r.status != http.StatusOK || ready.Dependencies["audit"].CheckedAt.IsZero() {
+		t.Errorf("readyz?verbose: %d %s", r.status, r.body)
+	}
+	m := string(h.do("GET", "/metrics", "", nil).body)
+	if !strings.Contains(m, `catraca_dependency_up{dependency="audit"} 1`) {
+		t.Errorf("metrics lack catraca_dependency_up for the audit database")
+	}
+}
+
+// TestReadinessIgnoresDependencies runs the server on a Redis that does not
+// answer: decisions are degraded, and the server stays ready.
+func TestReadinessIgnoresDependencies(t *testing.T) {
+	t.Parallel()
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	ln.Close() // nothing listens there now
+	h := newHarness(t, options{redisURL: "redis://" + ln.Addr().String() + "/0"})
+
+	d, _ := h.decide(send("acct", "a@shop.example"))
+	if !d.Degraded || d.Action != decision.Allow {
+		t.Errorf("decision with Redis down: %+v", d)
+	}
+	r := h.do("GET", "/readyz", "", nil)
+	if r.status != http.StatusOK {
+		t.Errorf("readyz with Redis down: %d %s", r.status, r.body)
+	}
+	var ready api.ReadyResponse
+	eventually(t, 10*time.Second, func() bool {
+		r = h.do("GET", "/readyz?verbose", "", nil)
+		ready = api.ReadyResponse{}
+		r.json(t, &ready)
+		return ready.Dependencies["store"].Status == "unavailable"
+	})
+	if r.status != http.StatusOK || ready.Status != "ready" || ready.Dependencies["audit"].Status != "ok" {
+		t.Errorf("readyz?verbose with Redis down: %d %s", r.status, r.body)
+	}
+	if strings.Contains(string(r.body), ln.Addr().String()) {
+		t.Errorf("readyz shows the Redis address: %s", r.body)
+	}
+	if m := string(h.do("GET", "/metrics", "", nil).body); !strings.Contains(m, `catraca_dependency_up{dependency="store"} 0`) {
+		t.Error("metrics do not show the store down")
+	}
+	if !strings.Contains(h.logs.String(), "a dependency is unavailable") {
+		t.Error("no log of the store going down")
 	}
 }
 
