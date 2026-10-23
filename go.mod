@@ -2,6 +2,8 @@ module github.com/guilhermebsantiago/catraca
 
 go 1.26.0
 
+toolchain go1.26.10
+
 require (
 	cel.dev/cel-go v0.32.0
 	github.com/alicebob/miniredis/v2 v2.40.0

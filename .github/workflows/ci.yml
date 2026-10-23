@@ -5,6 +5,10 @@ on:
     branches: [main]
   pull_request:
   workflow_dispatch:
+  # Weekly on main as well, so a vulnerability published for the pinned
+  # toolchain or a dependency fails govulncheck without waiting for a commit.
+  schedule:
+    - cron: "27 6 * * 1"
 
 permissions:
   contents: read
@@ -39,6 +43,41 @@ jobs:
         run: go vet ./...
       - name: staticcheck
         run: go run honnef.co/go/tools/cmd/staticcheck@v0.8.1 ./...
+
+  vuln:
+    name: Vulnerabilities (govulncheck)
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      # setup-go installs the version on go.mod's toolchain line and sets
+      # GOTOOLCHAIN=local, so every job builds with that patch release.
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: go.mod
+      # govulncheck judges the standard library by the Go that runs it, so
+      # check that this is the toolchain go.mod pins. The Docker build does
+      # not read go.mod (the golang image sets GOTOOLCHAIN=local), so its
+      # image tag must name the same release; Dependabot bumps that tag but
+      # not the toolchain line, and this step makes the two move together.
+      - name: Toolchain
+        run: |
+          want="$(go mod edit -json | jq -r '.Toolchain // ("go" + .Go)')"
+          got="$(go env GOVERSION)"
+          docker="$(sed -n 's/^FROM golang:\([0-9.]*\)-alpine@.*/go\1/p' Dockerfile)"
+          echo "go.mod: $want, CI: $got, Dockerfile: $docker"
+          if [ "$got" != "$want" ]; then
+            echo "::error::CI runs $got but go.mod asks for $want"
+            exit 1
+          fi
+          if [ "$docker" != "$want" ]; then
+            echo "::error file=Dockerfile::the Dockerfile builds with ${docker:-an unpinned golang image}; go.mod asks for $want"
+            exit 1
+          fi
+      - name: govulncheck
+        run: go run golang.org/x/vuln/cmd/govulncheck@v1.9.0 ./...
 
   test:
     name: Test (Linux, Redis, Postgres)
