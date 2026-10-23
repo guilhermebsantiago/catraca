@@ -56,7 +56,7 @@ type auditLog struct {
 	retryFirst, retryMax time.Duration
 
 	// opened is closed once db is set; closed is closed when the log gives
-	// up, before or after opening.
+	// up on a database that never opened.
 	opened, closed chan struct{}
 	db             *audit.DB
 

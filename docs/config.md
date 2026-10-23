@@ -82,7 +82,8 @@ Catraca serves plain HTTP. Put it behind TLS (a load balancer, an ingress or
 a reverse proxy) when traffic leaves the host or a private network.
 
 **Health and metrics.** `/healthz`, `/readyz` and `/metrics` take no token,
-so they should not be reachable from where the API is. Without
+so only probes and Prometheus should reach them, not the API's clients.
+Without
 `admin_addr` they share the API's listener, and keeping them private is up
 to whatever is in front (expose only `/v1` through the load balancer). With
 `admin_addr` they move to a listener of their own and the API listener

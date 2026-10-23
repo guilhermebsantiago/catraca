@@ -505,7 +505,8 @@ func (a *App) Serve(ctx context.Context, ln, admin net.Listener) error {
 	a.log.Info("shutting down", "timeout", a.cfg.Server.ShutdownTimeout)
 	sctx, cancel := context.WithTimeout(context.Background(), a.cfg.Server.ShutdownTimeout)
 	defer cancel()
-	// The admin server stops last, so probes see the API server go.
+	// The admin server stops after the API's, so probes and scrapes keep an
+	// answer until the API has stopped.
 	for _, srv := range servers {
 		if err := srv.Shutdown(sctx); err != nil {
 			serveErr = errors.Join(serveErr, fmt.Errorf("stop the HTTP server: %w", err))
