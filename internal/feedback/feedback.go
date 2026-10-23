@@ -24,6 +24,7 @@ import (
 	"log/slog"
 	"maps"
 	"net/http"
+	"strconv"
 	"strings"
 	"time"
 
@@ -65,6 +66,10 @@ const (
 	OutcomeTooLarge Outcome = "too_large"
 	// OutcomeDecideFailed means the Decider returned an error for an event.
 	OutcomeDecideFailed Outcome = "decide_failed"
+	// OutcomeUncounted means an event was decided, but the store failed, so
+	// it may be missing from the counters (decision.Decision.Uncounted).
+	// The request is answered 503 so the provider sends it again.
+	OutcomeUncounted Outcome = "uncounted"
 	// OutcomeSubscriptionConfirmed means an SNS subscription was confirmed.
 	OutcomeSubscriptionConfirmed Outcome = "subscription_confirmed"
 	// OutcomeSubscriptionFailed means confirming an SNS subscription failed.
@@ -84,9 +89,12 @@ const (
 	defaultMaxBodyBytes = 1 << 20
 	// decideTimeout bounds the Decide calls of one request. They run
 	// detached from the request context so a provider that hangs up halfway
-	// does not leave a notification half recorded, which its retry would
-	// then record twice.
+	// does not leave a notification half recorded.
 	decideTimeout = 15 * time.Second
+	// retryAfter is the Retry-After of a 503 for feedback that could not be
+	// counted. SNS and useSend keep their own schedules; a platform posting
+	// generic feedback may wait this long before it sends the event again.
+	retryAfter = 10 * time.Second
 )
 
 // base holds what every handler shares.
@@ -138,8 +146,11 @@ func (b base) readBody(w http.ResponseWriter, r *http.Request) (body []byte, ok 
 
 // decideResult is what decideAll did with the events of a request.
 type decideResult struct {
+	// decided counts events that were decided and counted.
 	decided int
-	// failed counts events the Decider failed on in a way a retry may fix.
+	// failed counts events that may not have counted, in a way a retry may
+	// fix: the Decider failed on them, or decided them while the store
+	// failed (decision.Decision.Uncounted).
 	failed int
 	// invalid is the error of the first event the Decider refused as
 	// invalid (event.ErrInvalid), such as one older than the engine
@@ -169,6 +180,13 @@ func (b base) decideAll(r *http.Request, provider string, evs []event.Event) dec
 			b.log.ErrorContext(ctx, "feedback: decide failed",
 				"provider", provider, "kind", ev.Feedback.Kind, "error", err)
 			res.failed++
+		case d.Uncounted:
+			// A decision degraded by a store that merely answered late is
+			// not here: its writes still apply.
+			b.onOutcome(OutcomeUncounted)
+			b.log.WarnContext(ctx, "feedback: the store failed; asking the provider to send the event again",
+				"provider", provider, "kind", ev.Feedback.Kind, "event_id", d.EventID, "decision_id", d.ID)
+			res.failed++
 		default:
 			b.onOutcome(OutcomeDecided)
 			res.decided++
@@ -179,17 +197,38 @@ func (b base) decideAll(r *http.Request, provider string, evs []event.Event) dec
 }
 
 // answerDecided writes the response for a notification whose events were
-// handed to the Decider. When none was decided and some failed in a way a
-// retry may fix, the provider gets a 500 and retries. Otherwise it gets a
-// 200: a retry would record the decided events again and inflate the
-// account's bounce or complaint counters, an inflated counter can block a
-// good sender, and events refused as invalid would only be refused again.
+// handed to the Decider. When an event may not have counted, the provider
+// gets a 503 and sends the notification again: its events carry the same
+// ids each time, so those that counted do not count twice. Otherwise it
+// gets a 200, events refused as invalid included, since they would only be
+// refused again.
 func answerDecided(w http.ResponseWriter, res decideResult) {
-	if res.decided == 0 && res.failed > 0 {
-		writeError(w, http.StatusInternalServerError, "internal error")
+	if res.failed > 0 {
+		writeUnavailable(w)
 		return
 	}
 	writeOK(w)
+}
+
+// eventIDs gives each event of a notification an id made of base, the
+// provider's id for the notification, which it keeps when it sends the
+// notification again, and the event's position in it. The engine counts an
+// event once per id, so a notification sent again after a 503 counts each
+// of its events once. Without a base the events keep no id, and each
+// delivery counts.
+func eventIDs(evs []event.Event, base string) {
+	if base == "" {
+		return
+	}
+	for i := range evs {
+		evs[i].ID = base + ":" + strconv.Itoa(i)
+	}
+}
+
+// writeUnavailable asks the provider to send the request again later.
+func writeUnavailable(w http.ResponseWriter) {
+	w.Header().Set("Retry-After", strconv.Itoa(int(retryAfter/time.Second)))
+	writeError(w, http.StatusServiceUnavailable, "temporarily unavailable")
 }
 
 // invalidMessage returns what an event.ErrInvalid error says is wrong, for

@@ -37,6 +37,7 @@ func TestGenericFeedback(t *testing.T) {
 	dec := &recorder{}
 	h := newTestGeneric(t, dec, nil)
 	code, body := postSigned(t, h, `{
+		"id": "fb_1",
 		"account_id": "acct_123",
 		"time": "2026-10-15T12:00:00Z",
 		"from": "news@example.com",
@@ -62,7 +63,7 @@ func TestGenericFeedback(t *testing.T) {
 		t.Fatalf("got %d events", len(evs))
 	}
 	ev := evs[0]
-	if ev.Type != event.Feedback || ev.AccountID != "acct_123" || ev.From != "news@example.com" || ev.Attributes["provider"] != "postmark" {
+	if ev.ID != "fb_1" || ev.Type != event.Feedback || ev.AccountID != "acct_123" || ev.From != "news@example.com" || ev.Attributes["provider"] != "postmark" {
 		t.Errorf("event %+v", ev)
 	}
 	if ev.To != nil || ev.Subject != "" {
@@ -154,10 +155,22 @@ func TestGenericSignature(t *testing.T) {
 }
 
 func TestGenericDecideFails(t *testing.T) {
-	h := newTestGeneric(t, &recorder{fail: func(event.Event) bool { return true }}, nil)
-	code, body := postSigned(t, h, `{"account_id":"a","feedback":{"kind":"delivery"}}`)
-	if code != http.StatusInternalServerError || strings.Contains(body, "exploded") {
-		t.Errorf("status %d body %s", code, body)
+	for name, dec := range map[string]*recorder{
+		"decide fails": {fail: func(event.Event) bool { return true }},
+		"store failed": {uncounted: func(event.Event) bool { return true }},
+	} {
+		h := newTestGeneric(t, dec, nil)
+		b := []byte(`{"id":"fb_1","account_id":"a","feedback":{"kind":"delivery"}}`)
+		rec := post(t, h, b, http.Header{signature.Header: {signature.Sign(genericSecret, time.Now(), b)}})
+		if rec.Code != http.StatusServiceUnavailable || rec.Header().Get("Retry-After") != "10" || strings.Contains(rec.Body.String(), "exploded") {
+			t.Errorf("%s: status %d, Retry-After %q, body %s; want 503 and 10", name, rec.Code, rec.Header().Get("Retry-After"), rec.Body)
+		}
+	}
+	// A store that answered late still counts the event.
+	code, body := postSigned(t, newTestGeneric(t, &recorder{late: func(event.Event) bool { return true }}, nil),
+		`{"account_id":"a","feedback":{"kind":"delivery"}}`)
+	if code != http.StatusAccepted || !strings.Contains(body, `"degraded":true`) {
+		t.Errorf("late store: status %d body %s, want 202 with the degraded decision", code, body)
 	}
 }
 

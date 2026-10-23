@@ -5,6 +5,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"net/http"
+	"slices"
 	"strconv"
 	"testing"
 	"time"
@@ -245,8 +246,28 @@ func TestUseSendErrors(t *testing.T) {
 	t.Run("decide fails: useSend retries", func(t *testing.T) {
 		h := newTestUseSend(t, UseSendConfig{Decider: &recorder{fail: func(event.Event) bool { return true }}})
 		b := []byte(useSendBounce)
-		if rec := post(t, h, b, useSendHeaders(useSendSecret, time.Now(), b)); rec.Code != http.StatusInternalServerError {
-			t.Errorf("status %d, want 500", rec.Code)
+		wantRetry(t, post(t, h, b, useSendHeaders(useSendSecret, time.Now(), b)))
+	})
+	t.Run("store failed: useSend retries, with the same event ids", func(t *testing.T) {
+		failing := true
+		dec := &recorder{uncounted: func(event.Event) bool { return failing }}
+		var out outcomes
+		h := newTestUseSend(t, UseSendConfig{Decider: dec, OnOutcome: out.add})
+		b := []byte(useSendBounce)
+		wantRetry(t, post(t, h, b, useSendHeaders(useSendSecret, time.Now(), b)))
+		if !out.has(OutcomeUncounted) {
+			t.Errorf("outcomes %v, want uncounted", out.list)
+		}
+		failing = false
+		if rec := post(t, h, b, useSendHeaders(useSendSecret, time.Now(), b)); rec.Code != http.StatusOK {
+			t.Fatalf("retry: status %d, want 200", rec.Code)
+		}
+		var ids []string
+		for _, ev := range dec.got() {
+			ids = append(ids, ev.ID)
+		}
+		if want := []string{"usesend:call_abc123:0", "usesend:call_abc123:1"}; !slices.Equal(ids, want) {
+			t.Errorf("event ids = %q, want %q", ids, want)
 		}
 	})
 	t.Run("event refused: no retry that would be refused again", func(t *testing.T) {

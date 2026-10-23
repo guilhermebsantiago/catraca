@@ -611,7 +611,8 @@ Content-Type: application/json
 
 `401` when the signature does not verify, `400` with what is wrong with the
 event, including an event over a [limit](#limits) or older than
-`engine.max_event_age`.
+`engine.max_event_age`, and `503` with `Retry-After` when the event could
+not be counted: send it again, with the same `id`, so it counts once.
 
 ### POST /v1/feedback/ses and POST /v1/feedback/usesend
 
@@ -763,8 +764,8 @@ plus the standard `go_*` and `process_*` metrics. Worth alerting on:
 `catraca_degraded_decisions_total`, `catraca_audit_dropped_total` and
 `catraca_audit_failed_total` rising, `catraca_audit_retention_errors_total`,
 `catraca_dependency_up` at 0, `catraca_hooks_dead_total`,
-`catraca_ruleset_loads_total{result="error"}`, and the `decide_failed` and
-`resolve_failed` outcomes.
+`catraca_ruleset_loads_total{result="error"}`, and the `decide_failed`,
+`uncounted` and `resolve_failed` outcomes.
 
 ```sh
 curl -s "$CATRACA/metrics" | grep '^catraca_decisions_total'

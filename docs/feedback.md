@@ -35,6 +35,33 @@ Provider details that rules may want go to `event.attributes`: `provider`
 `5.1.1` or `5.7.1`), `complaint_type` (`abuse`, `fraud`, ...) and, for SES,
 `ses_bounce_type` and `complaint_subtype`.
 
+## When feedback cannot be counted
+
+When the store fails (Redis refuses connections or answers with an error),
+an event's decision comes back `degraded` and `uncounted`: the bounce or
+complaint is not in the counters. The feedback endpoints then answer `503`
+with `Retry-After: 10`, so the provider delivers the notification again,
+instead of a `200` that would lose it. Each event gets an id the provider
+keeps from one delivery to the next (below), and an event whose id has
+counted does not count again for `engine.dedupe_ttl` (10 minutes; see
+[retries](api.md#retries)), so the events of a notification that did count
+the first time are not counted twice. The same goes when an event fails for
+another reason a retry may fix, such as no ruleset being loaded. Events
+refused as invalid keep their answer, `200` for SES and useSend and `400`
+for the generic endpoint: they would be refused again.
+
+A store that answers after `engine.deadline` (10 ms) has not failed: the
+decision is `degraded`, but the store's round trip goes on in the background
+and its writes still apply, so the answer stays `200` and providers are not
+asked to retry while Redis is merely slow. The gap is a Redis that does not
+answer at all, as when packets are dropped: a decision waiting for a
+connection it never gets looks like a slow one, and feedback that arrives
+then may be lost. `catraca_dependency_up{dependency="store"}` shows such an
+outage.
+
+Set `dedupe_ttl` to outlast the longest retry schedule below. With
+`dedupe_ttl: 0s` a notification delivered again counts its events again.
+
 ## Amazon SES
 
 SES publishes bounce, complaint and delivery notifications to an Amazon SNS
@@ -56,10 +83,19 @@ topic, and SNS posts them to Catraca over HTTPS. Catraca:
    (`mail.source`), and its time is when the bounce, complaint or delivery
    happened.
 
-SNS retries a delivery only on 5xx and 429 answers. Catraca answers 503 when
-it cannot fetch the signing certificate and 500 when it could not record any
-event of a notification, so those are retried; everything else, including
-forgeries and notifications without an account, gets a final answer.
+SNS retries a delivery only on 5xx and 429 answers, and treats every other
+status as final. Catraca answers 503 when it cannot fetch the signing
+certificate, and 503 when an event of the notification could not be counted
+([above](#when-feedback-cannot-be-counted)), so those are retried; everything
+else, including forgeries and notifications without an account, gets a
+final answer. SNS ignores `Retry-After` and follows the subscription's
+[delivery policy](https://docs.aws.amazon.com/sns/latest/dg/sns-message-delivery-retries.html):
+by default three more attempts, 20 seconds apart, each given about 15
+seconds to answer, so it gives up about a minute after the first. A policy
+of your own may retry for up to an hour (a hard limit), and a dead-letter
+queue on the subscription keeps what it gives up on. A redelivered
+notification keeps its `MessageId`, and Catraca names the events of a
+notification `ses:<MessageId>:<n>`, so they count once.
 
 ### Setup with a configuration set (recommended)
 
@@ -213,8 +249,18 @@ h, err := feedback.NewUseSendHandler(feedback.UseSendConfig{
 })
 ```
 
-useSend retries any non-2xx answer up to six times; Catraca answers 5xx only
-when it could not record the feedback.
+useSend treats any answer but a 2xx, or no answer within 10 seconds, as a
+failure, and makes six attempts at a webhook call in all, backing off
+exponentially from 5 seconds: the last comes about two and a half minutes
+after the first. It ignores `Retry-After`. Catraca answers 5xx only when the
+feedback could not be counted
+([above](#when-feedback-cannot-be-counted)): a 503. Every attempt carries the
+same call id, the payload's `id`, as does a call retried by hand from
+useSend's dashboard, and Catraca names the events of a call
+`usesend:<id>:<n>`, so they count once. useSend disables a webhook once 30
+calls in a row have failed all their attempts, which a store outage of a few
+minutes can do when feedback flows steadily: check the webhook in useSend
+after one, and enable it again if needed.
 
 ## Generic endpoint
 
@@ -227,6 +273,7 @@ Content-Type: application/json
 Catraca-Signature: t=1760529600,v1=5f1c...e9
 
 {
+  "id": "fb_9f2c",
   "account_id": "acct_123",
   "time": "2026-10-15T12:00:00Z",
   "from": "news@example.com",
@@ -240,6 +287,10 @@ Catraca-Signature: t=1760529600,v1=5f1c...e9
 }
 ```
 
+- `id` is your id for this feedback event, so that sending it again counts
+  it once (see [retries](api.md#retries)): the provider's id for the bounce
+  or complaint, say, not the id of the email it is about, which a bounce and
+  a complaint share. Without it every sending counts.
 - `type` may be omitted; when present it must be `feedback`.
 - `account_id` and `feedback.kind` (`bounce`, `complaint` or `delivery`) are
   required; bounces also need `bounce_type` (`permanent` or `transient`).
@@ -267,16 +318,19 @@ req.Header.Set(signature.Header, signature.Sign(secret, time.Now(), body))
 ```
 
 The answer is `202 Accepted` with the decision, as for `POST /v1/events`;
-`400` explains what is wrong with the event, and `401` means the signature
-did not verify.
+`400` explains what is wrong with the event, `401` means the signature did
+not verify, and `503` with `Retry-After` means the event could not be
+counted ([above](#when-feedback-cannot-be-counted)): send it again later,
+signed anew, with the same `id`.
 
 ## Metrics
 
 Every handler reports what it did through `OnOutcome`, with a small, fixed
 set of values meant for a metric label: `decided`, `ignored`, `no_account`,
 `invalid_signature`, `topic_not_allowed`, `cert_unavailable`, `malformed`,
-`too_large`, `decide_failed`, `subscription_confirmed`,
-`subscription_failed` and `unsubscribed`. An event the engine refuses, such
+`too_large`, `decide_failed`, `uncounted` (decided while the store failed,
+and answered `503`), `subscription_confirmed`, `subscription_failed` and
+`unsubscribed`. An event the engine refuses, such
 as one over a [limit](api.md#limits) or older than `engine.max_event_age`,
 counts as `malformed`; SES and useSend get a `200` for it, since a retry
 would be refused the same way. A rising `no_account` usually

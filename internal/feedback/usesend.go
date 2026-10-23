@@ -60,8 +60,10 @@ type useSendHandler struct {
 // feedback events, one per address in the email's to list. Other event
 // types are acknowledged and ignored.
 //
-// useSend retries any non-2xx answer up to six times, so only a failure to
-// decide is answered with a 5xx.
+// useSend makes six attempts at a webhook call that gets any answer but a
+// 2xx, so only feedback that could not be counted is answered with a 5xx: a
+// 503, after which useSend sends the call again with the same id, and the
+// events that did count do not count twice.
 func NewUseSendHandler(cfg UseSendConfig) (http.Handler, error) {
 	b, err := newBase(cfg.Decider, cfg.MaxBodyBytes, cfg.Logger, cfg.OnOutcome)
 	if err != nil {
@@ -182,6 +184,11 @@ func (h *useSendHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		h.onOutcome(outcome)
 		writeOK(w)
 		return
+	}
+	// The payload's id is the webhook call's, which useSend keeps when it
+	// sends the call again, automatically or from its dashboard.
+	if hook.ID != "" {
+		eventIDs(evs, "usesend:"+hook.ID)
 	}
 	answerDecided(w, h.decideAll(r, "usesend", evs))
 }

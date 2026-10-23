@@ -263,6 +263,12 @@ first, retried with exponential backoff and jitter, and are idempotent per
 - `POST /v1/feedback/usesend`: useSend webhooks, signature verified.
 - `POST /v1/feedback`: a generic JSON feedback event.
 
+Each feedback event gets an id the provider keeps across deliveries (SNS's
+MessageId, useSend's call id, the generic event's own), so when an event
+comes back uncounted, or the Decider fails on it, the endpoint answers 503
+and the provider's retry counts each event once. A decision degraded only
+by the deadline keeps its 200.
+
 ## Leaked keys
 
 `POST /v1/secret-scanning/github` implements GitHub's secret scanning partner

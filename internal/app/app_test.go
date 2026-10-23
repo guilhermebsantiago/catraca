@@ -799,11 +799,12 @@ func (h *harness) signedFeedback(body string, key string) response {
 }
 
 // useSend posts a useSend webhook about one email of team, signed as useSend
-// signs them.
+// signs them. Each webhook call has its own id, as in useSend, unless the
+// same one is sent again: the id is made from kind and createdAt.
 func (h *harness) useSend(kind string, createdAt time.Time, team int) response {
 	h.t.Helper()
-	body := fmt.Sprintf(`{"id":"call_1","type":%q,"createdAt":%q,"teamId":%d,"data":{"id":"email_1","from":"news@us.example","to":["someone@mail.example"]}}`,
-		kind, createdAt.UTC().Format(time.RFC3339), team)
+	body := fmt.Sprintf(`{"id":"call_%s_%d","type":%q,"createdAt":%q,"teamId":%d,"data":{"id":"email_1","from":"news@us.example","to":["someone@mail.example"]}}`,
+		kind, createdAt.UnixNano(), kind, createdAt.UTC().Format(time.RFC3339), team)
 	ts := strconv.FormatInt(time.Now().UnixMilli(), 10)
 	mac := hmac.New(sha256.New, []byte(secret))
 	mac.Write([]byte(ts + "." + body))
@@ -955,9 +956,57 @@ func TestGenericFeedbackChangesLaterDecisions(t *testing.T) {
 	}
 }
 
+// TestFeedbackIsRetriedWhenTheStoreFails checks that feedback the store
+// could not count is answered 503, so the provider sends it again, while a
+// send is still decided, and that the feedback counts once it is.
+func TestFeedbackIsRetriedWhenTheStoreFails(t *testing.T) {
+	t.Parallel()
+	mr := storetest.Miniredis(t)
+	h := newHarness(t, options{redisURL: "redis://" + mr.Addr() + "/0?read_timeout=1m"})
+	mr.SetError("LOADING Redis is loading the dataset in memory")
+
+	d, r := h.decide(send("acct_down", "news@down.example"))
+	if !d.Degraded || !d.Uncounted || r.status != http.StatusOK {
+		t.Errorf("send with the store failing: %d %+v, want 200 and a degraded, uncounted decision", r.status, d)
+	}
+	complaint := `{"id":"fb-1","account_id":"acct_down","feedback":{"kind":"complaint"}}`
+	r = h.signedFeedback(complaint, secret)
+	if r.status != http.StatusServiceUnavailable || r.header.Get("Retry-After") != "10" {
+		t.Errorf("generic complaint with the store failing: %d %s, Retry-After %q", r.status, r.body, r.header.Get("Retry-After"))
+	}
+	at := time.Now()
+	if r := h.useSend("email.complained", at, 4343); r.status != http.StatusServiceUnavailable {
+		t.Errorf("useSend complaint with the store failing: %d %s", r.status, r.body)
+	}
+
+	mr.SetError("")
+	for i := range 2 {
+		r = h.signedFeedback(complaint, secret)
+		var out api.DecisionResponse
+		r.json(t, &out)
+		if r.status != http.StatusAccepted || out.Decision.Duplicate != (i > 0) {
+			t.Errorf("complaint sent again, %d: %d %s", i+1, r.status, r.body)
+		}
+		if r := h.useSend("email.complained", at, 4343); r.status != http.StatusOK {
+			t.Errorf("useSend complaint sent again, %d: %d %s", i+1, r.status, r.body)
+		}
+	}
+	m := string(h.do("GET", "/metrics", "", nil).body)
+	for _, want := range []string{
+		`catraca_feedback_outcomes_total{outcome="uncounted",provider="generic"} 1`,
+		`catraca_feedback_outcomes_total{outcome="uncounted",provider="usesend"} 1`,
+		`catraca_duplicate_events_total{type="feedback"} 2`,
+	} {
+		if !strings.Contains(m, want) {
+			t.Errorf("metrics lack %s", want)
+		}
+	}
+}
+
 // TestRetriesCountOnce sends events again with the ids they were first sent
-// with, as platforms retry, on each store: each event counts once, and the
-// answer to a retry says it was a duplicate.
+// with, as platforms and providers retry, through the decide, events,
+// generic feedback and useSend routes, on each store: each event counts
+// once, and the answer to a retry says it was a duplicate.
 func TestRetriesCountOnce(t *testing.T) {
 	t.Parallel()
 	stores := map[string]string{
@@ -1008,10 +1057,43 @@ func TestRetriesCountOnce(t *testing.T) {
 				t.Errorf("send after one complaint sent twice: %+v", d)
 			}
 
+			// The same through the generic feedback endpoint.
+			generic := fmt.Sprintf(`{"id":"fb-1","account_id":%q,"feedback":{"kind":"complaint"}}`, acct+"_gen")
+			for i := range 2 {
+				r := h.signedFeedback(generic, secret)
+				var out api.DecisionResponse
+				r.json(t, &out)
+				if r.status != http.StatusAccepted || out.Decision.Duplicate != (i > 0) {
+					t.Errorf("generic complaint %d of fb-1: %d %s", i+1, r.status, r.body)
+				}
+			}
+			if d, _ := h.decide(send(acct+"_gen", "hi@retry.example")); d.Action != decision.Allow {
+				t.Errorf("send after one generic complaint sent twice: %+v", d)
+			}
+
+			// And for useSend, which sends a webhook call again with its
+			// id.
+			team := int(run % 1_000_000_000)
+			at := time.Now()
+			for range 2 {
+				if r := h.useSend("email.complained", at, team); r.status != http.StatusOK {
+					t.Fatalf("useSend complaint: %d %s", r.status, r.body)
+				}
+			}
+			if d, _ := h.decide(send(strconv.Itoa(team), "news@us.example")); d.Action != decision.Allow {
+				t.Errorf("send after one useSend complaint sent twice: %+v", d)
+			}
+			if r := h.useSend("email.complained", at.Add(time.Second), team); r.status != http.StatusOK {
+				t.Fatalf("useSend complaint: %d %s", r.status, r.body)
+			}
+			if d, _ := h.decide(send(strconv.Itoa(team), "news@us.example")); d.Action != decision.Hold {
+				t.Errorf("send after two useSend complaints: %+v", d)
+			}
+
 			m := string(h.do("GET", "/metrics", "", nil).body)
 			for _, want := range []string{
 				`catraca_duplicate_events_total{type="send"} 3`,
-				`catraca_duplicate_events_total{type="feedback"} 1`,
+				`catraca_duplicate_events_total{type="feedback"} 3`,
 			} {
 				if !strings.Contains(m, want) {
 					t.Errorf("metrics lack %s", want)

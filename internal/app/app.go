@@ -262,7 +262,7 @@ func (a *App) feedback(opts *api.Options) error {
 	}, []string{"provider", "outcome"})
 	a.registry.MustRegister(outcomes)
 	count := func(provider string) func(feedback.Outcome) {
-		for _, o := range []feedback.Outcome{feedback.OutcomeDecided, feedback.OutcomeDecideFailed, feedback.OutcomeInvalidSignature} {
+		for _, o := range []feedback.Outcome{feedback.OutcomeDecided, feedback.OutcomeDecideFailed, feedback.OutcomeUncounted, feedback.OutcomeInvalidSignature} {
 			outcomes.WithLabelValues(provider, string(o))
 		}
 		return func(o feedback.Outcome) { outcomes.WithLabelValues(provider, string(o)).Inc() }

@@ -43,6 +43,7 @@ type genericHandler struct {
 // event.Event with type "feedback" (the type may be omitted):
 //
 //	{
+//	  "id": "fb_123",
 //	  "account_id": "acct_123",
 //	  "time": "2026-10-15T12:00:00Z",
 //	  "from": "news@example.com",
@@ -54,7 +55,8 @@ type genericHandler struct {
 // Requests must carry a valid signature.Header, the scheme Catraca signs its
 // own webhooks with, so a platform needs one implementation for both
 // directions; a platform in Go signs with signature.Sign. The answer is 202
-// with the decision, like POST /v1/events.
+// with the decision, like POST /v1/events, or 503 with Retry-After when the
+// event could not be counted: sent again with the same id, it counts once.
 func NewGenericHandler(cfg GenericConfig) (http.Handler, error) {
 	b, err := newBase(cfg.Decider, cfg.MaxBodyBytes, cfg.Logger, cfg.OnOutcome)
 	if err != nil {
@@ -94,8 +96,9 @@ func (h *genericHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		// The platform sent the event, so it can fix it: say what is wrong.
 		writeError(w, http.StatusBadRequest, invalidMessage(res.invalid))
 		return
-	case res.decided == 0:
-		writeError(w, http.StatusInternalServerError, "internal error")
+	case res.failed > 0:
+		// Sent again with the same id, it counts once.
+		writeUnavailable(w)
 		return
 	}
 	writeJSON(w, http.StatusAccepted, struct {
@@ -130,6 +133,7 @@ func genericEvent(in event.Event) (event.Event, error) {
 		return event.Event{}, errors.New(`feedback.kind must be "bounce", "complaint" or "delivery"`)
 	}
 	return event.Event{
+		ID:         in.ID,
 		Type:       event.Feedback,
 		Time:       in.Time,
 		AccountID:  strings.TrimSpace(in.AccountID),
