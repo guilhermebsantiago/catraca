@@ -89,12 +89,35 @@ func (v *validator) explicit(c *Config) {
 	for i, h := range c.Hooks {
 		v.positive(fmt.Sprintf("hooks[%d].timeout", i), h.Timeout)
 	}
+	if v.isSet("audit.max_open_conns") && c.Audit.MaxOpenConns < 1 {
+		v.add("audit.max_open_conns", "must be at least 1, got %d", c.Audit.MaxOpenConns)
+	}
+	if v.isSet("audit.max_idle_conns") && c.Audit.MaxIdleConns < 1 {
+		v.add("audit.max_idle_conns", "must be at least 1, got %d", c.Audit.MaxIdleConns)
+	}
+	v.positive("audit.conn_max_lifetime", c.Audit.ConnMaxLifetime)
+	v.positive("audit.conn_max_idle_time", c.Audit.ConnMaxIdleTime)
+	v.positive("audit.retention", c.Audit.Retention)
+	v.positive("audit.labeled_retention", c.Audit.LabeledRetention)
 }
 
 func (v *validator) positive(path string, d time.Duration) {
 	if v.isSet(path) && d <= 0 {
 		v.add(path, "must be a positive duration, got %s", d)
 	}
+}
+
+// durationText prints a duration the way it is written in the file: 720h,
+// not 720h0m0s.
+func durationText(d time.Duration) string {
+	s := d.String()
+	if strings.HasSuffix(s, "m0s") {
+		s = strings.TrimSuffix(s, "0s")
+	}
+	if strings.HasSuffix(s, "h0m") {
+		s = strings.TrimSuffix(s, "0m")
+	}
+	return s
 }
 
 func (v *validator) config(c *Config) {
@@ -187,6 +210,19 @@ func (v *validator) store(s Store) {
 func (v *validator) audit(a Audit) {
 	if _, err := audit.ParseEventMode(a.EventDetail); err != nil {
 		v.add("audit.event_detail", "want minimal or full, got %q", a.EventDetail)
+	}
+	if a.MaxOpenConns >= 1 && a.MaxIdleConns > a.MaxOpenConns {
+		v.add("audit.max_idle_conns", "must be at most max_open_conns (%d), got %d", a.MaxOpenConns, a.MaxIdleConns)
+	}
+	switch {
+	case a.Retention > 0 && a.Retention < audit.MinRetention:
+		v.add("audit.retention", "must be at least %s, so decisions stay long enough to be reviewed and labeled; got %s",
+			durationText(audit.MinRetention), durationText(a.Retention))
+	case a.LabeledRetention > 0 && a.Retention == 0:
+		v.add("audit.labeled_retention", "needs audit.retention: unlabeled decisions cannot be kept longer than labeled ones")
+	case a.LabeledRetention > 0 && a.LabeledRetention < a.Retention:
+		v.add("audit.labeled_retention", "must be at least audit.retention (%s), got %s: labeled decisions are the ones worth keeping",
+			durationText(a.Retention), durationText(a.LabeledRetention))
 	}
 	if !a.IsSQLite() {
 		if _, err := url.Parse(a.DSN.Value()); err != nil {

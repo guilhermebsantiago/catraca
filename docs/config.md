@@ -74,7 +74,7 @@ is logged or dumped. `config check` shows URLs without their passwords.
 |---|---|---|
 | `listen` | `:8080` | `host:port` to listen on. `:8080` listens on every interface; use `127.0.0.1:8080` to listen locally only |
 | `max_body_bytes` | `1048576` | largest JSON body on the `/v1` routes, at least 1024. Feedback and secret scanning routes have their own limits (1 MiB and 10 MiB) |
-| `shutdown_timeout` | `30s` | how long a graceful shutdown may take: draining requests, finishing accepted leaked-key batches, writing queued decisions |
+| `shutdown_timeout` | `30s` | how long a graceful shutdown may take: draining requests, finishing accepted leaked-key batches, writing queued decisions. Decisions still queued when it runs out are not written to the audit log ([details](audit.md#how-decisions-are-written)) |
 
 Catraca serves plain HTTP. Put it behind TLS (a load balancer, an ingress or
 a reverse proxy) when traffic leaves the host or a private network.
@@ -132,10 +132,27 @@ The decision log, labels and the webhook outbox. See [audit](audit.md).
 |---|---|---|
 | `dsn` | `sqlite:catraca.db` | `sqlite:<path>` or a plain path for SQLite, `postgres://user:pass@host:5432/db?sslmode=require` for Postgres |
 | `event_detail` | `minimal` | `minimal` keeps no message content; `full` also keeps the whole event as sent |
+| `retention` | unset: keep everything | delete decisions without a label this long after they were decided, and webhook deliveries this long after they were delivered or died; at least `24h` |
+| `labeled_retention` | unset: keep forever | delete labeled decisions, with their labels, this long after they were decided; needs `retention` and must be at least as long |
+| `max_open_conns` | `10` | most connections to the database from this process |
+| `max_idle_conns` | `max_open_conns` | most idle connections kept open for reuse; at most `max_open_conns` |
+| `conn_max_lifetime` | `30m` | close connections this long after they opened, so they follow a failover or a DNS change |
+| `conn_max_idle_time` | `5m` | close connections idle this long |
 
 Use SQLite for one instance and Postgres for several. Opening the database
 applies migrations. A database that cannot be opened stops the server from
 starting.
+
+[Retention](audit.md#retention) is off by default. Durations have no day
+unit, so 90 days is `2160h`. Labeled decisions are kept forever unless
+`labeled_retention` says otherwise, because the precision gate counts labels
+over all time.
+
+The connection settings bound what one process opens: with a slow database,
+callers wait for a free connection instead of opening more until the server
+refuses them. On Postgres keep `max_open_conns` times the number of
+instances under `max_connections`. An in-memory SQLite database ignores
+them and keeps its one connection.
 
 ### engine
 

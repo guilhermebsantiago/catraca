@@ -103,7 +103,7 @@ func openOutbox(t *testing.T) *audit.DB {
 	if err != nil {
 		t.Fatal(err)
 	}
-	t.Cleanup(func() { db.Close() })
+	t.Cleanup(func() { db.Close(context.Background()) })
 	return db
 }
 

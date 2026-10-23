@@ -82,7 +82,7 @@ labels in the audit database, with the shadow rules that pass the gate
 	if db == nil {
 		return code
 	}
-	defer db.Close()
+	defer db.Close(ctx)
 	stats, err := db.RuleStats(ctx, since)
 	if err != nil {
 		c.errorf("%v", err)

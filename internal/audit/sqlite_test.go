@@ -12,6 +12,8 @@ import (
 	"time"
 	"unicode/utf8"
 
+	"github.com/jackc/pgx/v5/pgconn"
+
 	"github.com/guilhermebsantiago/catraca/internal/event"
 )
 
@@ -34,7 +36,7 @@ func TestOpenDSN(t *testing.T) {
 		if _, err := db.Get(context.Background(), "d1"); err != nil {
 			t.Errorf("Open(%q): Get: %v", dsn, err)
 		}
-		db.Close()
+		db.Close(context.Background())
 	}
 	if _, err := Open(context.Background(), "", Options{}); err == nil {
 		t.Error("Open(\"\"): want an error")
@@ -53,7 +55,7 @@ func TestNewerSchemaIsRefused(t *testing.T) {
 	if _, err := db.SQL().Exec("INSERT INTO schema_migrations (version, name, applied_at_us) VALUES (999, 'future.sql', 0)"); err != nil {
 		t.Fatal(err)
 	}
-	db.Close()
+	db.Close(context.Background())
 	_, err = OpenSQLite(context.Background(), path, Options{})
 	if err == nil || !strings.Contains(err.Error(), "newer") {
 		t.Errorf("Open on a newer schema: err = %v, want a version error", err)
@@ -72,7 +74,7 @@ func TestRecordDropsWhenBufferFull(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer db.Close()
+	defer db.Close(ctx)
 
 	locker, err := sql.Open("sqlite", path)
 	if err != nil {
@@ -121,10 +123,164 @@ func TestRecordWithoutIDIsDropped(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer db.Close()
+	defer db.Close(context.Background())
 	db.Record(context.Background(), sendEvent("x"), newDecision("", t0, nil, nil))
 	if s := db.RecorderStats(); s.Dropped != 1 || s.Queued != 0 {
 		t.Errorf("RecorderStats = %+v, want 1 dropped", s)
+	}
+}
+
+// TestUnreachableIsNotRejected checks that a database that cannot take
+// writes fails the whole batch after its retries, instead of trying each row
+// and counting them as refused.
+func TestUnreachableIsNotRejected(t *testing.T) {
+	ctx := context.Background()
+	logs := &logBuffer{}
+	db, err := OpenSQLite(ctx, filepath.Join(t.TempDir(), "audit.db"), Options{FlushInterval: time.Hour, Logger: logs.logger()})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close(ctx)
+	// Closing the handle under the writer makes every query and ping fail.
+	db.SQL().Close()
+	for i := range 4 {
+		id := fmt.Sprintf("d%d", i)
+		db.Record(ctx, sendEvent(id), newDecision(id, t0, nil, nil))
+	}
+	if err := db.Flush(ctx); err == nil {
+		t.Error("Flush to a closed database: want an error")
+	}
+	if s := db.RecorderStats(); s.Failed != 4 || s.Rejected != 0 || s.Recorded != 0 {
+		t.Errorf("RecorderStats = %+v, want 4 failed and none rejected", s)
+	}
+	if out := logs.String(); !strings.Contains(out, "writing decisions failed") || strings.Contains(out, "refused") {
+		t.Errorf("logs = %s", out)
+	}
+}
+
+// TestRefused checks which errors make the writer retry a batch row by row:
+// the database refusing values, not the database being unavailable.
+func TestRefused(t *testing.T) {
+	for code, want := range map[string]bool{
+		"22021": true,  // invalid byte sequence: a NUL byte in text
+		"22P05": true,  // untranslatable character: \u0000 in jsonb
+		"23505": true,  // unique violation
+		"54000": true,  // program limit exceeded
+		"25006": false, // read-only transaction, after a failover
+		"53100": false, // disk full
+		"57P01": false, // admin shutdown
+		"40P01": false, // deadlock
+		"":      false,
+	} {
+		err := fmt.Errorf("insert into decisions: %w", &pgconn.PgError{Code: code})
+		if got := postgresRefused(err); got != want {
+			t.Errorf("postgresRefused(%q) = %v, want %v", code, got, want)
+		}
+	}
+	if postgresRefused(context.DeadlineExceeded) || sqliteRefused(context.DeadlineExceeded) {
+		t.Error("a timeout counts as refused")
+	}
+
+	ctx := context.Background()
+	path := filepath.Join(t.TempDir(), "audit.db")
+	db, err := OpenSQLite(ctx, path, Options{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close(ctx)
+	insert := "INSERT INTO schema_migrations (version, name, applied_at_us) VALUES (1, 'again', 0)"
+	_, err = db.SQL().ExecContext(ctx, insert)
+	if err == nil || !sqliteRefused(err) {
+		t.Errorf("a primary key violation: refused = false (%v)", err)
+	}
+
+	// A write lock held elsewhere is the database being unavailable.
+	locker, err := sql.Open("sqlite", path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer locker.Close()
+	conn, err := locker.Conn(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer conn.Close()
+	if _, err := conn.ExecContext(ctx, "BEGIN IMMEDIATE"); err != nil {
+		t.Fatal(err)
+	}
+	defer conn.ExecContext(ctx, "ROLLBACK")
+	impatient, err := sql.Open("sqlite", path+"?_busy_timeout=10")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer impatient.Close()
+	_, err = impatient.ExecContext(ctx, "DELETE FROM schema_migrations WHERE version = 999")
+	if err == nil || sqliteRefused(err) {
+		t.Errorf("a locked database: refused = true (%v)", err)
+	}
+}
+
+func TestCloseWithNothingQueued(t *testing.T) {
+	db, err := Open(context.Background(), filepath.Join(t.TempDir(), "audit.db"), Options{Retention: 30 * 24 * time.Hour})
+	if err != nil {
+		t.Fatal(err)
+	}
+	// An ended context loses nothing when nothing is queued, and stops the
+	// retention loop at once.
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	if err := db.Close(ctx); err != nil {
+		t.Errorf("Close with nothing queued = %v", err)
+	}
+	waitWriter(t, db)
+	select {
+	case <-db.pruned:
+	case <-time.After(5 * time.Second):
+		t.Error("the retention loop did not stop")
+	}
+}
+
+func TestOptionsValidation(t *testing.T) {
+	day := 24 * time.Hour
+	for _, tt := range []struct {
+		name string
+		opts Options
+		want string
+	}{
+		{"short retention", Options{Retention: time.Hour}, "retention must be at least 24h"},
+		{"negative retention", Options{Retention: -day}, "cannot be negative"},
+		{"labeled without retention", Options{LabeledRetention: 30 * day}, "needs a retention"},
+		{"labeled shorter", Options{Retention: 30 * day, LabeledRetention: 7 * day}, "must be at least the retention"},
+	} {
+		_, err := Open(context.Background(), ":memory:", tt.opts)
+		if err == nil || !strings.Contains(err.Error(), tt.want) {
+			t.Errorf("%s: Open = %v, want %q", tt.name, err, tt.want)
+		}
+	}
+	db, err := Open(context.Background(), ":memory:", Options{Retention: 30 * day, LabeledRetention: 30 * day})
+	if err != nil {
+		t.Fatalf("equal retentions: %v", err)
+	}
+	db.Close(context.Background())
+}
+
+func TestPoolDefaults(t *testing.T) {
+	got := Pool{}.withDefaults()
+	want := Pool{MaxOpen: 10, MaxIdle: 10, MaxLifetime: 30 * time.Minute, MaxIdleTime: 5 * time.Minute}
+	if got != want {
+		t.Errorf("Pool{}.withDefaults() = %+v, want %+v", got, want)
+	}
+	if got := (Pool{MaxOpen: 4, MaxIdle: 8}).withDefaults(); got.MaxIdle != 4 {
+		t.Errorf("MaxIdle above MaxOpen = %d, want 4", got.MaxIdle)
+	}
+	// An in-memory database is its one connection, whatever the pool says.
+	db, err := Open(context.Background(), ":memory:", Options{Pool: Pool{MaxOpen: 5}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close(context.Background())
+	if got := db.SQL().Stats().MaxOpenConnections; got != 1 {
+		t.Errorf(":memory: MaxOpenConnections = %d, want 1", got)
 	}
 }
 

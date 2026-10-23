@@ -127,11 +127,9 @@ func New(ctx context.Context, cfg *config.Config, opts Options) (_ *App, err err
 	}
 	a.catalog = signal.NewCatalog(a.store, signal.Options{})
 
-	mode, err := audit.ParseEventMode(cfg.Audit.EventDetail)
-	if err != nil {
-		return nil, err
-	}
-	a.audit, err = audit.Open(ctx, cfg.Audit.DSN.Value(), audit.Options{EventMode: mode, Logger: log.With("component", "audit")})
+	auditOpts := cfg.Audit.Options()
+	auditOpts.Logger = log.With("component", "audit")
+	a.audit, err = audit.Open(ctx, cfg.Audit.DSN.Value(), auditOpts)
 	if err != nil {
 		return nil, fmt.Errorf("open the audit database: %w", err)
 	}
@@ -524,7 +522,7 @@ func (a *App) Close(ctx context.Context) error {
 			}
 		}
 		if a.audit != nil {
-			if err := a.audit.Close(); err != nil {
+			if err := a.audit.Close(ctx); err != nil {
 				errs = append(errs, fmt.Errorf("close the audit database: %w", err))
 			}
 		}

@@ -120,6 +120,40 @@ type Audit struct {
 	// EventDetail is how much of each event is kept: "minimal" (the
 	// default, no message content) or "full".
 	EventDetail string `yaml:"event_detail"`
+	// Retention is how long decisions without a label, and webhook
+	// deliveries once delivered or dead, are kept before a background job
+	// deletes them. At least 24h. Unset keeps everything.
+	Retention time.Duration `yaml:"retention"`
+	// LabeledRetention is how long labeled decisions are kept. Unset keeps
+	// them forever, since the precision gate counts labels over all time.
+	// It needs Retention and must be at least as long.
+	LabeledRetention time.Duration `yaml:"labeled_retention"`
+	// MaxOpenConns is the most connections to the database. Default 10.
+	MaxOpenConns int `yaml:"max_open_conns"`
+	// MaxIdleConns is the most idle connections kept open. Default
+	// MaxOpenConns.
+	MaxIdleConns int `yaml:"max_idle_conns"`
+	// ConnMaxLifetime closes connections this long after they opened.
+	// Default 30m.
+	ConnMaxLifetime time.Duration `yaml:"conn_max_lifetime"`
+	// ConnMaxIdleTime closes connections idle this long. Default 5m.
+	ConnMaxIdleTime time.Duration `yaml:"conn_max_idle_time"`
+}
+
+// Options returns the audit database options the section describes. The
+// caller sets the logger.
+func (a Audit) Options() audit.Options {
+	return audit.Options{
+		EventMode: audit.EventMode(a.EventDetail),
+		Pool: audit.Pool{
+			MaxOpen:     a.MaxOpenConns,
+			MaxIdle:     a.MaxIdleConns,
+			MaxLifetime: a.ConnMaxLifetime,
+			MaxIdleTime: a.ConnMaxIdleTime,
+		},
+		Retention:        a.Retention,
+		LabeledRetention: a.LabeledRetention,
+	}
 }
 
 // Engine configures decisions.
@@ -298,6 +332,18 @@ func (c *Config) applyDefaults() {
 	}
 	if c.Audit.EventDetail == "" {
 		c.Audit.EventDetail = string(audit.EventMinimal)
+	}
+	if c.Audit.MaxOpenConns == 0 {
+		c.Audit.MaxOpenConns = audit.DefaultPoolMaxOpen
+	}
+	if c.Audit.MaxIdleConns == 0 {
+		c.Audit.MaxIdleConns = c.Audit.MaxOpenConns
+	}
+	if c.Audit.ConnMaxLifetime == 0 {
+		c.Audit.ConnMaxLifetime = audit.DefaultPoolMaxLifetime
+	}
+	if c.Audit.ConnMaxIdleTime == 0 {
+		c.Audit.ConnMaxIdleTime = audit.DefaultPoolMaxIdleTime
 	}
 	if c.Engine.Deadline == 0 {
 		c.Engine.Deadline = engine.DefaultDeadline

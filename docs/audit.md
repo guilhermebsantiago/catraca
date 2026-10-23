@@ -31,6 +31,21 @@ its decisions to the same tables, and the webhook outbox lets several
 processes deliver at once without sending a delivery twice
 (`FOR UPDATE SKIP LOCKED`).
 
+Each process keeps a bounded pool of connections, at most
+`audit.max_open_conns` (10 by default; see [configuration](config.md#audit)).
+When the database is slow, everything that uses it (the decision writer,
+the outbox, the API, health checks) waits for a free connection, each up to
+its own deadline, instead of opening more until Postgres refuses
+connections for everyone. Keep `max_open_conns` times the number of
+processes under Postgres's `max_connections`, with room for other clients.
+The pool is exported as the
+`go_sql_*{db_name="audit"}` metrics: `go_sql_in_use_connections` at the
+maximum and `go_sql_wait_count_total` rising mean callers are queuing for
+connections. On SQLite the pool bounds open files and memory; SQLite runs
+one write at a time whatever its size. An in-memory SQLite database
+(`:memory:`) always has exactly one connection, since closing it would drop
+the data.
+
 Opening the database applies migrations automatically. They are embedded in
 the binary, numbered (`0001_init.sql`, ...), applied in one transaction and
 recorded in a `schema_migrations` table. On Postgres an advisory lock keeps two
@@ -66,7 +81,7 @@ to decisions.
 
 Set the event mode to `full` to also keep the whole event as the platform sent
 it, under `full`. Only do this when your privacy policy allows keeping message
-metadata, and consider a shorter retention.
+metadata, and consider a shorter [retention](#retention).
 
 The decision itself is kept whole: action, enforced matches and shadow
 matches with their reasons, rules that errored, the degraded flag, the
@@ -81,14 +96,40 @@ background writer inserts the buffer in batches (256 decisions or every
 
 When the buffer is full, because the database is slow or down, new decisions
 are dropped rather than slowing down every send. Drops are counted and logged
-(once per ten seconds, with the count). `RecorderStats` reports decisions
-recorded, dropped, failed (queued but not written after three attempts) and
-queued; export them as metrics and alert on drops.
+(once per ten seconds, with the count).
+
+When the database refuses a batch because of the values in it, usually one
+decision holding something it cannot store (Postgres text cannot hold a NUL
+byte), the writer inserts that batch's decisions one at a time: the others
+are written, and only a decision refused again is lost. Each one is counted
+as rejected and logged with its decision id (`the database refused a
+decision`, at most one line a second). A refusal is a Postgres error of
+SQLSTATE class 22 (data exception), 23 (integrity constraint) or 54
+(program limit), or a SQLite constraint, too-big or type-mismatch error.
+Any other failure means the database cannot take writes, because it is
+down, locked, full or read-only: the batch is tried three times in all and
+then counted as failed.
+
+`RecorderStats` reports decisions recorded, dropped, failed (queued but not
+written: the database was down, the shutdown ran out of time, or the
+database refused them), rejected (the refused ones, also counted as failed)
+and queued; export them as metrics and alert on drops and failures.
 
 A decision can be read and labeled as soon as Record returns: when `Get` or
 `Label` does not find a decision and the buffer is not empty, it flushes the
-buffer and looks again. `Close` stops accepting decisions and writes
-everything still queued.
+buffer and looks again. `Flush(ctx)` writes everything queued; when ctx ends
+first it returns ctx's error, and the decisions stay queued to be written
+later.
+
+`Close(ctx)` stops accepting decisions and writes everything still queued,
+for as long as ctx allows, or 30 seconds when ctx has no deadline. The server
+gives it what is left of `server.shutdown_timeout` after the HTTP requests
+have drained. When the time runs out, Close aborts the write in flight and
+gives up on every decision still queued: they are lost from the log, counted
+as failed, and reported in one error line, `closed before every queued
+decision was written`, with their number as `unwritten`. The platform
+already has their answers; only the audit records are missing. Close then
+closes the database and returns an error wrapping ctx's.
 
 ## Labels
 
@@ -239,6 +280,78 @@ Promote candidates are shadow rules that pass the gate. Retire candidates are
 enforced rules below it, including those kept enforced by an override. The
 same report is available as JSON (`precision.Report.WriteJSON`).
 
+## Retention
+
+By default nothing is deleted. Every send adds a decision row, with the
+decision and its stored event as JSON, and a row per rule that matched, so
+the log grows until the disk is full; the webhook outbox, in the same
+database, keeps every delivery. Set `audit.retention` to have Catraca delete
+old rows in the background:
+
+```yaml
+audit:
+  retention: 2160h             # 90 days, for decisions without a label
+  # labeled_retention: 17520h  # 2 years; unset keeps labeled decisions forever
+```
+
+| rows | deleted |
+|---|---|
+| decisions without a label, with their matches | decided more than `retention` ago |
+| decisions with a label, with their matches and labels | decided more than `labeled_retention` ago; never while it is unset |
+| webhook deliveries that were delivered or are dead | finished more than `retention` ago |
+| webhook deliveries still pending | never: they have yet to be sent |
+
+**Labeled decisions are kept longer** because they are the evidence the
+precision gate counts. `catraca rules gate` and `catraca report` read labels
+over all time by default, so deleting old labels would quietly change a
+rule's measured precision, and drop it under the gate's minimum number of
+labels. They are also the examples a backtest needs. Labels come from
+reversals and reviews, so they are few next to decisions and cost little to
+keep. If your privacy policy caps how long any decision may be kept, set
+`labeled_retention` to that cap; it must be at least `retention`.
+
+Once a decision is deleted, `GET /v1/decisions/{id}` and labeling it answer
+`404`, and the review queue no longer lists it. Label a decision before it
+ages out: a label that arrives while its decision is being deleted is
+deleted with it. Rule stats over a window longer than `retention` count
+fewer matches, while their labeled matches and true and false positives
+stay complete as long as labeled decisions are kept. Keep `retention` at
+least as long as the windows you look at (`/v1/stats/rules` defaults to
+720h). It cannot be under 24h, so decisions stay long enough to be reviewed.
+
+Each process looks for expired rows a minute after it starts and then every
+ten minutes. It deletes at most 500 rows per statement, oldest first, and
+after each statement waits at least as long as the statement took, so no
+statement holds locks for long and working through a backlog takes at most
+about half of the database's write time. That matters most on SQLite, where
+the decision writer waits for each delete. On Postgres, processes deleting at
+the same time skip each other's rows (`FOR UPDATE SKIP LOCKED`). Deleted rows
+are counted in `catraca_audit_retention_deleted_total{table}`, with `table`
+`decisions` or `outbox`, and logged once per run. A run that fails is logged,
+counted in `catraca_audit_retention_errors_total` and tried again on the next
+run.
+
+Deleting rows does not shrink the files: both databases reuse the space for
+new rows, so the database levels off at about one retention window of data.
+To give the space back to the operating system, run `VACUUM` on SQLite (it
+blocks writes while it runs) or `pg_repack` or `VACUUM FULL` on Postgres.
+
+**Upgrading.** The release that adds retention also adds two indexes, in
+migration `0002_retention.sql`, whether retention is on or not:
+`decisions (decided_at_us)` and `outbox (updated_at_us)` over finished
+deliveries. Building an index blocks writes to its table until it is built,
+which takes a while on a large table, and the migration runs when Catraca
+starts. On a large Postgres database, build them beforehand without blocking
+writes; the migration then finds them and skips them:
+
+```sql
+CREATE INDEX CONCURRENTLY IF NOT EXISTS decisions_decided_at ON decisions (decided_at_us);
+CREATE INDEX CONCURRENTLY IF NOT EXISTS outbox_finished ON outbox (updated_at_us) WHERE status IN ('delivered', 'dead');
+```
+
+A concurrent build that fails leaves an invalid index behind (`\d decisions`
+marks it `INVALID`); drop it and build it again before upgrading.
+
 ## Schema
 
 | table | one row per | notes |
@@ -252,10 +365,11 @@ same report is available as JSON (`precision.Report.WriteJSON`).
 Times are stored as unix microseconds (UTC) in `*_at_us` columns on both
 databases, which keeps the queries identical. Each query has an index:
 rule stats read a covering index on match time, the review queue a partial
-index on unlabeled matches, and the outbox a partial index on pending
-deliveries.
+index on unlabeled matches, the outbox a partial index on pending
+deliveries, and retention an index on decision time and a partial index on
+finished deliveries.
 
-Catraca does not delete old decisions. To keep a retention window, delete
+To delete decisions by hand instead of with [retention](#retention), delete
 from `decisions`; matches and labels go with them through `ON DELETE
 CASCADE`. In the `sqlite3` shell, run `PRAGMA foreign_keys = ON` first.
 

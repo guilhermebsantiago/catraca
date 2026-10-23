@@ -29,12 +29,14 @@ func (db *DB) Get(ctx context.Context, decisionID string) (Entry, error) {
 }
 
 // flushIfPending flushes when decisions are waiting to be written and
-// reports whether it did.
+// reports whether it is worth looking again. A flush that failed for some
+// rows still wrote the others, so only a context that ended says no.
 func (db *DB) flushIfPending(ctx context.Context) bool {
 	if db.pending.Load() <= 0 {
 		return false
 	}
-	return db.Flush(ctx) == nil
+	err := db.Flush(ctx)
+	return err == nil || ctx.Err() == nil
 }
 
 func (db *DB) get(ctx context.Context, id string) (Entry, error) {
