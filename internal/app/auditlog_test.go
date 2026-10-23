@@ -161,6 +161,51 @@ func TestAuditLogGivesUpOnClose(t *testing.T) {
 	}
 }
 
+// TestAuditLogLeakReportsWhileOpening checks the leaked-key reports while
+// the database is not open: storing fails at once, so the endpoint can
+// answer 503, while claiming waits for the database and then works.
+func TestAuditLogLeakReportsWhileOpening(t *testing.T) {
+	reachable := make(chan struct{})
+	l, attempts := startAuditLog(t, io.Discard, func(int) error {
+		select {
+		case <-reachable:
+			return nil
+		default:
+			return fmt.Errorf("failed to connect: %w", errRefused)
+		}
+	})
+	waitFor(t, "an attempt", func() bool { return attempts.Load() >= 1 })
+	report := audit.LeakReport{Key: "k1", TokenSHA256: "sha", Type: "acme_api_key", ReceivedAt: time.Now()}
+
+	// Storing would hold GitHub's request: it fails at once, whatever the
+	// context allows.
+	if _, err := l.AddLeakReports(context.Background(), []audit.LeakReport{report}); !errors.Is(err, api.ErrAuditUnavailable) {
+		t.Errorf("AddLeakReports before the database opens = %v, want ErrAuditUnavailable", err)
+	}
+	if _, err := l.LeakReportsByKey(context.Background(), []string{"k1"}); !errors.Is(err, api.ErrAuditUnavailable) {
+		t.Errorf("LeakReportsByKey before the database opens = %v", err)
+	}
+	claimed := make(chan []audit.LeakReport, 1)
+	go func() {
+		rs, err := l.ClaimLeakReports(context.Background(), time.Now().Add(time.Minute), 10, time.Minute)
+		if err != nil {
+			t.Errorf("ClaimLeakReports: %v", err)
+		}
+		claimed <- rs
+	}()
+
+	close(reachable)
+	waitFor(t, "the database to open", func() bool { return l.current() != nil })
+	if n, err := l.AddLeakReports(context.Background(), []audit.LeakReport{report}); err != nil || n != 1 {
+		t.Fatalf("AddLeakReports after the database opened = %d, %v", n, err)
+	}
+	// The claim waited for the database; it may have run before or after
+	// the report was stored.
+	if rs := <-claimed; len(rs) > 1 {
+		t.Errorf("claimed %+v", rs)
+	}
+}
+
 func TestUnreachable(t *testing.T) {
 	for _, tt := range []struct {
 		name string

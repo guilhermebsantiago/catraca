@@ -13,13 +13,16 @@ import (
 	"encoding/json"
 	"encoding/pem"
 	"errors"
+	"log/slog"
 	"net/http"
 	"net/http/httptest"
+	"path/filepath"
 	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
 
+	"github.com/guilhermebsantiago/catraca/internal/audit"
 	"github.com/guilhermebsantiago/catraca/internal/decision"
 	"github.com/guilhermebsantiago/catraca/internal/event"
 )
@@ -128,7 +131,9 @@ func sha256Sum(b []byte) []byte {
 	return sum[:]
 }
 
-// resolver is a fake Resolver keyed by the token's raw value.
+// resolver is a fake Resolver. Tests name tokens by their raw value; it
+// finds them by hash, as a platform that stores key hashes does, since the
+// raw token reaches a Resolver only with Config.RawTokenSecret.
 type resolver struct {
 	keys map[string]Key
 	// gate, when set, blocks each call until it is closed.
@@ -137,7 +142,7 @@ type resolver struct {
 	failures map[string]int
 
 	mu       sync.Mutex
-	calls    map[string]int
+	calls    map[string]int // by hash
 	tokens   []Token
 	active   int
 	maxAlive int
@@ -148,11 +153,14 @@ func (r *resolver) Resolve(ctx context.Context, t Token) (Key, error) {
 	if r.calls == nil {
 		r.calls = map[string]int{}
 	}
-	r.calls[t.Raw]++
-	n := r.calls[t.Raw]
+	r.calls[t.SHA256]++
+	n := r.calls[t.SHA256]
 	r.tokens = append(r.tokens, t)
 	r.active++
 	r.maxAlive = max(r.maxAlive, r.active)
+	raw := r.rawOf(t)
+	fail := n <= r.failures[raw]
+	k, known := r.keys[raw]
 	r.mu.Unlock()
 	defer func() {
 		r.mu.Lock()
@@ -167,13 +175,50 @@ func (r *resolver) Resolve(ctx context.Context, t Token) (Key, error) {
 			return Key{}, ctx.Err()
 		}
 	}
-	if n <= r.failures[t.Raw] {
+	switch {
+	case fail:
 		return Key{}, errors.New("platform unavailable")
-	}
-	if k, ok := r.keys[t.Raw]; ok {
+	case known:
 		return k, nil
 	}
 	return Key{}, ErrNotFound
+}
+
+// setFailures changes how many calls for the token named raw fail.
+func (r *resolver) setFailures(raw string, n int) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.failures[raw] = n
+}
+
+// rawOf returns the raw token the test named t by, or "" for a token it
+// does not know.
+func (r *resolver) rawOf(t Token) string {
+	for raw := range r.keys {
+		if hashOf(raw) == t.SHA256 {
+			return raw
+		}
+	}
+	for raw := range r.failures {
+		if hashOf(raw) == t.SHA256 {
+			return raw
+		}
+	}
+	return ""
+}
+
+// callsFor returns how many times the token named raw was resolved.
+func (r *resolver) callsFor(raw string) int {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return r.calls[hashOf(raw)]
+}
+
+// running returns how many calls are in progress.
+func (r *resolver) running() int {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return r.active
 }
 
 func (r *resolver) seen() []Token {
@@ -182,27 +227,39 @@ func (r *resolver) seen() []Token {
 	return append([]Token(nil), r.tokens...)
 }
 
-// recorder is a Decider that records events.
+// recorder is a Decider that records events. Its first failures calls fail,
+// and every call fails when fail is set.
 type recorder struct {
-	mu     sync.Mutex
-	events []event.Event
-	fail   bool
+	mu       sync.Mutex
+	events   []event.Event
+	calls    []event.Event
+	fail     bool
+	failures int
 }
 
 func (r *recorder) Decide(_ context.Context, ev event.Event) (decision.Decision, error) {
-	if r.fail {
-		return decision.Decision{}, errors.New("engine down")
-	}
 	r.mu.Lock()
 	defer r.mu.Unlock()
+	r.calls = append(r.calls, ev)
+	if r.fail || len(r.calls) <= r.failures {
+		return decision.Decision{}, errors.New("engine down")
+	}
 	r.events = append(r.events, ev)
-	return decision.Decision{ID: "dec", Action: decision.Block}, nil
+	return decision.Decision{ID: "dec_" + ev.ID, EventID: ev.ID, Action: decision.Block}, nil
 }
 
+// got returns the events decided.
 func (r *recorder) got() []event.Event {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	return append([]event.Event(nil), r.events...)
+}
+
+// tried returns every event Decide was called with.
+func (r *recorder) tried() []event.Event {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return append([]event.Event(nil), r.calls...)
 }
 
 // outcomes counts reported outcomes.
@@ -226,22 +283,55 @@ func (o *outcomes) count(x Outcome) int {
 	return o.n[x]
 }
 
-func newTestHandler(t *testing.T, cfg Config) *Handler {
+func (o *outcomes) String() string {
+	o.mu.Lock()
+	defer o.mu.Unlock()
+	b, _ := json.Marshal(o.n)
+	return string(b)
+}
+
+// openReports opens a queue in a SQLite database of its own, closed when
+// the test ends, after the handlers using it are shut down.
+func openReports(t *testing.T) *audit.DB {
 	t.Helper()
+	db, err := audit.OpenSQLite(context.Background(), filepath.Join(t.TempDir(), "audit.db"),
+		audit.Options{Logger: slog.New(slog.DiscardHandler)})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { db.Close(context.Background()) })
+	return db
+}
+
+// newTestHandler returns a handler whose retries and polls take
+// milliseconds, on cfg.Reports or a queue of its own, and shuts it down when
+// the test ends.
+func newTestHandler(t *testing.T, cfg Config) (*Handler, *audit.DB) {
+	t.Helper()
+	db, _ := cfg.Reports.(*audit.DB)
+	if cfg.Reports == nil {
+		db = openReports(t)
+		cfg.Reports = db
+	}
 	if cfg.Decider == nil {
 		cfg.Decider = &recorder{}
+	}
+	if cfg.MinBackoff == 0 {
+		cfg.MinBackoff, cfg.MaxBackoff = time.Millisecond, time.Millisecond
+	}
+	if cfg.PollInterval == 0 {
+		cfg.PollInterval = 10 * time.Millisecond
 	}
 	h, err := New(cfg)
 	if err != nil {
 		t.Fatal(err)
 	}
-	h.retryBackoff = time.Millisecond
 	t.Cleanup(func() {
 		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 		defer cancel()
 		_ = h.Shutdown(ctx)
 	})
-	return h
+	return h, db
 }
 
 func shutdown(t *testing.T, h *Handler) {
@@ -251,6 +341,45 @@ func shutdown(t *testing.T, h *Handler) {
 	if err := h.Shutdown(ctx); err != nil {
 		t.Fatalf("shutdown: %v", err)
 	}
+}
+
+// eventually polls ok until it holds, failing the test after a generous
+// deadline: the machine running the tests may be busy.
+func eventually(t *testing.T, what string, ok func() bool) {
+	t.Helper()
+	deadline := time.Now().Add(30 * time.Second)
+	for !ok() {
+		if time.Now().After(deadline) {
+			t.Fatalf("timed out waiting for %s", what)
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+}
+
+// settled waits until no report in db is pending.
+func settled(t *testing.T, db *audit.DB) {
+	t.Helper()
+	eventually(t, "every report to be done or dead", func() bool {
+		s, err := db.LeakReportStats(context.Background())
+		if err != nil {
+			t.Fatal(err)
+		}
+		return s.Pending == 0
+	})
+}
+
+// stored returns the report of the token named raw, found at url.
+func stored(t *testing.T, db *audit.DB, raw, typ, source, url string) audit.LeakReport {
+	t.Helper()
+	key := reportKey(Token{SHA256: hashOf(raw), Type: typ, Source: source, URL: url})
+	rs, err := db.LeakReportsByKey(context.Background(), []string{key})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(rs) != 1 {
+		t.Fatalf("no report stored for token %s", raw)
+	}
+	return rs[0]
 }
 
 type match struct {

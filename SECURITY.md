@@ -25,6 +25,23 @@ whatever is in front must keep them private. They show no secrets: metrics
 carry rule ids, counts and the build, and `/readyz?verbose` says whether
 Redis and the audit database answer, without hostnames or errors.
 
+## Leaked-key reports at rest
+
+Reports from GitHub secret scanning are stored in the audit database before
+they are acknowledged, so a restart or an outage cannot lose them. What is
+stored is the token's SHA-256, its type, where GitHub found it (a public
+URL), the API key and account it resolved to, and the outcome. The raw
+token is stored only when `secret_scanning.github.resolver.send_raw_token`
+is on, because the resolver then needs it and a report may wait for the
+resolver across a restart. It is then encrypted with AES-256-GCM under a
+key derived from the resolver's secret, which is never stored, and deleted
+as soon as the token resolves or the report is done; a dead report keeps
+it until it is requeued or retention deletes the report. A copy of the
+audit database, a backup or a read-only user therefore never holds a usable
+token; the platform, the other holder of the secret, receives raw tokens in
+that mode anyway. Tokens never appear in logs, events, webhooks or
+metrics. See [secret scanning](docs/secret-scanning.md#privacy-of-tokens).
+
 ## Supported versions
 
 Catraca has no tagged release yet; fixes land on `main`. Once releases

@@ -1,11 +1,14 @@
 package app
 
 import (
+	"context"
 	"runtime"
+	"time"
 
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/prometheus/client_golang/prometheus/collectors"
 
+	"github.com/guilhermebsantiago/catraca/internal/audit"
 	"github.com/guilhermebsantiago/catraca/internal/decision"
 	"github.com/guilhermebsantiago/catraca/internal/hooks"
 	"github.com/guilhermebsantiago/catraca/internal/rules"
@@ -40,6 +43,7 @@ func (a *App) registerStats() {
 		}, func() float64 { return float64(db.RecorderStats().Queued) }),
 		retentionDeleted("decisions", func() uint64 { return db.RetentionStats().Decisions }),
 		retentionDeleted("outbox", func() uint64 { return db.RetentionStats().Deliveries }),
+		retentionDeleted("leak_reports", func() uint64 { return db.RetentionStats().LeakReports }),
 		counter("catraca_audit_retention_errors_total", "Audit retention runs that failed to delete expired rows.",
 			func() uint64 { return db.RetentionStats().Errors }),
 		// go_sql_* with db_name="audit": connections open, in use and idle,
@@ -75,7 +79,7 @@ func (a *App) registerStats() {
 func retentionDeleted(table string, f func() uint64) prometheus.Collector {
 	return prometheus.NewCounterFunc(prometheus.CounterOpts{
 		Name:        "catraca_audit_retention_deleted_total",
-		Help:        "Rows deleted by audit retention, by table: decisions (with their matches and labels) and outbox.",
+		Help:        "Rows deleted by audit retention, by table: decisions (with their matches and labels), outbox and leak_reports.",
 		ConstLabels: prometheus.Labels{"table": table},
 	}, func() float64 { return float64(f()) })
 }
@@ -127,4 +131,48 @@ func (c auditDBStats) Collect(ch chan<- prometheus.Metric) {
 	if db := c.log.current(); db != nil {
 		collectors.NewDBStatsCollector(db.SQL(), "audit").Collect(ch)
 	}
+}
+
+var (
+	leakReportsDesc = prometheus.NewDesc("catraca_secret_scanning_reports",
+		"Leaked-key reports from secret scanning by status: pending (waiting for an attempt) and dead (given up; requeue them with catraca secretscan retry).",
+		[]string{"status"}, nil)
+	oldestPendingDesc = prometheus.NewDesc("catraca_secret_scanning_oldest_pending_seconds",
+		"How long ago the oldest pending leaked-key report arrived; 0 when none is pending.", nil, nil)
+)
+
+// leakStatsTimeout bounds the query behind the leaked-key report metrics,
+// so a slow database does not hold a scrape.
+const leakStatsTimeout = 2 * time.Second
+
+// leakReportStats exports the leaked-key reports that need attention, read
+// from the audit database at scrape time: every instance shares the queue,
+// so the counts are the same whichever one is scraped. They are absent
+// while the database is not open or does not answer, which
+// catraca_dependency_up reports.
+type leakReportStats struct{ log *auditLog }
+
+func (leakReportStats) Describe(ch chan<- *prometheus.Desc) {
+	ch <- leakReportsDesc
+	ch <- oldestPendingDesc
+}
+
+func (c leakReportStats) Collect(ch chan<- prometheus.Metric) {
+	db := c.log.current()
+	if db == nil {
+		return
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), leakStatsTimeout)
+	defer cancel()
+	s, err := db.LeakReportStats(ctx)
+	if err != nil {
+		return
+	}
+	ch <- prometheus.MustNewConstMetric(leakReportsDesc, prometheus.GaugeValue, float64(s.Pending), string(audit.LeakReportPending))
+	ch <- prometheus.MustNewConstMetric(leakReportsDesc, prometheus.GaugeValue, float64(s.Dead), string(audit.LeakReportDead))
+	var age float64
+	if !s.OldestPending.IsZero() {
+		age = max(0, time.Since(s.OldestPending).Seconds())
+	}
+	ch <- prometheus.MustNewConstMetric(oldestPendingDesc, prometheus.GaugeValue, age)
 }

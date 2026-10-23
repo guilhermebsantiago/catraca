@@ -606,8 +606,9 @@ retry policy needs.
 
 GitHub's secret scanning partner endpoint. GitHub posts a signed batch of
 tokens it found in public; Catraca verifies the ECDSA signature with
-GitHub's published keys, answers at once, resolves each token through the
-platform's resolver and emits a `key_leak` event for every key it finds. See
+GitHub's published keys, stores a report per token in the audit database
+and answers, then resolves each token through the platform's resolver and
+emits a `key_leak` event for every key it finds, retrying failures. See
 [secret scanning](secret-scanning.md).
 
 ```http
@@ -618,7 +619,9 @@ Content-Type: application/json
 ```
 
 With `secret_scanning.github.feedback: true` the answer is `200` with a
-true or false positive label per token.
+true or false positive label per token resolved in time. A batch whose
+reports cannot be stored, for example while the audit database is not open
+yet, gets `503` with `Retry-After`, so GitHub sends it again.
 
 ## Operations
 
@@ -725,12 +728,14 @@ Prometheus metrics in the text format.
 | `catraca_audit_recorded_total`, `_dropped_total`, `_failed_total` | counter | audit log writes |
 | `catraca_audit_rejected_total` | counter | decisions the audit database refused one at a time while it wrote the rest of their batch, also counted as failed ([details](audit.md#how-decisions-are-written)) |
 | `catraca_audit_queued` | gauge | decisions waiting to be written |
-| `catraca_audit_retention_deleted_total{table}` | counter | rows deleted by [retention](audit.md#retention): `decisions` (with their matches and labels) and `outbox` |
+| `catraca_audit_retention_deleted_total{table}` | counter | rows deleted by [retention](audit.md#retention): `decisions` (with their matches and labels), `outbox` and `leak_reports` |
 | `catraca_audit_retention_errors_total` | counter | retention runs that failed |
 | `go_sql_*{db_name="audit"}` | gauge, counter | the audit database's connection pool: open, in use, idle, waits for a connection and their duration |
 | `catraca_hooks_enqueued_total`, `_enqueue_errors_total`, `_delivered_total`, `_retries_total`, `_dead_total` | counter | effect webhook deliveries |
 | `catraca_feedback_outcomes_total{provider,outcome}` | counter | what the feedback endpoints did ([outcomes](feedback.md#metrics)) |
-| `catraca_secret_scanning_outcomes_total{outcome}` | counter | batches and tokens ([outcomes](secret-scanning.md#metrics)) |
+| `catraca_secret_scanning_outcomes_total{outcome}` | counter | batches and leaked-key reports ([outcomes](secret-scanning.md#metrics)) |
+| `catraca_secret_scanning_reports{status}` | gauge | leaked-key reports `pending` and `dead`, read from the audit database at scrape time |
+| `catraca_secret_scanning_oldest_pending_seconds` | gauge | how long ago the oldest pending leaked-key report arrived |
 | `catraca_ruleset_info{version}` | gauge | 1, labeled with the current ruleset version |
 | `catraca_ruleset_rules{mode}` | gauge | rules by mode |
 | `catraca_ruleset_loads_total{result}` | counter | loads at start and reloads, `ok` or `error` |
@@ -743,8 +748,9 @@ plus the standard `go_*` and `process_*` metrics. Worth alerting on:
 `catraca_degraded_decisions_total`, `catraca_audit_dropped_total` and
 `catraca_audit_failed_total` rising, `catraca_audit_retention_errors_total`,
 `catraca_dependency_up` at 0, `catraca_hooks_dead_total`,
-`catraca_ruleset_loads_total{result="error"}`, and the `decide_failed` and
-`resolve_failed` outcomes.
+`catraca_ruleset_loads_total{result="error"}`,
+`catraca_secret_scanning_reports{status="dead"}` above 0 and
+`catraca_secret_scanning_oldest_pending_seconds` above a few minutes.
 
 ```sh
 curl -s "$CATRACA/metrics" | grep '^catraca_decisions_total'

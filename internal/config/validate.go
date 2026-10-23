@@ -106,6 +106,10 @@ func (v *validator) explicit(c *Config) {
 	v.positive("audit.conn_max_idle_time", c.Audit.ConnMaxIdleTime)
 	v.positive("audit.retention", c.Audit.Retention)
 	v.positive("audit.labeled_retention", c.Audit.LabeledRetention)
+	if v.isSet("secret_scanning.github.max_attempts") && c.SecretScanning.GitHub.MaxAttempts < 1 {
+		v.add("secret_scanning.github.max_attempts", "must be at least 1, got %d", c.SecretScanning.GitHub.MaxAttempts)
+	}
+	v.positive("secret_scanning.github.max_age", c.SecretScanning.GitHub.MaxAge)
 }
 
 func (v *validator) positive(path string, d time.Duration) {

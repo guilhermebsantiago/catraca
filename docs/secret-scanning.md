@@ -35,13 +35,13 @@ rules:
 ## How a batch is handled
 
 ```
-GitHub ──POST batch──▶ Catraca: verify signature ──▶ 202 (or 200 + feedback)
-                                     │
-                         bounded worker pool, per token:
-                                     │
-                       Resolver ──▶ platform: which key is this?
-                                     │ found
-                       Decider ──▶ key_leak event ──▶ rules, effects, audit
+GitHub ──POST batch──▶ Catraca: verify signature ──▶ store reports ──▶ 202 (or 200 + feedback)
+                                                          │ audit database (leak_reports)
+                                        workers, per report, with retries:
+                                                          │
+                                        Resolver ──▶ platform: which key is this?
+                                                          │ found
+                                        Decider ──▶ key_leak event ──▶ rules, effects, audit
 ```
 
 1. **Signature.** GitHub signs the raw body with ECDSA P-256 and SHA-256
@@ -55,21 +55,26 @@ GitHub ──POST batch──▶ Catraca: verify signature ──▶ 202 (or 200
    cached keys keep working. A batch that fails verification gets 401; a
    batch that cannot be verified because no key could ever be fetched gets
    503.
-2. **Accept.** The body is a JSON array of matches (`token`, `type`, `url`,
-   `source`). GitHub asks that endpoints handle large batches without timing
-   out, so Catraca queues the tokens and answers at once. Tokens are
-   processed by `Workers` goroutines (8 by default). When more than
-   `MaxPending` tokens (10000) are already waiting, a new batch gets 503 with
-   `Retry-After`; a batch that arrives while nothing is pending is always
-   accepted, however large, so an oversized batch is never refused forever.
-   The body limit is 10 MiB by default.
-3. **Resolve.** Each token goes to the Resolver. Transient errors are
-   retried three times with backoff; each call is bounded by
-   `ResolveTimeout` (10 s).
+2. **Store.** The body is a JSON array of matches (`token`, `type`, `url`,
+   `source`). Each match becomes a *report* in the `leak_reports` table of
+   the [audit database](audit.md), keyed by a hash of the token's SHA-256,
+   its type, source and URL, so a match GitHub sends again is stored once.
+   Catraca answers only once every report of the batch is stored. When they
+   cannot be stored, because the audit database is not open yet (a
+   Postgres database that was unreachable at start opens in the
+   background), is down, or takes more than 10 seconds, the answer is `503`
+   with `Retry-After` and GitHub sends the batch again: a batch Catraca
+   acknowledged is never only in memory. GitHub asks that endpoints handle
+   large batches without timing out; storing takes one insert per 666
+   matches, and nothing waits for the platform. The body limit is 10 MiB.
+3. **Resolve.** Workers, 8 per process, claim due reports and ask the
+   Resolver which key each token is. Each call is bounded by
+   `ResolveTimeout` (10 s), and failures are [retried](#retries-and-dead-reports).
 4. **Decide.** A token that resolves to a key becomes a `key_leak` event:
 
    ```json
    {
+     "id": "ghss_6f1c0a5d2e7b4c39a8d0e1f2a3b4c5d6",
      "type": "key_leak",
      "time": "2026-10-15T12:00:00Z",
      "account_id": "acct_456",
@@ -80,11 +85,67 @@ GitHub ──POST batch──▶ Catraca: verify signature ──▶ 202 (or 200
    ```
 
    `leak.source` is `github:` followed by GitHub's `source` (`content`,
-   `commit`, `npm`, `action_logs`, ...). The token itself is not part of
-   the event.
+   `commit`, `npm`, `action_logs`, ...), and `time` is when the report
+   arrived. The id is `ghss_` and 32 hex characters of the report's key: the
+   same on every attempt, so a report decided twice is recognizable as one.
+   The token itself is not part of the event. GitHub's `type` and `source`
+   are cut to 256 bytes and `url` to 8 KiB, and NUL bytes are dropped, so
+   no report is refused as an invalid event.
 
-On shutdown, the server stops accepting batches and waits for accepted
-tokens to finish (`Handler.Shutdown`).
+### Retries and dead reports
+
+| what happens | the report |
+|---|---|
+| the Resolver answers not found | is done: a false positive |
+| the Resolver fails: an error, a status other than 200 or 404, a timeout | is retried |
+| the token resolves, and the `key_leak` event is decided | is done: leaked |
+| the decision fails: no ruleset loaded, the store misses `MarkLeaked`'s deadline | is retried, without resolving the token again |
+| the engine refuses the event as invalid, such as a key id with control characters from the resolver | is dead at once: it would be refused again |
+
+Retries wait 1 second after the first failure, doubling up to 5 minutes,
+each jittered to between half and all of it, so reports that failed
+together in an outage are not retried together, and once the platform is
+back, reports go through within minutes. A report is given up as *dead*
+after `max_attempts` attempts (1000) or `max_age` since it arrived (24h),
+whichever comes first; with the defaults the age does. Both are set under
+[`secret_scanning.github`](config.md#secret_scanning).
+
+A dead report is a leaked key that may not have been acted on. It is
+logged at error level, counted in
+`catraca_secret_scanning_reports{status="dead"}`, and kept with its last
+error until you fix the cause and requeue it, which starts its attempts
+and age afresh:
+
+```sh
+catraca secretscan list --status dead --audit "$CATRACA_AUDIT_DSN"
+catraca secretscan retry --dead --audit "$CATRACA_AUDIT_DSN"
+```
+
+See [`catraca secretscan`](cli.md#secretscan). With
+[`audit.retention`](audit.md#retention), done and dead reports are deleted
+once they are older than the retention, like finished webhook deliveries;
+pending ones never are.
+
+### Restarts and several instances
+
+Workers claim a report with a lease (two `ResolveTimeout`s plus 40
+seconds), as webhook deliveries are claimed from the outbox: on Postgres
+with `FOR UPDATE SKIP LOCKED`, so instances that share the database never
+work on the same report at once. The outcome of an attempt is recorded only
+if no later claim has replaced it, so a worker whose lease ran out cannot
+overwrite a newer attempt.
+
+On shutdown, Catraca stops claiming reports and waits for the attempts in
+flight, within `server.shutdown_timeout`. Reports still pending stay in the
+queue: the next start, or another instance, picks them up at once. An
+attempt the shutdown cut short, or a crash, is retried when its lease ends.
+
+A report can be decided twice in one narrow case: its decision went
+through, recording that failed (the database went away at that moment),
+and the lease ran out. Its `key_leak` event then has the same id both
+times. Marking a key leaked twice changes nothing, but a `revoke_key`
+receiver may be called for each decision, so revoking a key that is
+already revoked should do nothing.
 
 ### Feedback to GitHub
 
@@ -101,14 +162,18 @@ the answer to the alert request is a JSON array with one entry per token:
 Catraca labels a token `true_positive` when the Resolver finds a key and
 `false_positive` when it answers not found, and identifies it by
 `token_hash` (the hex SHA-256 of the token), never by `token_raw`. Tokens
-whose resolution failed are left out.
+that have not resolved are left out.
 
-GitHub waits 30 seconds for partners that send feedback, so with
-`Feedback: true` Catraca waits up to `FeedbackTimeout` (20 seconds) for the
-batch's tokens, answers `200` with the labels it has, and lets the rest
-finish in the background. Without feedback, Catraca answers `202` with an
-empty array before resolving anything. Enable feedback only after GitHub has
-enabled it for your partnership.
+GitHub's documentation describes feedback only in the answer to the alert
+request, with no API to send a label later, so a label has to be known
+before Catraca answers. GitHub waits 30 seconds for partners that send
+feedback; with `feedback: true` Catraca stores the batch, waits up to
+`FeedbackTimeout` (20 seconds) for this process's workers to resolve its
+tokens, and answers `200` with the labels it has. The rest finish in the
+background, unlabeled. A batch GitHub sends again is labeled from the
+reports already processed, at once. Without feedback, Catraca answers `202`
+with an empty array as soon as the batch is stored. Enable feedback only
+after GitHub has enabled it for your partnership.
 
 ## Joining the partner program
 
@@ -131,7 +196,7 @@ report only token formats that you issue.
    name (it becomes `type` in the batches), the regular expression, a test
    account GitHub can use to generate real examples, and the endpoint URL.
    One URL can serve every type.
-5. Optionally ask GitHub to enable **feedback**, then set `Feedback: true`.
+5. Optionally ask GitHub to enable **feedback**, then set `feedback: true`.
 
 GitHub's public key endpoint is rate limited for unauthenticated requests.
 Set `GitHubToken` to a token with no scopes to raise the limit.
@@ -159,14 +224,17 @@ Catraca-Signature: t=1760529600,v1=3c9b1e...7d
 |---|---|
 | `200 {"api_key_id": "key_123", "account_id": "acct_456"}` | the token is this key; `account_id` may be omitted |
 | `404` | not one of the platform's keys: a false positive |
-| anything else | an error: retried, then logged |
+| anything else | an error: [retried](#retries-and-dead-reports) with backoff |
 
 Redirects are not followed. A key that was already deleted should be
 answered with 404 unless the platform wants a decision recorded for it.
 
 `token_sha256` is the lowercase hex SHA-256 of the token's UTF-8 bytes. The
 raw token is added as `"token"` only when `SendRawToken` is set, for a
-platform that cannot look keys up by hash; use it only over HTTPS.
+platform that cannot look keys up by hash; use it only over HTTPS, and read
+what it means for the [queue](#privacy-of-tokens). A report can be resolved
+more than once, after a retry or by another instance, so answer the same
+token the same way every time.
 
 The platform must verify `Catraca-Signature` before answering: `t` is the
 Unix time in seconds and `v1` the hex HMAC-SHA256 of `<t>.<raw body>` with
@@ -202,40 +270,91 @@ resolver, err := secretscan.NewHTTPResolver(secretscan.HTTPResolverConfig{
 h, err := secretscan.New(secretscan.Config{
 	Decider:     engine,
 	Resolver:    resolver,
+	Reports:     auditDB, // an *audit.DB: the durable queue
 	Feedback:    true,
 	GitHubToken: os.Getenv("GITHUB_TOKEN"),
 })
 defer h.Shutdown(ctx)
 ```
 
-Any type with a `Resolve(ctx, secretscan.Token) (secretscan.Key, error)`
-method can replace the HTTP resolver, for example one that queries the
-platform's database directly. It returns `secretscan.ErrNotFound` for
-tokens that are not keys.
+New starts the workers, which resume the reports an earlier run left
+pending. Any type with a `Resolve(ctx, secretscan.Token) (secretscan.Key,
+error)` method can replace the HTTP resolver, for example one that queries
+the platform's database directly. It returns `secretscan.ErrNotFound` for
+tokens that are not keys, and gets `Token.Raw` only when
+`Config.RawTokenSecret` is set.
 
 ## Privacy of tokens
 
-A reported token is a live credential until it is revoked, so Catraca keeps
-it out of every place it could linger:
+A reported token is a live credential until the platform revokes it, so
+Catraca keeps it out of every place it could linger:
 
-- The raw token lives only in memory, while its batch is processed.
-- It is never logged: `secretscan.Token` leaves the raw value out of its
-  `String`, `GoString` and `slog` representations, and logs carry only the
-  token type, source and URL.
-- It is not part of the `key_leak` event, so it never reaches the audit
+- By default the raw token is never stored. The queue keeps its SHA-256,
+  which is all the resolver and GitHub's feedback take, and the raw token is
+  in memory only while its batch's request is handled.
+- With `send_raw_token`, the resolver needs the raw token, and a report may
+  wait for the resolver across a restart, so the raw token is stored with
+  its report, encrypted: AES-256-GCM, with a key derived (HKDF-SHA256) from
+  `secret_scanning.github.resolver.secret` and the report's key as
+  additional data. The key is never stored, so the audit database, its
+  replicas and backups, and the people and tools that read them, hold no
+  usable token. The platform, the one other holder of the secret, receives
+  the raw tokens anyway. Encrypting matters because deleting a value does
+  not erase it from disk at once: old row versions, the write-ahead log,
+  free pages and backups keep it for a while.
+- The encrypted token is deleted as soon as the token resolves to a key or
+  the report is done. A dead report whose token never resolved keeps it, so
+  it can be requeued, until retention deletes the report.
+- After a change of `resolver.secret`, a stored token can no longer be
+  decrypted, and a report that still needs it dies with an error that says
+  so: change the secret when no report is waiting to resolve
+  (`catraca secretscan list --status pending` shows none without an API
+  key).
+- The token is never logged: `secretscan.Token` leaves the raw value out of
+  its `String`, `GoString` and `slog` representations, and logs carry only
+  the token type, source and URL.
+- It is not part of the `key_leak` event, so it never reaches the decision
   log, rules or webhooks: those see the API key id and account.
-- The resolver gets the SHA-256 unless `SendRawToken` is set.
+- The resolver gets the SHA-256 unless `send_raw_token` is set.
 - Feedback to GitHub uses `token_hash`, never `token_raw`.
 
-The `url` GitHub sends is public by definition and is kept in the event,
-so a reviewer can see where the key was exposed.
+The `url` GitHub sends is public by definition and is kept in the report and
+the event, so a reviewer can see where the key was exposed.
 
 ## Metrics
 
-`OnOutcome` reports, per batch, `accepted`, `invalid_signature`,
-`keys_unavailable`, `malformed`, `too_large` or `overloaded`, and, per
-token, `leaked`, `not_found`, `resolve_failed` or `decide_failed`. Alert on
-`resolve_failed` and `decide_failed`: each one is a leaked key that may not
-have been acted on.
+`catraca_secret_scanning_outcomes_total{outcome}` counts, per batch,
+`accepted`, `unavailable` (the reports could not be stored, answered 503),
+`invalid_signature`, `keys_unavailable`, `malformed` or `too_large`, and,
+per report, `duplicate` (already stored, not processed again), `leaked`,
+`not_found`, `retry` (an attempt failed and will be retried),
+`resolve_failed` or `decide_failed` (the report is dead).
+
+From the queue, read when `/metrics` is scraped and the same on every
+instance:
+
+| metric | |
+|---|---|
+| `catraca_secret_scanning_reports{status}` | reports `pending` and `dead` |
+| `catraca_secret_scanning_oldest_pending_seconds` | how long ago the oldest pending report arrived; 0 when none is |
+
+Alert on `catraca_secret_scanning_reports{status="dead"}` above 0: each
+dead report is a leaked key that may not have been acted on. Alert on
+`catraca_secret_scanning_oldest_pending_seconds` above a few minutes,
+which means the resolver or the store is failing, and on `retry` and
+`unavailable` rising.
+
+## Operating the queue
+
+```sh
+export CATRACA_AUDIT_DSN=postgres://...
+catraca secretscan list                    # the latest 50 reports
+catraca secretscan list --status dead      # the ones given up
+catraca secretscan retry 812 813           # requeue these dead reports
+catraca secretscan retry --dead            # requeue every dead report
+```
+
+A running server picks requeued reports up within two seconds. See
+[`catraca secretscan`](cli.md#secretscan).
 
 [partner]: https://docs.github.com/en/code-security/tutorials/secret-scanning-partner-program

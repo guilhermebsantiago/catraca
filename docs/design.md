@@ -22,7 +22,7 @@ Principles, in order:
 ## Packages
 
 ```
-cmd/catraca          CLI: serve, config check, rules check|test|gate, replay, report, label
+cmd/catraca          CLI: serve, config check, rules check|test|gate, replay, report, label, secretscan list|retry
 internal/event       Event types (shared)
 internal/decision    Decision, Match, Action, Mode, OnError (shared)
 internal/signal      Signal Set + Catalog interface (shared); catalog impl
@@ -34,7 +34,7 @@ internal/audit       Decision log, labels, rule stats: SQLite and Postgres
 internal/precision   Wilson interval, promotion gate, report
 internal/hooks       Signed outgoing webhooks for effects, with a durable outbox
 internal/feedback    SES (via SNS, signature verified), useSend, generic
-internal/secretscan  GitHub secret scanning partner endpoint
+internal/secretscan  GitHub secret scanning partner endpoint and its report workers
 internal/api         HTTP server, auth, metrics
 internal/config      catraca.yaml
 internal/app         Wiring: build everything from a config, serve, shut down in order
@@ -46,7 +46,9 @@ Dependency direction: `event` and `decision` import nothing internal.
 `rules`, `decision`, `event` and defines the interfaces it calls
 (`Recorder`, `Dispatcher`). `audit`, `hooks` implement those. `feedback` and
 `secretscan` produce events and call a `Decider` interface they define
-(`Decide(ctx, event.Event) (decision.Decision, error)`). `app` wires
+(`Decide(ctx, event.Event) (decision.Decision, error)`). `hooks` and
+`secretscan` keep their work in durable queues that `audit` defines and
+implements (`Outbox`, `LeakReports`). `app` wires
 everything together behind `api`, and `cmd` runs `app` and the offline
 tools. Only `app` and `cmd` import `api`, only `cmd` imports `app`, and
 nothing imports `cmd`. `signature` is the one public
@@ -261,10 +263,17 @@ first, retried with exponential backoff and jitter, and are idempotent per
 
 `POST /v1/secret-scanning/github` implements GitHub's secret scanning partner
 endpoint: verify the ECDSA signature with GitHub's published keys (cached,
-refreshed on an unknown key id), accept the batch and answer quickly, then,
-for each token, ask the platform's resolver hook which API key it is, emit a
-key_leak event, and answer GitHub's feedback format (true or false
-positive) when configured.
+refreshed on an unknown key id), store a report per token in the audit
+database and only then answer (503 when it cannot store them, so GitHub
+sends the batch again), and answer GitHub's feedback format (true or false
+positive) for tokens resolved in time when configured. Workers claim reports
+under a lease, as the outbox's are claimed, ask the platform's resolver hook
+which API key each token is, and emit a key_leak event whose id is fixed
+per report. Failures are retried with backoff, bounded by attempts and age;
+a report that runs out is kept as dead until it is requeued. Reports are
+keyed by token, type, source and URL, so one GitHub delivers twice is
+processed once. Only the token's hash is stored, unless the resolver needs
+the raw token; then it is stored encrypted until it resolves.
 
 ## API
 
