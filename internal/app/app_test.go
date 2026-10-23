@@ -145,6 +145,10 @@ rules:
   path: '%s'
 audit:
   dsn: '%s'
+# Even the memory store can miss the default 10ms on a loaded machine, and a
+# degraded decision skips the rules that read account signals.
+engine:
+  deadline: 2s
 hooks:
   - name: revoke_key
     url: %s
@@ -525,7 +529,13 @@ func TestReviewQueue(t *testing.T) {
 		r.json(t, &out)
 		return out
 	}
-	q := review("?mode=shadow&limit=10")
+	// The engine hands decisions to the audit log from a goroutine of its
+	// own, which a loaded machine may run after this request.
+	var q api.ReviewResponse
+	eventually(t, 10*time.Second, func() bool {
+		q = review("?mode=shadow&limit=10")
+		return len(q.Items) > 0
+	})
 	if q.RuleID != "wide-send" || q.Mode != decision.Shadow || len(q.Items) != 1 {
 		t.Fatalf("queue = %+v", q)
 	}

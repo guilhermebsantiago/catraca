@@ -8,6 +8,7 @@ import (
 	"bytes"
 	"fmt"
 	"testing"
+	"time"
 
 	"github.com/alicebob/miniredis/v2"
 	"github.com/alicebob/miniredis/v2/server"
@@ -15,6 +16,13 @@ import (
 
 // unionKey is a scratch key for computing PFCOUNT unions.
 const unionKey = "storetest:pfcount-union"
+
+// MiniredisReadTimeout is the read timeout for clients of a Miniredis
+// server. miniredis runs Lua in Go, far slower than Redis, and on a loaded
+// machine one script call can outlast go-redis's default of 5 seconds; the
+// tests are not about timeouts, and their clients never retry, so a reply
+// that times out fails the test.
+const MiniredisReadTimeout = time.Minute
 
 // Miniredis starts a miniredis server that is stopped when the test ends.
 //

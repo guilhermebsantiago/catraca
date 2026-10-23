@@ -22,7 +22,7 @@ import (
 func newTestRedis(t *testing.T, prefix string) (*Redis, *miniredis.Miniredis, *redis.Client) {
 	t.Helper()
 	mr := storetest.Miniredis(t)
-	client := redis.NewClient(&redis.Options{Addr: mr.Addr(), MaxRetries: -1})
+	client := redis.NewClient(&redis.Options{Addr: mr.Addr(), MaxRetries: -1, ReadTimeout: storetest.MiniredisReadTimeout})
 	t.Cleanup(func() { client.Close() })
 	return NewRedis(client, RedisOptions{Prefix: prefix}), mr, client
 }
@@ -216,7 +216,7 @@ func TestRedisBatchIsOneRoundTrip(t *testing.T) {
 
 func TestRedisClusterBatchIsOnePipeline(t *testing.T) {
 	mr := storetest.Miniredis(t)
-	client := redis.NewClusterClient(&redis.ClusterOptions{Addrs: []string{mr.Addr()}, MaxRetries: -1})
+	client := redis.NewClusterClient(&redis.ClusterOptions{Addrs: []string{mr.Addr()}, MaxRetries: -1, ReadTimeout: storetest.MiniredisReadTimeout})
 	t.Cleanup(func() { client.Close() })
 	s := NewRedis(client, RedisOptions{})
 	run(t, s, func(b *Batch) { b.Get("warm-up") })
@@ -253,7 +253,7 @@ func TestRedisReloadsAFlushedScript(t *testing.T) {
 		}},
 		{"cluster", func(t *testing.T) (*Redis, redis.UniversalClient) {
 			mr := storetest.Miniredis(t)
-			client := redis.NewClusterClient(&redis.ClusterOptions{Addrs: []string{mr.Addr()}, MaxRetries: -1})
+			client := redis.NewClusterClient(&redis.ClusterOptions{Addrs: []string{mr.Addr()}, MaxRetries: -1, ReadTimeout: storetest.MiniredisReadTimeout})
 			t.Cleanup(func() { client.Close() })
 			return NewRedis(client, RedisOptions{}), client
 		}},
@@ -429,7 +429,7 @@ func TestOpenRedisDoesNotResendScripts(t *testing.T) {
 	if err := s.Do(context.Background(), &b); err == nil {
 		t.Fatal("Do succeeded although the reply was lost")
 	}
-	direct := NewRedis(redis.NewClient(&redis.Options{Addr: mr.Addr(), MaxRetries: -1}), RedisOptions{})
+	direct := NewRedis(redis.NewClient(&redis.Options{Addr: mr.Addr(), MaxRetries: -1, ReadTimeout: storetest.MiniredisReadTimeout}), RedisOptions{})
 	defer direct.client.Close()
 	if n := count(t, direct, "k", time.Hour, t0); n != 1 {
 		t.Errorf("count = %d after one increment, want 1: the script ran again", n)

@@ -53,7 +53,7 @@ func counterValue(t *testing.T, c prometheus.Counter) float64 {
 
 func waitFor(t *testing.T, what string, ok func() bool) {
 	t.Helper()
-	deadline := time.Now().Add(5 * time.Second)
+	deadline := time.Now().Add(15 * time.Second)
 	for !ok() {
 		if time.Now().After(deadline) {
 			t.Fatalf("timed out waiting for %s", what)
@@ -89,7 +89,8 @@ func TestDependencyMonitor(t *testing.T) {
 	}
 	logs := &lockedBuffer{}
 	m := newDependencyMonitor(deps, prometheus.NewRegistry(), slog.New(slog.NewTextHandler(logs, nil)))
-	m.interval, m.timeout = 20*time.Millisecond, 50*time.Millisecond
+	// The timeout leaves the answering checks room on a loaded machine.
+	m.interval, m.timeout = 20*time.Millisecond, 200*time.Millisecond
 	if s := m.statuses(); s["fast"].Status != "unknown" {
 		t.Errorf("before the first check: %+v", s)
 	}
@@ -102,8 +103,8 @@ func TestDependencyMonitor(t *testing.T) {
 		return s["fast"].Status == "ok" && s["flaky"].Status == "unavailable" && s["hung"].Status == "timeout"
 	})
 	s := m.statuses()
-	if d := s["hung"].DurationMS; d < 50 || d > 1000 {
-		t.Errorf("hung reported after %vms, want about the 50ms timeout", d)
+	if d := s["hung"].DurationMS; d < 200 || d > 10_000 {
+		t.Errorf("hung reported after %vms, want about the 200ms timeout", d)
 	}
 	if strings.Contains(s["flaky"].Status, "10.0.0.7") {
 		t.Errorf("the status shows the error: %q", s["flaky"].Status)
@@ -112,9 +113,10 @@ func TestDependencyMonitor(t *testing.T) {
 		t.Error("catraca_dependency_up does not match the statuses")
 	}
 
-	// Several more rounds: the hung check is still running, so it is not
-	// started again, and the failing one is logged once.
-	time.Sleep(150 * time.Millisecond)
+	// Several more rounds, counted by the failures metric: the hung check
+	// is still running, so it is not started again, and the failing one is
+	// logged once.
+	waitFor(t, "more rounds", func() bool { return counterValue(t, m.failures.WithLabelValues("flaky")) >= 4 })
 	if n := hangCalls.Load(); n != 1 {
 		t.Errorf("the hung check was started %d times, want once while it runs", n)
 	}
@@ -124,14 +126,13 @@ func TestDependencyMonitor(t *testing.T) {
 	if !strings.Contains(logs.String(), "10.0.0.7") {
 		t.Errorf("the log lacks the error:\n%s", logs)
 	}
-	if counterValue(t, m.failures.WithLabelValues("flaky")) < 2 {
-		t.Error("catraca_dependency_check_failures_total does not count every failed check")
-	}
 
 	down := m.statuses()["flaky"].Since
 	failing.Store(false)
 	waitFor(t, "flaky to recover", func() bool { return m.statuses()["flaky"].Status == "ok" })
-	if up := m.statuses()["flaky"]; !up.Since.After(down) || up.CheckedAt.Before(up.Since) {
+	// Not After: the wall clock of some systems ticks every few
+	// milliseconds.
+	if up := m.statuses()["flaky"]; up.Since.Before(down) || up.CheckedAt.Before(up.Since) {
 		t.Errorf("since and checked_at after recovery: %+v (down since %v)", up, down)
 	}
 	if !strings.Contains(logs.String(), "available again") {
