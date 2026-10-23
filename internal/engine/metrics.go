@@ -7,6 +7,7 @@ import (
 	"github.com/prometheus/client_golang/prometheus"
 
 	"github.com/guilhermebsantiago/catraca/internal/decision"
+	"github.com/guilhermebsantiago/catraca/internal/event"
 )
 
 // latencyBuckets resolve the 10 ms default deadline finely: most decisions
@@ -23,6 +24,7 @@ type metrics struct {
 	latency     prometheus.Histogram
 	dropped     prometheus.Counter
 	outOfBounds *prometheus.CounterVec
+	duplicates  *prometheus.CounterVec
 }
 
 // Values of the bound label of catraca_event_times_out_of_bounds_total.
@@ -62,6 +64,10 @@ func newMetrics(reg prometheus.Registerer) (*metrics, error) {
 			Name: "catraca_event_times_out_of_bounds_total",
 			Help: "Events whose time was too far ahead of the server's clock (future: the clock's time was used) or behind it (past: rejected, or the clock's time for key_leak).",
 		}, []string{"bound"}),
+		duplicates: prometheus.NewCounterVec(prometheus.CounterOpts{
+			Name: "catraca_duplicate_events_total",
+			Help: "Events that had counted already under the same id, such as retries, and did not count again, by event type.",
+		}, []string{"type"}),
 	}
 	// Every action starts at zero so dashboards and alerts see the series
 	// before the first block happens.
@@ -70,10 +76,13 @@ func newMetrics(reg prometheus.Registerer) (*metrics, error) {
 	}
 	m.outOfBounds.WithLabelValues(boundFuture)
 	m.outOfBounds.WithLabelValues(boundPast)
+	for _, t := range []event.Type{event.Send, event.Feedback, event.Account, event.KeyLeak} {
+		m.duplicates.WithLabelValues(string(t))
+	}
 	if reg == nil {
 		return m, nil
 	}
-	for _, c := range []prometheus.Collector{m.decisions, m.matches, m.errors, m.degraded, m.latency, m.dropped, m.outOfBounds} {
+	for _, c := range []prometheus.Collector{m.decisions, m.matches, m.errors, m.degraded, m.latency, m.dropped, m.outOfBounds, m.duplicates} {
 		if err := reg.Register(c); err != nil {
 			var already prometheus.AlreadyRegisteredError
 			if errors.As(err, &already) {

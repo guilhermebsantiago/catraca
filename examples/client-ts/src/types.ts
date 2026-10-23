@@ -38,6 +38,7 @@ export interface LeakInfo {
 
 /** Every field an event may carry. Mirrors event.Event. */
 export interface EventFields {
+  /** Your id for the event: sent again with the same id, it counts once. */
   id?: string;
   type: EventType;
   /** When it happened. Catraca uses its own clock when it is absent. */
@@ -124,6 +125,13 @@ export interface Decision {
   errors?: RuleError[];
   /** Some signals were missing, for example because the store timed out. */
   degraded?: boolean;
+  /**
+   * The store failed rather than answered late, so the event may be missing
+   * from the counters: send it again with the same id to count it.
+   */
+  uncounted?: boolean;
+  /** An event with the same id had counted already, so this one did not count again. */
+  duplicate?: boolean;
   ruleset_version: string;
   latency_us: number;
 }

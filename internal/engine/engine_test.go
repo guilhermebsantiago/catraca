@@ -296,6 +296,41 @@ func TestDecideNormalizesWithoutTouchingTheCaller(t *testing.T) {
 	}
 }
 
+// TestDecideGeneratesIDsAfterObserving checks that the catalog sees only the
+// ids platforms send, which it counts once each, and that every decision
+// still names its event.
+func TestDecideGeneratesIDsAfterObserving(t *testing.T) {
+	rec := &chanRecorder{ch: make(chan recorded, 4)}
+	h := newHarness(t, Options{Recorder: rec})
+	d := h.decide(t, sendEvent())
+	if seen := h.cat.observed[0].ID; seen != "" {
+		t.Errorf("observed id = %q, want none: a generated id never repeats", seen)
+	}
+	if d.EventID == "" || d.EventID >= d.ID {
+		t.Errorf("event id %q, decision id %q: want a generated event id, before the decision's", d.EventID, d.ID)
+	}
+	if r := <-rec.ch; r.ev.ID != d.EventID {
+		t.Errorf("recorded event id = %q, want %q", r.ev.ID, d.EventID)
+	}
+}
+
+func TestDecideDuplicate(t *testing.T) {
+	h := newHarness(t, Options{})
+	h.cat.set.Duplicate = true
+	ev := sendEvent()
+	ev.ID = "msg-1"
+	d := h.decide(t, ev)
+	if !d.Duplicate || d.Degraded || d.EventID != "msg-1" {
+		t.Errorf("decision = %+v, want a duplicate of msg-1, not degraded", d)
+	}
+	if got := counter(t, h.reg, "catraca_duplicate_events_total", map[string]string{"type": "send"}); got != 1 {
+		t.Errorf("duplicates = %v, want 1", got)
+	}
+	if got := counter(t, h.reg, "catraca_duplicate_events_total", map[string]string{"type": "feedback"}); got != 0 {
+		t.Errorf("feedback duplicates = %v, want 0", got)
+	}
+}
+
 func TestDecideRejectsInvalidEvents(t *testing.T) {
 	h := newHarness(t, Options{})
 	wide := sendEvent()
@@ -479,8 +514,8 @@ func TestDecideStoreFailure(t *testing.T) {
 	h.cat.err = errors.New("redis: connection refused")
 
 	d := h.decide(t, sendEvent())
-	if !d.Degraded {
-		t.Error("decision is not degraded")
+	if !d.Degraded || !d.Uncounted {
+		t.Errorf("degraded = %v, uncounted = %v; want both when the store fails", d.Degraded, d.Uncounted)
 	}
 	// leaked fails closed, so the send is blocked; burst, big-burst and
 	// young fail open and are skipped.
@@ -550,6 +585,9 @@ func TestDecideObserveDeadline(t *testing.T) {
 
 	if !d.Degraded {
 		t.Error("decision is not degraded after the deadline")
+	}
+	if d.Uncounted {
+		t.Error("a store that answers late counts as having failed: its writes still apply")
 	}
 	if elapsed > 2*time.Second {
 		t.Errorf("Decide took %s; the deadline did not bound Observe", elapsed)

@@ -121,6 +121,40 @@ CATRACA_TEST_REDIS_URL=redis://localhost:6379/0 \
   go test ./internal/signal -run '^$' -bench '^(BenchmarkObserve|BenchmarkObserveWideSend)$/^redis-server$' -benchtime 100x -count 3
 ```
 
+### Events with ids
+
+An event with an `id` counts once per id ([retries](api.md#retries)): the
+script that applies its increments first sets a key for the id with
+`SET NX PX`, and skips them when the key exists. `BenchmarkObserveWithID` is
+`BenchmarkObserve` with a new id on every event; `BenchmarkObserveRetry`
+sends each event once before the loop, then again on every iteration, so
+each is a duplicate. They were measured while other programs loaded the
+machine, so whole-call times varied twofold between runs and are not
+given; Redis's own accounting (`INFO commandstats`, reset before each run,
+four interleaved runs of 3,000 events) is steadier:
+
+| benchmark | script time per event | `SET NX PX` per event |
+|---|---|---|
+| `BenchmarkObserve` (no id) | 424 to 460 µs | |
+| `BenchmarkObserveWithID` | 411 to 484 µs | 3.4 to 3.7 µs |
+| `BenchmarkObserveRetry` | 371 to 397 µs | 2.4 to 2.6 µs |
+
+The id's key costs one write in the script, about 1% of its time, which the
+runs cannot tell from noise; a duplicate skips its 13 increments and costs
+less than the first sending. In Go, naming the event (SHA-256 over its
+type, account and id) takes 0.1 µs and one allocation, and the memory store
+takes about 0.4 µs and two allocations more per event with an id, against
+15 to 20 µs for the whole `Observe`. `BenchmarkDecide` did not change: the
+engine only reads the result. Each id's key takes about 135 bytes of Redis
+memory (`used_memory` over 100,000 keys), 160 bytes for a cluster's longer
+keys, of which a send has six, and about 80 bytes in the memory store; see
+[`engine.dedupe_ttl`](config.md#engine) for what that comes to.
+
+```sh
+CATRACA_TEST_REDIS_URL=redis://localhost:6379/0 \
+  go test ./internal/signal -run '^$' -bench '^BenchmarkObserve(WithID|Retry)?$/^redis-server$' -benchtime 3000x
+```
+
 ## The Redis store
 
 Before, a send event's batch was about 90 pipelined commands, and every

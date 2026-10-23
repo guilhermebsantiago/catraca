@@ -114,7 +114,16 @@ type Decision struct {
 	Errors []RuleError `json:"errors,omitempty"`
 	// Degraded is true when signals were missing, for example because the
 	// store timed out, so some rules ran without them.
-	Degraded       bool   `json:"degraded,omitempty"`
+	Degraded bool `json:"degraded,omitempty"`
+	// Uncounted is true when the decision is degraded because the store
+	// failed, not because it answered late: the event may be missing from
+	// the counters. A store that answers late still applies the event's
+	// writes. An event sent again with the same id counts at most once.
+	Uncounted bool `json:"uncounted,omitempty"`
+	// Duplicate is true when an event with the same id had counted already,
+	// so this one did not count again. The decision is made on the counters
+	// as they are.
+	Duplicate      bool   `json:"duplicate,omitempty"`
 	RulesetVersion string `json:"ruleset_version"`
 	LatencyMicros  int64  `json:"latency_us"`
 }

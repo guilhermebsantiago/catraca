@@ -272,10 +272,30 @@ them and keeps its one connection.
 | `deadline` | `10ms` | time budget for the signal lookup of one decision. When it runs out, the decision is made without the missing signals and marked `degraded`; each rule's `on_error` decides what that means. A `key_leak` event's write of the leak gets the same budget first, and the event answers `503` when it runs out, so the platform sends it again |
 | `max_future_skew` | `5s` | how far ahead of Catraca's clock an event's `time` may be. A later time is replaced by the clock's, since an event cannot come from the future and, counted there, would empty the windows it touches until the clock caught up. Keep it well under a minute, the shortest window |
 | `max_event_age` | `168h` | how far behind Catraca's clock an event's `time` may be. An older event is answered `400 invalid_event`, and the feedback endpoints acknowledge it so the provider does not retry; a `key_leak` takes the clock's time instead. The default is the longest counter window, so nothing a counter could still use is refused. A lower value also stops late feedback from counting; a higher one lets an event move an account's first-seen time further back |
+| `dedupe_ttl` | `10m` | how long the `id` of an event that counted is remembered, so that the event sent again meanwhile, a retry after a timeout or a provider's redelivery, does not count twice ([retries](api.md#retries)). `0s` turns it off: every sending counts |
 
 Both bounds apply to every route that brings events in. `catraca replay`
 ignores them, since it decides historical events. See
 [limits](api.md#limits) for why and for the other limits on an event.
+
+**Deduplication.** Each event with an `id` that increments a counter costs
+one entry for `dedupe_ttl`: a Redis key of about 135 bytes; on a Redis
+Cluster one key of about 160 bytes per hash slot the event's counters live
+in, six for a send with an API key, an IP and a sender domain; about 80
+bytes in the memory store. Events without an `id` cost nothing, since
+generated ids never repeat. At 1,000 sends a second, all with ids, the
+default keeps 600,000 entries: about 80 MB on a single Redis, about 580 MB
+over a cluster's nodes. The window has to
+outlast the retries it guards against: a platform retrying a request that
+timed out does so within seconds, Amazon SNS's default delivery policy
+gives up after about a minute and useSend's after about three, but an SNS
+[delivery policy](feedback.md#amazon-ses) of your own may retry for up to
+an hour, and a useSend call retried by hand from its dashboard may come
+later still. An event sent again after the window counts again. Raise
+`dedupe_ttl` to the longest retry schedule you use, if the memory is there;
+with `maxmemory-policy volatile-ttl` (see [redis](#store)), the entries are
+among the first keys evicted under memory pressure, which costs retries
+their protection before it costs counters.
 
 ### gate
 

@@ -95,6 +95,8 @@ ruleset reload adds `details`, one entry per problem. The provider routes
 | `shadow` | shadow rules that matched: what would have happened |
 | `errors` | rules that could not be evaluated, with why |
 | `degraded` | true when signals were missing, for example because the store timed out |
+| `uncounted` | true when the decision is degraded because the store failed rather than answered late, so the event may be missing from the counters; send it again with the same `id` to count it |
+| `duplicate` | true when an event with the same `id` had counted already, so this one did not count again ([retries](#retries)) |
 | `ruleset_version` | the version of the ruleset that decided |
 | `latency_us` | time to decide, in microseconds |
 
@@ -145,7 +147,7 @@ The event fields:
 |---|---|---|
 | `type` | required | `send`, `feedback`, `account` or `key_leak` |
 | `account_id` | required except for `key_leak` | the platform's account id |
-| `id` | | your id for the event; generated when left out |
+| `id` | | your id for the event, so that sending it again counts it once ([retries](#retries)); generated when left out |
 | `time` | | RFC 3339; defaults to when Catraca receives it. Counters slide on event time. Bounded by Catraca's clock: see [limits](#limits) |
 | `api_key_id`, `ip` | | the key and IP the send used |
 | `from`, `to`, `subject`, `links` | | the email: sender, recipients, subject, the URLs in the body |
@@ -207,6 +209,23 @@ curl -s -X POST "$CATRACA/v1/decide" -H "Authorization: Bearer $TOKEN" -d '{"typ
 ```json
 {"error": {"code": "invalid_event", "message": "event: account_id is required"}}
 ```
+
+### Retries
+
+Send each event with an `id` of your own, such as your message id, and use
+the same one when you send the event again, after a timeout say. An event
+whose `id` has counted already (same type and account) does not count again
+for [`engine.dedupe_ttl`](config.md#engine) (10 minutes) after it first did:
+its decision is made on the counters as they are, with the first sending
+counted once, and has `"duplicate": true`. Without an `id`, Catraca
+generates one, and every sending counts. A decision with
+`"uncounted": true` was made while the store failed, so its event may be
+missing from the counters: when it is not a send you are about to make,
+send it again with its `id`. `catraca_duplicate_events_total` counts the
+duplicates by event type.
+
+An `id` names one event: reusing one for another event of the same type and
+account within the window drops that event from the counters.
 
 ### Limits
 
@@ -721,6 +740,7 @@ Prometheus metrics in the text format.
 | `catraca_decision_duration_seconds` | histogram | time to decide |
 | `catraca_records_dropped_total` | counter | decisions the engine could not hand to the audit log |
 | `catraca_event_times_out_of_bounds_total{bound}` | counter | event times too far from Catraca's clock: `future` ones replaced by the clock's, `past` ones rejected ([limits](#limits)) |
+| `catraca_duplicate_events_total{type}` | counter | events sent again with an `id` that had counted already, which did not count again ([retries](#retries)) |
 | `catraca_http_request_duration_seconds{route,status}` | histogram | HTTP requests, by route pattern (`POST /v1/decide`, `unmatched`) and status |
 | `catraca_audit_recorded_total`, `_dropped_total`, `_failed_total` | counter | audit log writes |
 | `catraca_audit_rejected_total` | counter | decisions the audit database refused one at a time while it wrote the rest of their batch, also counted as failed ([details](audit.md#how-decisions-are-written)) |

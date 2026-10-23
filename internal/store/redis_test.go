@@ -560,3 +560,177 @@ func TestRedisErrors(t *testing.T) {
 }
 
 func itoa(n int64) string { return strconv.FormatInt(n, 10) }
+
+func newTestRedisCluster(t *testing.T, prefix string) (*Redis, *miniredis.Miniredis) {
+	t.Helper()
+	mr := storetest.Miniredis(t)
+	client := redis.NewClusterClient(&redis.ClusterOptions{Addrs: []string{mr.Addr()}, MaxRetries: -1, ReadTimeout: storetest.MiniredisReadTimeout})
+	t.Cleanup(func() { client.Close() })
+	return NewRedis(client, RedisOptions{Prefix: prefix}), mr
+}
+
+// dedupeBatch queues what an event's batch holds: increments of two
+// counters, which a cluster puts in two slots, and writes that need no
+// guard.
+func dedupeBatch(b *Batch, id string) (repeated *BoolResult, a, c *IntResult) {
+	repeated = b.Dedupe(id, t0, 10*time.Minute)
+	b.Incr("a", time.Hour, t0, 1)
+	b.Incr("c", time.Hour, t0, 1)
+	b.AddDistinct("d", "m", time.Hour, t0)
+	b.Set("v", "1", time.Hour)
+	return repeated, b.Count("a", time.Hour, t0), b.Count("c", time.Hour, t0)
+}
+
+func TestRedisDedupeKeys(t *testing.T) {
+	t.Run("single", func(t *testing.T) {
+		s, mr, _ := newTestRedis(t, "app:")
+		run(t, s, func(b *Batch) { dedupeBatch(b, "ev-1") })
+		if got := mr.TTL("app:e:ev-1"); got != 10*time.Minute {
+			t.Errorf("TTL(app:e:ev-1) = %v, want 10m; keys %v", got, mr.Keys())
+		}
+		run(t, s, func(b *Batch) {
+			b.Dedupe("ev-2", t0, time.Minute)
+			b.Set("v", "1", 0)
+		})
+		if mr.Exists("app:e:ev-2") {
+			t.Error("a batch without increments wrote its id")
+		}
+	})
+	t.Run("cluster", func(t *testing.T) {
+		s, mr := newTestRedisCluster(t, "app:")
+		run(t, s, func(b *Batch) { dedupeBatch(b, "ev-1") })
+		var ids []string
+		for _, k := range mr.Keys() {
+			if strings.HasPrefix(k, "app:e:") {
+				ids = append(ids, k)
+			}
+		}
+		// One per slot with increments, none for the distinct set's and
+		// the value's.
+		if want := []string{"app:e:{a}:ev-1", "app:e:{c}:ev-1"}; !slices.Equal(ids, want) {
+			t.Errorf("dedupe keys = %v, want %v", ids, want)
+		}
+	})
+}
+
+// TestRedisDedupeKeyIsInTheSlotItGuards checks that each call's dedupe key
+// hashes to the call's slot, for keys and prefixes whose braces are unusual
+// too, or is left out when no such key exists.
+func TestRedisDedupeKeyIsInTheSlotItGuards(t *testing.T) {
+	for _, prefix := range []string{"catraca:", "x{y}:", "x{y:", "{}"} {
+		r := NewRedis(nil, RedisOptions{Prefix: prefix})
+		var b Batch
+		b.Dedupe("ev{1}", t0, time.Minute)
+		for _, key := range []string{"plain", "with}brace", "with{brace", "{tagged}", "}lead", "account:sends:a{b}c"} {
+			b.Incr(key, time.Hour, t0, 1)
+		}
+		for _, c := range r.plan(&b) {
+			idx, _ := c.args[0].(int)
+			if idx == 0 {
+				t.Logf("prefix %q: %v is counted without a dedupe key", prefix, c.keys)
+				continue
+			}
+			if got, slot := hashTag(c.keys[idx-1]), hashTag(c.keys[0]); got != slot {
+				t.Errorf("prefix %q: dedupe key %s hashes to %q, its call's keys to %q", prefix, c.keys[idx-1], got, slot)
+			}
+		}
+	}
+	// With an ordinary prefix every counter key the catalog writes, which
+	// starts with the entity's kind, has one.
+	r := NewRedis(nil, RedisOptions{})
+	var b Batch
+	b.Dedupe("ev", t0, time.Minute)
+	for _, key := range []string{"account:sends:}x", "ip:sends:{x}", "domain:sends:a}{b"} {
+		b.Incr(key, time.Hour, t0, 1)
+	}
+	for _, c := range r.plan(&b) {
+		if c.args[0] == 0 {
+			t.Errorf("%v has no dedupe key", c.keys)
+		}
+	}
+}
+
+// TestRedisRetriedScriptCallCountsOnce sends the very same script calls
+// twice, as a client that resends a call after a lost reply would.
+func TestRedisRetriedScriptCallCountsOnce(t *testing.T) {
+	for _, be := range []struct {
+		name string
+		new  func(t *testing.T) *Redis
+	}{
+		{"single", func(t *testing.T) *Redis { s, _, _ := newTestRedis(t, ""); return s }},
+		{"cluster", func(t *testing.T) *Redis { s, _ := newTestRedisCluster(t, ""); return s }},
+	} {
+		t.Run(be.name, func(t *testing.T) {
+			s := be.new(t)
+			var b Batch
+			repeated, a, c := dedupeBatch(&b, "ev")
+			calls := s.plan(&b)
+			for i := range 2 {
+				if err := s.run(context.Background(), calls, b.once); err != nil {
+					t.Fatal(err)
+				}
+				if repeated.Val() != (i == 1) || a.Val() != 1 || c.Val() != 1 {
+					t.Errorf("send %d: repeated %v, counts %d and %d; want %v, 1 and 1", i+1, repeated.Val(), a.Val(), c.Val(), i == 1)
+				}
+			}
+		})
+	}
+}
+
+// TestRedisClusterRetryAppliesTheRest sends a batch whose first attempt ran
+// in one slot only, as when one node failed: the retry applies the other
+// slot's increments and skips those that applied.
+func TestRedisClusterRetryAppliesTheRest(t *testing.T) {
+	s, _ := newTestRedisCluster(t, "")
+	var first Batch
+	dedupeBatch(&first, "ev")
+	var guarded []*scriptCall
+	for _, c := range s.plan(&first) {
+		if c.incrs {
+			guarded = append(guarded, c)
+		}
+	}
+	if len(guarded) != 2 {
+		t.Fatalf("%d calls with increments, want 2", len(guarded))
+	}
+	if err := s.run(context.Background(), guarded[:1], first.once); err != nil {
+		t.Fatal(err)
+	}
+	var retry Batch
+	repeated, a, c := dedupeBatch(&retry, "ev")
+	if err := s.Do(context.Background(), &retry); err != nil {
+		t.Fatal(err)
+	}
+	if !repeated.Val() || a.Val() != 1 || c.Val() != 1 {
+		t.Errorf("retry: repeated %v, counts %d and %d; want true, 1 and 1", repeated.Val(), a.Val(), c.Val())
+	}
+}
+
+// TestRedisRetryAfterALostReplyCountsOnce sends a batch whose reply is lost
+// after Redis ran it, then sends it again, as the caller of a decision that
+// failed would.
+func TestRedisRetryAfterALostReplyCountsOnce(t *testing.T) {
+	mr := storetest.Miniredis(t)
+	proxy := newReplyDropper(t, mr.Addr())
+	s, err := OpenRedis("redis://"+proxy.addr+"/0", RedisOptions{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer s.Close()
+	run(t, s, func(b *Batch) { b.Get("warm-up") })
+
+	proxy.drop.Store(true)
+	var b Batch
+	dedupeBatch(&b, "ev")
+	if err := s.Do(context.Background(), &b); err == nil {
+		t.Fatal("Do succeeded although the reply was lost")
+	}
+	var retry Batch
+	repeated, a, c := dedupeBatch(&retry, "ev")
+	if err := s.Do(context.Background(), &retry); err != nil {
+		t.Fatal(err)
+	}
+	if !repeated.Val() || a.Val() != 1 || c.Val() != 1 {
+		t.Errorf("retry: repeated %v, counts %d and %d; want true, 1 and 1", repeated.Val(), a.Val(), c.Val())
+	}
+}

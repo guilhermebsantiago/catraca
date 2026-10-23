@@ -137,7 +137,11 @@ func New(ctx context.Context, cfg *config.Config, opts Options) (_ *App, err err
 	if a.store, err = openStore(cfg.Store); err != nil {
 		return nil, err
 	}
-	a.catalog = signal.NewCatalog(a.store, signal.Options{})
+	dedupe := cfg.Engine.DedupeTTL
+	if dedupe == 0 {
+		dedupe = -1 // engine.dedupe_ttl: 0s turns deduplication off.
+	}
+	a.catalog = signal.NewCatalog(a.store, signal.Options{DedupeTTL: dedupe})
 
 	alog := log.With("component", "audit")
 	auditOpts := cfg.Audit.Options()

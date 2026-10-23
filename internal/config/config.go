@@ -20,6 +20,7 @@ import (
 	"github.com/guilhermebsantiago/catraca/internal/audit"
 	"github.com/guilhermebsantiago/catraca/internal/engine"
 	"github.com/guilhermebsantiago/catraca/internal/precision"
+	"github.com/guilhermebsantiago/catraca/internal/signal"
 	"github.com/guilhermebsantiago/catraca/internal/store"
 )
 
@@ -183,6 +184,11 @@ type Engine struct {
 	// be; an older event is rejected. Default 168h, the longest counter
 	// window.
 	MaxEventAge time.Duration `yaml:"max_event_age"`
+	// DedupeTTL is how long the id of an event that counted is remembered,
+	// so that the event sent again meanwhile does not count twice. Each
+	// event with an id costs a store entry for this long. 0s turns it off.
+	// Default 10m.
+	DedupeTTL time.Duration `yaml:"dedupe_ttl"`
 }
 
 // Gate is the precision gate a rule must clear before it enforces.
@@ -384,6 +390,9 @@ func (c *Config) applyDefaults(set func(path string) bool) {
 	}
 	if c.Engine.MaxEventAge == 0 {
 		c.Engine.MaxEventAge = engine.DefaultMaxEventAge
+	}
+	if !set("engine.dedupe_ttl") {
+		c.Engine.DedupeTTL = signal.DefaultDedupeTTL
 	}
 	if c.Gate.MinLabeled == 0 {
 		c.Gate.MinLabeled = precision.DefaultMinLabeled
