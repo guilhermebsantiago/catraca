@@ -21,13 +21,14 @@ import (
 	ossignal "os/signal"
 	"slices"
 	"sync"
+	"sync/atomic"
+	"syscall"
 	"time"
 
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/prometheus/client_golang/prometheus/collectors"
 
 	"github.com/guilhermebsantiago/catraca/internal/api"
-	"github.com/guilhermebsantiago/catraca/internal/audit"
 	"github.com/guilhermebsantiago/catraca/internal/config"
 	"github.com/guilhermebsantiago/catraca/internal/decision"
 	"github.com/guilhermebsantiago/catraca/internal/engine"
@@ -71,7 +72,7 @@ type App struct {
 
 	store   store.Store
 	catalog signal.Catalog
-	audit   *audit.DB
+	audit   *auditLog
 	hooks   *hooks.Dispatcher
 	// stopHooks cancels hooks.Run; hooksDone is closed when it returns.
 	stopHooks context.CancelFunc
@@ -79,17 +80,27 @@ type App struct {
 	engine    *engine.Engine
 	scan      *secretscan.Handler
 	api       *api.Server
+	deps      *dependencyMonitor
+	// draining is set when Serve's context ends, so /readyz reports not
+	// ready while the server still serves.
+	draining atomic.Bool
+	// drainEnd returns the channel that ends a drain of the given delay:
+	// time.After, or a channel a test controls.
+	drainEnd func(time.Duration) <-chan time.Time
 
 	closeOnce sync.Once
 	closeErr  error
 }
 
 // New builds an App from cfg. It loads the ruleset, opens the store and the
-// audit database and starts webhook delivery. A ruleset that fails to load
-// does not stop it: the error is logged, /readyz reports not ready and
-// decisions answer 503 until a reload succeeds, so an edit that breaks the
-// file never takes down a running deployment. An audit database that cannot
-// be opened does.
+// audit database, starts webhook delivery and starts checking the store and
+// the audit database in the background. A ruleset that fails to load does
+// not stop it: the error is logged, /readyz reports not ready and decisions
+// answer 503 until a reload succeeds, so an edit that breaks the file never
+// takes down a running deployment. A SQLite audit database that cannot be
+// opened does. A Postgres one opens in the background, retried while it is
+// unreachable, and the server decides without the audit log meanwhile; an
+// error that waiting cannot fix stops Serve (see auditLog).
 func New(ctx context.Context, cfg *config.Config, opts Options) (_ *App, err error) {
 	log := opts.Logger
 	if log == nil {
@@ -101,6 +112,7 @@ func New(ctx context.Context, cfg *config.Config, opts Options) (_ *App, err err
 		version:  opts.Version,
 		registry: prometheus.NewRegistry(),
 		holder:   &rules.Holder{},
+		drainEnd: time.After,
 	}
 	defer func() {
 		if err != nil {
@@ -127,9 +139,10 @@ func New(ctx context.Context, cfg *config.Config, opts Options) (_ *App, err err
 	}
 	a.catalog = signal.NewCatalog(a.store, signal.Options{})
 
+	alog := log.With("component", "audit")
 	auditOpts := cfg.Audit.Options()
-	auditOpts.Logger = log.With("component", "audit")
-	a.audit, err = audit.Open(ctx, cfg.Audit.DSN.Value(), auditOpts)
+	auditOpts.Logger = alog
+	a.audit, err = openAuditLog(ctx, cfg.Audit.DSN.Value(), auditOpts, alog)
 	if err != nil {
 		return nil, fmt.Errorf("open the audit database: %w", err)
 	}
@@ -160,17 +173,22 @@ func New(ctx context.Context, cfg *config.Config, opts Options) (_ *App, err err
 		return nil, err
 	}
 
+	a.deps = newDependencyMonitor(a.dependencies(), a.registry, log)
+	a.deps.start()
+
 	aopts := api.Options{
-		Decider:      a.engine,
-		Rules:        a.holder,
-		Reload:       a.Reload,
-		Audit:        a.audit,
-		Gate:         cfg.Gate.Precision(),
-		Checks:       a.checks(),
-		Gatherer:     a.registry,
-		Registerer:   a.registry,
-		Logger:       log,
-		MaxBodyBytes: cfg.Server.MaxBodyBytes,
+		Decider:       a.engine,
+		Rules:         a.holder,
+		Reload:        a.Reload,
+		Audit:         a.audit,
+		Gate:          cfg.Gate.Precision(),
+		Checks:        a.checks(),
+		Dependencies:  a.deps.statuses,
+		Gatherer:      a.registry,
+		SeparateAdmin: cfg.Server.AdminAddr != "",
+		Registerer:    a.registry,
+		Logger:        log,
+		MaxBodyBytes:  cfg.Server.MaxBodyBytes,
 	}
 	for _, t := range cfg.Auth.Tokens {
 		aopts.Tokens = append(aopts.Tokens, api.Token{Name: t.Name, Value: t.Token.Value()})
@@ -199,7 +217,7 @@ func NewLogger(cfg config.Logging, w io.Writer) *slog.Logger {
 
 func openStore(c config.Store) (store.Store, error) {
 	if c.Backend == config.StoreRedis {
-		s, err := store.OpenRedis(c.Redis.URL.Value(), store.RedisOptions{Prefix: c.Redis.Prefix})
+		s, err := store.OpenRedis(c.Redis.URL.Value(), store.RedisOptions{Prefix: c.Redis.Prefix, Mode: c.Redis.Mode})
 		if err != nil {
 			return nil, err
 		}
@@ -323,9 +341,14 @@ func (a *App) secretScanning(opts *api.Options) error {
 	return nil
 }
 
-// Handler returns the HTTP handler for every route. To serve it with your own
+// Handler returns the HTTP handler for every route, except health and
+// metrics when server.admin_addr is set. To serve it with your own
 // http.Server, stop that server before calling Close.
 func (a *App) Handler() http.Handler { return a.api }
+
+// AdminHandler returns the HTTP handler for health and metrics alone, the
+// routes server.admin_addr serves.
+func (a *App) AdminHandler() http.Handler { return a.api.Admin() }
 
 // Ruleset returns the ruleset decisions are made with, or nil when none is
 // loaded.
@@ -388,8 +411,9 @@ func MissingHooks(rs *rules.Ruleset, hs []config.Hook) []string {
 	return out
 }
 
-// checks are the readiness checks: a ruleset is loaded, and the store and
-// the audit database answer.
+// checks are the readiness checks: a ruleset is loaded and the server is not
+// draining. They read the server's own state only; see dependencyMonitor
+// for why the store and the audit database are not among them.
 func (a *App) checks() []api.Check {
 	return []api.Check{
 		{Name: "rules", Check: func(context.Context) error {
@@ -398,74 +422,143 @@ func (a *App) checks() []api.Check {
 			}
 			return nil
 		}},
-		{Name: "store", Check: func(ctx context.Context) error {
-			p, ok := a.store.(interface{ Ping(context.Context) error })
-			if !ok {
-				return nil
-			}
-			if err := p.Ping(ctx); err != nil {
-				a.log.Warn("readiness: the store is unreachable", "error", err)
-				return errors.New("unreachable")
-			}
-			return nil
-		}},
-		{Name: "audit", Check: func(ctx context.Context) error {
-			if err := a.audit.SQL().PingContext(ctx); err != nil {
-				a.log.Warn("readiness: the audit database is unreachable", "error", err)
-				return errors.New("unreachable")
+		{Name: "shutdown", Check: func(context.Context) error {
+			if a.draining.Load() {
+				return errors.New("draining")
 			}
 			return nil
 		}},
 	}
 }
 
-// Run listens on the configured address and serves until ctx ends, then
-// shuts down. See Serve.
+// dependencies are the services the dependency monitor checks: Redis, when
+// it is the store, and the audit database.
+func (a *App) dependencies() []dependency {
+	var deps []dependency
+	if p, ok := a.store.(interface{ Ping(context.Context) error }); ok {
+		deps = append(deps, dependency{name: "store", check: p.Ping})
+	}
+	deps = append(deps, dependency{name: "audit", check: a.audit.Ping})
+	return deps
+}
+
+// Run listens on the configured addresses, server.listen and, when it is
+// set, server.admin_addr, and serves until ctx ends, then shuts down. See
+// Serve.
 func (a *App) Run(ctx context.Context) error {
 	ln, err := net.Listen("tcp", a.cfg.Server.Listen)
 	if err != nil {
 		_ = a.Close(context.Background())
 		return fmt.Errorf("listen on %s: %w", a.cfg.Server.Listen, err)
 	}
-	return a.Serve(ctx, ln)
+	var admin net.Listener
+	if addr := a.cfg.Server.AdminAddr; addr != "" {
+		if admin, err = net.Listen("tcp", addr); err != nil {
+			ln.Close()
+			_ = a.Close(context.Background())
+			return fmt.Errorf("listen on %s (server.admin_addr): %w", addr, err)
+		}
+	}
+	return a.Serve(ctx, ln, admin)
 }
 
-// Serve serves HTTP on ln until ctx ends or the server fails, then shuts
-// down within the configured shutdown timeout: it stops accepting requests
-// and waits for those in flight, then closes the rest (see Close). On Unix,
-// SIGHUP reloads the ruleset while it serves.
-func (a *App) Serve(ctx context.Context, ln net.Listener) error {
-	srv := &http.Server{
-		Handler:           a.api,
-		ReadHeaderTimeout: readHeaderTimeout,
-		ReadTimeout:       readTimeout,
-		WriteTimeout:      writeTimeout,
-		IdleTimeout:       idleTimeout,
-		ErrorLog:          slog.NewLogLogger(a.log.Handler(), slog.LevelWarn),
+// Serve serves the API on ln, and health and metrics on admin when
+// server.admin_addr is set, until ctx ends or a server fails. When ctx ends
+// it drains first (see drain), then shuts down within the configured
+// shutdown timeout: it stops accepting requests and waits for those in
+// flight, then closes the rest (see Close). On Unix, SIGHUP reloads the
+// ruleset while it serves. admin must be nil when server.admin_addr is not
+// set, and not nil when it is.
+func (a *App) Serve(ctx context.Context, ln, admin net.Listener) error {
+	if (admin != nil) != (a.cfg.Server.AdminAddr != "") {
+		ln.Close()
+		if admin != nil {
+			admin.Close()
+		}
+		_ = a.Close(context.Background())
+		return errors.New("serve: pass an admin listener exactly when server.admin_addr is set")
 	}
-	errc := make(chan error, 1)
-	go func() { errc <- srv.Serve(ln) }()
+	servers := []*http.Server{a.httpServer(a.api)}
+	listeners := []net.Listener{ln}
+	attrs := []any{"addr", ln.Addr().String()}
+	if admin != nil {
+		servers = append(servers, a.httpServer(a.api.Admin()))
+		listeners = append(listeners, admin)
+		attrs = append(attrs, "admin_addr", admin.Addr().String())
+	}
+	errc := make(chan error, len(servers))
+	for i, srv := range servers {
+		go func() { errc <- srv.Serve(listeners[i]) }()
+	}
 	stopReloads := a.reloadOnSignal()
 	defer stopReloads()
-	a.log.Info("catraca is listening", "addr", ln.Addr().String(), "version", a.version)
+	a.log.Info("catraca is listening", append(attrs, "version", a.version)...)
 
 	var serveErr error
 	select {
 	case <-ctx.Done():
+		a.drain(servers...)
 	case err := <-errc:
 		serveErr = fmt.Errorf("serve HTTP: %w", err)
+	case err := <-a.audit.failed():
+		a.log.Error("the audit database cannot be opened, and waiting will not fix it; stopping", "error", err)
+		serveErr = err
 	}
 	a.log.Info("shutting down", "timeout", a.cfg.Server.ShutdownTimeout)
 	sctx, cancel := context.WithTimeout(context.Background(), a.cfg.Server.ShutdownTimeout)
 	defer cancel()
-	if err := srv.Shutdown(sctx); err != nil {
-		serveErr = errors.Join(serveErr, fmt.Errorf("stop the HTTP server: %w", err))
+	// The admin server stops after the API's, so probes and scrapes keep an
+	// answer until the API has stopped.
+	for _, srv := range servers {
+		if err := srv.Shutdown(sctx); err != nil {
+			serveErr = errors.Join(serveErr, fmt.Errorf("stop the HTTP server: %w", err))
+		}
 	}
 	if err := a.Close(sctx); err != nil {
 		serveErr = errors.Join(serveErr, err)
 	}
 	a.log.Info("stopped")
 	return serveErr
+}
+
+func (a *App) httpServer(h http.Handler) *http.Server {
+	return &http.Server{
+		Handler:           h,
+		ReadHeaderTimeout: readHeaderTimeout,
+		ReadTimeout:       readTimeout,
+		WriteTimeout:      writeTimeout,
+		IdleTimeout:       idleTimeout,
+		ErrorLog:          slog.NewLogLogger(a.log.Handler(), slog.LevelWarn),
+	}
+}
+
+// drain reports not ready on /readyz and keeps serving for
+// server.drain_delay before the shutdown starts. A load balancer or a
+// Kubernetes Service needs a few seconds to stop sending requests to an
+// instance that is going away; an instance that stopped accepting at once
+// would refuse the requests sent meanwhile. Responses close their
+// connections from now on, so clients holding pooled connections to this
+// instance reconnect, and the new connections go where the load balancer
+// sends them. A second SIGINT or SIGTERM ends the wait early.
+func (a *App) drain(servers ...*http.Server) {
+	a.draining.Store(true)
+	for _, s := range servers {
+		s.SetKeepAlivesEnabled(false)
+	}
+	delay := a.cfg.Server.DrainDelay
+	if delay <= 0 {
+		return
+	}
+	a.log.Info("draining: reporting not ready and still serving until the delay ends; signal again to stop now",
+		"drain_delay", delay)
+	again := make(chan os.Signal, 1)
+	ossignal.Notify(again, os.Interrupt, syscall.SIGTERM)
+	defer ossignal.Stop(again)
+	select {
+	case <-a.drainEnd(delay):
+	case <-again:
+		a.log.Info("second signal: shutting down without the rest of the drain delay")
+	}
 }
 
 // reloadOnSignal reloads the ruleset on SIGHUP, where the platform has it,
@@ -494,7 +587,9 @@ func (a *App) reloadOnSignal() (stop func()) {
 }
 
 // Close shuts down everything but the HTTP server, which must already be
-// stopped, in dependency order:
+// stopped, in dependency order, once the dependency checks have stopped and
+// the audit database, if it is still being opened, is given up on (the
+// decisions waiting for it are dropped, and counted):
 //
 //  1. secret scanning finishes the tokens it accepted, which still need the
 //     engine;
@@ -508,6 +603,12 @@ func (a *App) reloadOnSignal() (stop func()) {
 func (a *App) Close(ctx context.Context) error {
 	a.closeOnce.Do(func() {
 		var errs []error
+		if a.deps != nil {
+			a.deps.close()
+		}
+		if a.audit != nil {
+			a.audit.stopOpening()
+		}
 		if a.scan != nil {
 			if err := a.scan.Shutdown(ctx); err != nil {
 				errs = append(errs, fmt.Errorf("stop secret scanning: %w", err))

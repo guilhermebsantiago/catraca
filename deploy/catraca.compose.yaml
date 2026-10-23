@@ -2,6 +2,8 @@
 # share them, and the audit log in Postgres.
 server:
   listen: :8080
+  # No load balancer in front to drain from.
+  drain_delay: 0s
 
 auth:
   tokens:

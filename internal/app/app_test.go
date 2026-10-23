@@ -105,6 +105,15 @@ type options struct {
 	// maxBodyBytes is server.max_body_bytes; zero means 4096, small enough
 	// to test the limit.
 	maxBodyBytes int
+	// redisURL, when set, keeps counters in Redis instead of memory.
+	redisURL string
+	// drainDelay is server.drain_delay; empty means 0s.
+	drainDelay string
+	// auditDSN replaces the SQLite audit database in the test's directory.
+	auditDSN string
+	// admin sets server.admin_addr, so health and metrics leave the API's
+	// handler.
+	admin bool
 }
 
 func newHarness(t *testing.T, opts options) *harness {
@@ -117,6 +126,12 @@ func newHarness(t *testing.T, opts options) *harness {
 	}
 	if opts.maxBodyBytes == 0 {
 		opts.maxBodyBytes = 4096
+	}
+	if opts.drainDelay == "" {
+		opts.drainDelay = "0s"
+	}
+	if opts.auditDSN == "" {
+		opts.auditDSN = "sqlite:" + filepath.ToSlash(h.dbPath)
 	}
 	h.writeRules(opts.rules)
 
@@ -133,6 +148,7 @@ func newHarness(t *testing.T, opts options) *harness {
 server:
   max_body_bytes: %d
   shutdown_timeout: 10s
+  drain_delay: %s
 auth:
   tokens:
     - name: test
@@ -140,7 +156,11 @@ auth:
 rules:
   path: '%s'
 audit:
-  dsn: 'sqlite:%s'
+  dsn: '%s'
+# Even the memory store can miss the default 10ms on a loaded machine, and a
+# degraded decision skips the rules that read account signals.
+engine:
+  deadline: 2s
 hooks:
   - name: revoke_key
     url: %s
@@ -159,7 +179,14 @@ secret_scanning:
       secret: %s
 logging:
   level: debug
-`, opts.maxBodyBytes, token, filepath.ToSlash(h.rulesPath), filepath.ToSlash(h.dbPath), h.hook.URL, secret, secret, secret, keys.URL, resolver.URL, secret)
+`, opts.maxBodyBytes, opts.drainDelay, token, filepath.ToSlash(h.rulesPath), opts.auditDSN, h.hook.URL, secret, secret, secret, keys.URL, resolver.URL, secret)
+	if opts.redisURL != "" {
+		yaml += fmt.Sprintf("store:\n  backend: redis\n  redis:\n    url: '%s'\n", opts.redisURL)
+	}
+	if opts.admin {
+		// Tests pass their own listener; the address only turns it on.
+		yaml = strings.Replace(yaml, "server:\n", "server:\n  admin_addr: 127.0.0.1:0\n", 1)
+	}
 	cfg, err := config.Parse([]byte(yaml), "", func(string) (string, bool) { return "", false })
 	if err != nil {
 		t.Fatalf("config: %v", err)
@@ -193,6 +220,9 @@ type response struct {
 	status int
 	header http.Header
 	body   []byte
+	// close is set when the server closed the connection after the response
+	// (net/http removes the Connection: close header).
+	close bool
 }
 
 func (r response) json(t *testing.T, v any) {
@@ -262,7 +292,7 @@ func (h *harness) do(method, path, auth string, body any, headers ...string) res
 	if err != nil {
 		h.t.Fatal(err)
 	}
-	return response{status: resp.StatusCode, header: resp.Header, body: data}
+	return response{status: resp.StatusCode, header: resp.Header, body: data, close: resp.Close}
 }
 
 // decide posts an event to /v1/decide and returns the decision.
@@ -521,7 +551,13 @@ func TestReviewQueue(t *testing.T) {
 		r.json(t, &out)
 		return out
 	}
-	q := review("?mode=shadow&limit=10")
+	// The engine hands decisions to the audit log from a goroutine of its
+	// own, which a loaded machine may run after this request.
+	var q api.ReviewResponse
+	eventually(t, 10*time.Second, func() bool {
+		q = review("?mode=shadow&limit=10")
+		return len(q.Items) > 0
+	})
 	if q.RuleID != "wide-send" || q.Mode != decision.Shadow || len(q.Items) != 1 {
 		t.Fatalf("queue = %+v", q)
 	}
@@ -651,18 +687,114 @@ func TestReadiness(t *testing.T) {
 	t.Parallel()
 	h := newHarness(t, options{})
 	r := h.do("GET", "/readyz", "", nil)
-	var ready struct {
-		Status string            `json:"status"`
-		Checks map[string]string `json:"checks"`
-	}
+	var ready api.ReadyResponse
 	r.json(t, &ready)
-	want := map[string]string{"rules": "ok", "store": "ok", "audit": "ok"}
-	if r.status != http.StatusOK || ready.Status != "ready" || fmt.Sprint(ready.Checks) != fmt.Sprint(want) {
+	want := map[string]string{"rules": "ok", "shutdown": "ok"}
+	if r.status != http.StatusOK || ready.Status != "ready" || fmt.Sprint(ready.Checks) != fmt.Sprint(want) || ready.Dependencies != nil {
 		t.Errorf("readyz: %d %s", r.status, r.body)
 	}
 	if r := h.do("GET", "/healthz", "", nil); r.status != http.StatusOK || !strings.Contains(string(r.body), `"ok"`) {
 		t.Errorf("healthz: %d %s", r.status, r.body)
 	}
+
+	// The memory store is not a dependency; the audit database is.
+	eventually(t, 5*time.Second, func() bool {
+		r = h.do("GET", "/readyz?verbose", "", nil)
+		ready = api.ReadyResponse{}
+		r.json(t, &ready)
+		return ready.Dependencies["audit"].Status == "ok"
+	})
+	if _, ok := ready.Dependencies["store"]; ok || r.status != http.StatusOK || ready.Dependencies["audit"].CheckedAt.IsZero() {
+		t.Errorf("readyz?verbose: %d %s", r.status, r.body)
+	}
+	m := string(h.do("GET", "/metrics", "", nil).body)
+	if !strings.Contains(m, `catraca_dependency_up{dependency="audit"} 1`) {
+		t.Errorf("metrics lack catraca_dependency_up for the audit database")
+	}
+}
+
+// TestReadinessIgnoresDependencies runs the server on a Redis that does not
+// answer: decisions are degraded, and the server stays ready.
+func TestReadinessIgnoresDependencies(t *testing.T) {
+	t.Parallel()
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	ln.Close() // nothing listens there now
+	h := newHarness(t, options{redisURL: "redis://" + ln.Addr().String() + "/0"})
+
+	d, _ := h.decide(send("acct", "a@shop.example"))
+	if !d.Degraded || d.Action != decision.Allow {
+		t.Errorf("decision with Redis down: %+v", d)
+	}
+	r := h.do("GET", "/readyz", "", nil)
+	if r.status != http.StatusOK {
+		t.Errorf("readyz with Redis down: %d %s", r.status, r.body)
+	}
+	var ready api.ReadyResponse
+	eventually(t, 10*time.Second, func() bool {
+		r = h.do("GET", "/readyz?verbose", "", nil)
+		ready = api.ReadyResponse{}
+		r.json(t, &ready)
+		return ready.Dependencies["store"].Status == "unavailable" && ready.Dependencies["audit"].Status == "ok"
+	})
+	if r.status != http.StatusOK || ready.Status != "ready" {
+		t.Errorf("readyz?verbose with Redis down: %d %s", r.status, r.body)
+	}
+	if strings.Contains(string(r.body), ln.Addr().String()) {
+		t.Errorf("readyz shows the Redis address: %s", r.body)
+	}
+	if m := string(h.do("GET", "/metrics", "", nil).body); !strings.Contains(m, `catraca_dependency_up{dependency="store"} 0`) {
+		t.Error("metrics do not show the store down")
+	}
+	if !strings.Contains(h.logs.String(), "a dependency is unavailable") {
+		t.Error("no log of the store going down")
+	}
+}
+
+// TestServesWhileTheAuditDatabaseIsUnreachable starts the server with a
+// Postgres audit database that refuses connections: it starts, is ready,
+// decides, answers 503 where the audit log is needed, and says so in its
+// dependencies, metrics and logs.
+func TestServesWhileTheAuditDatabaseIsUnreachable(t *testing.T) {
+	t.Parallel()
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	ln.Close() // nothing listens there now
+	h := newHarness(t, options{auditDSN: "postgres://catraca:pw@" + ln.Addr().String() + "/catraca?sslmode=disable"})
+
+	if r := h.do("GET", "/readyz", "", nil); r.status != http.StatusOK {
+		t.Errorf("readyz: %d %s", r.status, r.body)
+	}
+	d, _ := h.decide(send("acct", "win@spam.example"))
+	if d.Action != decision.Block {
+		t.Errorf("decision without the audit log: %+v", d)
+	}
+	if r := h.do("GET", "/v1/decisions/"+d.ID, token, nil); r.status != http.StatusServiceUnavailable || r.errorCode(t) != "audit_unavailable" {
+		t.Errorf("GET decision: %d %s", r.status, r.body)
+	}
+	if r := h.do("GET", "/v1/stats/rules", token, nil); r.status != http.StatusServiceUnavailable || r.errorCode(t) != "audit_unavailable" {
+		t.Errorf("GET stats: %d %s", r.status, r.body)
+	}
+	var ready api.ReadyResponse
+	eventually(t, 10*time.Second, func() bool {
+		r := h.do("GET", "/readyz?verbose", "", nil)
+		ready = api.ReadyResponse{}
+		r.json(t, &ready)
+		return ready.Dependencies["audit"].Status == "not_open"
+	})
+	if ready.Status != "ready" {
+		t.Errorf("readyz?verbose: %+v", ready)
+	}
+	if m := string(h.do("GET", "/metrics", "", nil).body); !strings.Contains(m, `catraca_dependency_up{dependency="audit"} 0`) {
+		t.Error("metrics do not show the audit database down")
+	}
+	eventually(t, 10*time.Second, func() bool {
+		return strings.Contains(h.logs.String(), "the audit database is unreachable; deciding without the audit log")
+	})
 }
 
 // signedFeedback posts a generic feedback event signed with secret.
@@ -858,9 +990,15 @@ func TestGitHubSecretScanningBlocksLeakedKey(t *testing.T) {
 		t.Errorf("forged batch: %d %s", bad.status, bad.body)
 	}
 
-	var d decision.Decision
+	// Each attempt sends from its own account, so a leak that takes a while
+	// to land does not also trip the burst rule of a busy account.
+	var (
+		d        decision.Decision
+		attempts int
+	)
 	eventually(t, 10*time.Second, func() bool {
-		d, _ = h.decide(send("acct_leak", "app@leak.example", "api_key_id", "key_leaked"))
+		attempts++
+		d, _ = h.decide(send(fmt.Sprintf("acct_leak_%d", attempts), "app@leak.example", "api_key_id", "key_leaked"))
 		return d.Action == decision.Block
 	})
 	if len(d.Matches) != 1 || d.Matches[0].RuleID != "leaked-key-send" {
@@ -999,7 +1137,7 @@ func TestServeShutsDownInOrder(t *testing.T) {
 	}
 	ctx, cancel := context.WithCancel(context.Background())
 	done := make(chan error, 1)
-	go func() { done <- h.app.Serve(ctx, ln) }()
+	go func() { done <- h.app.Serve(ctx, ln, nil) }()
 
 	h.srv.URL = "http://" + ln.Addr().String()
 	var ids []string
@@ -1030,6 +1168,150 @@ func TestServeShutsDownInOrder(t *testing.T) {
 	}
 	if !strings.Contains(h.logs.String(), `"msg":"stopped"`) {
 		t.Error("no stopped log line")
+	}
+}
+
+// serveOn runs h's app on a new local listener, points h's requests at it,
+// and returns the function that stops it and the channel Serve's result
+// arrives on.
+func (h *harness) serveOn() (stop context.CancelFunc, done <-chan error) {
+	h.t.Helper()
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		h.t.Fatal(err)
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	errc := make(chan error, 1)
+	go func() { errc <- h.app.Serve(ctx, ln, nil) }()
+	h.srv.URL = "http://" + ln.Addr().String()
+	h.t.Cleanup(cancel)
+	return cancel, errc
+}
+
+// waitServe waits for Serve's result.
+func waitServe(t *testing.T, done <-chan error) {
+	t.Helper()
+	select {
+	case err := <-done:
+		if err != nil {
+			t.Fatalf("Serve: %v", err)
+		}
+	case <-time.After(15 * time.Second):
+		t.Fatal("Serve did not return")
+	}
+}
+
+// TestServeDrains checks the drain on shutdown: once the context ends, the
+// server reports not ready, still decides, closes connections after each
+// response, and stops only when the drain is over. The test, not the clock,
+// ends the drain, so a slow machine cannot end it before the checks run.
+func TestServeDrains(t *testing.T) {
+	t.Parallel()
+	h := newHarness(t, options{drainDelay: "1h"})
+	release := make(chan struct{})
+	app.HoldDrain(h.app, release)
+	stop, done := h.serveOn()
+	if r := h.do("GET", "/readyz", "", nil); r.status != http.StatusOK {
+		t.Fatalf("readyz before the shutdown: %d %s", r.status, r.body)
+	}
+
+	stop()
+	var r response
+	eventually(t, 10*time.Second, func() bool {
+		r = h.do("GET", "/readyz", "", nil)
+		return r.status == http.StatusServiceUnavailable
+	})
+	if !strings.Contains(string(r.body), `"shutdown":"draining"`) || !strings.Contains(string(r.body), `"rules":"ok"`) {
+		t.Errorf("readyz while draining: %s", r.body)
+	}
+	d, r := h.decide(send("acct_drain", "a@shop.example"))
+	if d.ID == "" || !r.close {
+		t.Errorf("decide while draining: %+v, connection closed: %t", d, r.close)
+	}
+	select {
+	case err := <-done:
+		t.Fatalf("Serve returned %v before the drain ended", err)
+	case <-time.After(50 * time.Millisecond):
+	}
+	if !strings.Contains(h.logs.String(), `"msg":"draining: reporting not ready`) {
+		t.Errorf("no log line for the drain:\n%s", h.logs)
+	}
+
+	close(release)
+	waitServe(t, done)
+	if !strings.Contains(h.logs.String(), `"msg":"stopped"`) {
+		t.Error("no stopped log line")
+	}
+}
+
+// TestAdminListener checks server.admin_addr: health and metrics move to the
+// admin listener, take no token there, and leave the API listener, which
+// keeps every other route.
+func TestAdminListener(t *testing.T) {
+	t.Parallel()
+	h := newHarness(t, options{admin: true})
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	admin, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan error, 1)
+	go func() { done <- h.app.Serve(ctx, ln, admin) }()
+
+	apiURL, adminURL := "http://"+ln.Addr().String(), "http://"+admin.Addr().String()
+	for _, path := range []string{"/healthz", "/readyz", "/metrics"} {
+		h.srv.URL = adminURL
+		if r := h.do("GET", path, "", nil); r.status != http.StatusOK {
+			t.Errorf("admin GET %s: %d %s", path, r.status, r.body)
+		}
+		h.srv.URL = apiURL
+		if r := h.do("GET", path, "", nil); r.status != http.StatusNotFound {
+			t.Errorf("API GET %s: %d, want 404", path, r.status)
+		}
+	}
+	h.srv.URL = adminURL
+	if r := h.do("POST", "/v1/decide", token, send("acct", "a@shop.example")); r.status != http.StatusNotFound {
+		t.Errorf("admin POST /v1/decide: %d, want 404", r.status)
+	}
+	h.srv.URL = apiURL
+	h.decide(send("acct", "a@shop.example"))
+	if !strings.Contains(h.logs.String(), `"admin_addr":"`+admin.Addr().String()+`"`) {
+		t.Error("the listening log line lacks the admin address")
+	}
+
+	cancel()
+	waitServe(t, done)
+	if _, err := net.Dial("tcp", admin.Addr().String()); err == nil {
+		t.Error("the admin listener is still open after Serve returned")
+	}
+
+	// Serve refuses a listener the configuration does not expect, and the
+	// lack of one it does.
+	other := newHarness(t, options{})
+	ln2, _ := net.Listen("tcp", "127.0.0.1:0")
+	admin2, _ := net.Listen("tcp", "127.0.0.1:0")
+	if err := other.app.Serve(context.Background(), ln2, admin2); err == nil {
+		t.Error("Serve accepted an admin listener without server.admin_addr")
+	}
+}
+
+// TestServeDrainDelay checks that the drain lasts at least
+// server.drain_delay on the clock.
+func TestServeDrainDelay(t *testing.T) {
+	t.Parallel()
+	const delay = 200 * time.Millisecond
+	h := newHarness(t, options{drainDelay: delay.String()})
+	stop, done := h.serveOn()
+	h.do("GET", "/healthz", "", nil)
+	stop()
+	start := time.Now()
+	waitServe(t, done)
+	if took := time.Since(start); took < delay {
+		t.Errorf("Serve stopped %v after its context ended, before the %v drain delay", took, delay)
 	}
 }
 

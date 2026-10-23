@@ -44,7 +44,7 @@ func (a *App) registerStats() {
 			func() uint64 { return db.RetentionStats().Errors }),
 		// go_sql_* with db_name="audit": connections open, in use and idle,
 		// and how often and how long callers waited for one.
-		collectors.NewDBStatsCollector(db.SQL(), "audit"),
+		auditDBStats{db},
 
 		counter("catraca_hooks_enqueued_total", "Effect webhook deliveries written to the outbox.",
 			func() uint64 { return hookStats().Enqueued }),
@@ -111,5 +111,20 @@ func (c *rulesetCollector) Collect(ch chan<- prometheus.Metric) {
 	}
 	for mode, n := range count {
 		ch <- prometheus.MustNewConstMetric(rulesetRules, prometheus.GaugeValue, float64(n), string(mode))
+	}
+}
+
+// auditDBStats exports the audit database's connection pool stats once it
+// is open: a Postgres database that was unreachable at start opens after the
+// metrics are registered.
+type auditDBStats struct{ log *auditLog }
+
+// Describe sends nothing, which makes this an unchecked collector, so its
+// metrics can appear only once the database is open.
+func (auditDBStats) Describe(chan<- *prometheus.Desc) {}
+
+func (c auditDBStats) Collect(ch chan<- prometheus.Metric) {
+	if db := c.log.current(); db != nil {
+		collectors.NewDBStatsCollector(db.SQL(), "audit").Collect(ch)
 	}
 }

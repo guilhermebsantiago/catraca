@@ -1,8 +1,10 @@
 package store
 
 import (
+	"bytes"
 	"context"
 	"errors"
+	"net"
 	"slices"
 	"strconv"
 	"strings"
@@ -20,7 +22,7 @@ import (
 func newTestRedis(t *testing.T, prefix string) (*Redis, *miniredis.Miniredis, *redis.Client) {
 	t.Helper()
 	mr := storetest.Miniredis(t)
-	client := redis.NewClient(&redis.Options{Addr: mr.Addr()})
+	client := redis.NewClient(&redis.Options{Addr: mr.Addr(), MaxRetries: -1, ReadTimeout: storetest.MiniredisReadTimeout})
 	t.Cleanup(func() { client.Close() })
 	return NewRedis(client, RedisOptions{Prefix: prefix}), mr, client
 }
@@ -214,7 +216,7 @@ func TestRedisBatchIsOneRoundTrip(t *testing.T) {
 
 func TestRedisClusterBatchIsOnePipeline(t *testing.T) {
 	mr := storetest.Miniredis(t)
-	client := redis.NewClusterClient(&redis.ClusterOptions{Addrs: []string{mr.Addr()}})
+	client := redis.NewClusterClient(&redis.ClusterOptions{Addrs: []string{mr.Addr()}, MaxRetries: -1, ReadTimeout: storetest.MiniredisReadTimeout})
 	t.Cleanup(func() { client.Close() })
 	s := NewRedis(client, RedisOptions{})
 	run(t, s, func(b *Batch) { b.Get("warm-up") })
@@ -251,7 +253,7 @@ func TestRedisReloadsAFlushedScript(t *testing.T) {
 		}},
 		{"cluster", func(t *testing.T) (*Redis, redis.UniversalClient) {
 			mr := storetest.Miniredis(t)
-			client := redis.NewClusterClient(&redis.ClusterOptions{Addrs: []string{mr.Addr()}})
+			client := redis.NewClusterClient(&redis.ClusterOptions{Addrs: []string{mr.Addr()}, MaxRetries: -1, ReadTimeout: storetest.MiniredisReadTimeout})
 			t.Cleanup(func() { client.Close() })
 			return NewRedis(client, RedisOptions{}), client
 		}},
@@ -336,6 +338,170 @@ func TestOpenRedis(t *testing.T) {
 
 	if _, err := OpenRedis("http://localhost", RedisOptions{}); err == nil {
 		t.Error("OpenRedis accepted an http url")
+	}
+}
+
+// TestOpenRedisModes checks the client each mode opens and that none of them
+// retries: go-redis reports MaxRetries -1 as 0 once some clients are built.
+func TestOpenRedisModes(t *testing.T) {
+	mr := storetest.Miniredis(t)
+	for _, tt := range []struct {
+		mode, url string
+		single    bool
+		retries   func(redis.UniversalClient) int
+	}{
+		{"", "redis://" + mr.Addr() + "/0?pool_size=7&read_timeout=500ms&dial_timeout=1s", true,
+			func(c redis.UniversalClient) int { return c.(*redis.Client).Options().MaxRetries }},
+		{RedisSentinel, "redis://localhost:26379/0?master_name=primary&addr=localhost:26380", true,
+			func(c redis.UniversalClient) int { return c.(*redis.Client).Options().MaxRetries }},
+		{RedisCluster, "redis://" + mr.Addr(), false,
+			func(c redis.UniversalClient) int { return c.(*redis.ClusterClient).Options().MaxRetries }},
+	} {
+		s, err := OpenRedis(tt.url, RedisOptions{Mode: tt.mode})
+		if err != nil {
+			t.Fatalf("mode %q: %v", tt.mode, err)
+		}
+		if s.single != tt.single {
+			t.Errorf("mode %q: single = %t, want %t", tt.mode, s.single, tt.single)
+		}
+		if n := tt.retries(s.client); n > 0 {
+			t.Errorf("mode %q: the client retries %d times, want none", tt.mode, n)
+		}
+		if tt.mode == "" {
+			if o := s.client.(*redis.Client).Options(); o.PoolSize != 7 || o.ReadTimeout != 500*time.Millisecond || o.DialTimeout != time.Second {
+				t.Errorf("query parameters not applied: pool %d, read %v, dial %v", o.PoolSize, o.ReadTimeout, o.DialTimeout)
+			}
+		}
+		if tt.mode != RedisSentinel {
+			run(t, s, func(b *Batch) { b.Set("mode-"+tt.mode, "v", 0) })
+		}
+		s.Close()
+	}
+}
+
+func TestCheckRedisURL(t *testing.T) {
+	for _, tt := range []struct {
+		url, mode, want string
+	}{
+		{"redis://localhost:6379/0", "", ""},
+		{"rediss://localhost:6379/0", RedisStandalone, ""},
+		{"unix:///run/redis.sock", RedisStandalone, ""},
+		{"redis://localhost:26379?master_name=p", RedisSentinel, ""},
+		{"redis://localhost:7000?addr=localhost:7001", RedisCluster, ""},
+		{"redis://localhost:6379?max_retries=3", "", "max_retries is not supported"},
+		{"redis://localhost:7000?max_retries=-1", RedisCluster, "max_retries is not supported"},
+		{"redis://localhost:6379?pool_sise=10", "", "unexpected option: pool_sise"},
+		{"redis://localhost:26379", RedisSentinel, "sentinel mode needs master_name"},
+		{"unix:///run/redis.sock", RedisCluster, "invalid URL scheme: unix"},
+		{"redis://localhost:6379", "ring", `redis mode "ring": want standalone, sentinel or cluster`},
+		{"redis://:hunter2@local host:6379", "", "not a valid URL"},
+	} {
+		err := CheckRedisURL(tt.url, tt.mode)
+		switch {
+		case tt.want == "" && err != nil:
+			t.Errorf("%s (%q): %v", tt.url, tt.mode, err)
+		case tt.want != "" && (err == nil || !strings.Contains(err.Error(), tt.want)):
+			t.Errorf("%s (%q): error = %v, want %q", tt.url, tt.mode, err, tt.want)
+		case err != nil && strings.Contains(err.Error(), "hunter2"):
+			t.Errorf("%s: the error repeats the password: %v", tt.url, err)
+		}
+	}
+}
+
+// TestOpenRedisDoesNotResendScripts checks that a script call whose reply is
+// lost after Redis ran it fails instead of running again. With go-redis's
+// default of three retries the client would resend it on the EOF and count
+// the event twice.
+func TestOpenRedisDoesNotResendScripts(t *testing.T) {
+	mr := storetest.Miniredis(t)
+	proxy := newReplyDropper(t, mr.Addr())
+	s, err := OpenRedis("redis://"+proxy.addr+"/0", RedisOptions{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer s.Close()
+	// Loads the script, so the next batch is a single EVALSHA.
+	run(t, s, func(b *Batch) { b.Get("warm-up") })
+
+	proxy.drop.Store(true)
+	var b Batch
+	b.Incr("k", time.Hour, t0, 1)
+	if err := s.Do(context.Background(), &b); err == nil {
+		t.Fatal("Do succeeded although the reply was lost")
+	}
+	direct := NewRedis(redis.NewClient(&redis.Options{Addr: mr.Addr(), MaxRetries: -1, ReadTimeout: storetest.MiniredisReadTimeout}), RedisOptions{})
+	defer direct.client.Close()
+	if n := count(t, direct, "k", time.Hour, t0); n != 1 {
+		t.Errorf("count = %d after one increment, want 1: the script ran again", n)
+	}
+}
+
+// replyDropper forwards connections to a Redis server. While drop is set, it
+// forwards the next script call and then closes the client's connection
+// instead of passing back the reply: Redis ran the script, the client sees
+// EOF.
+type replyDropper struct {
+	addr string
+	drop atomic.Bool
+}
+
+func newReplyDropper(t *testing.T, target string) *replyDropper {
+	t.Helper()
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { ln.Close() })
+	p := &replyDropper{addr: ln.Addr().String()}
+	go func() {
+		for {
+			client, err := ln.Accept()
+			if err != nil {
+				return
+			}
+			go p.forward(client, target)
+		}
+	}()
+	return p
+}
+
+func (p *replyDropper) forward(client net.Conn, target string) {
+	defer client.Close()
+	server, err := net.Dial("tcp", target)
+	if err != nil {
+		return
+	}
+	defer server.Close()
+	var dropping atomic.Bool
+	go func() {
+		buf := make([]byte, 64<<10)
+		for {
+			n, err := client.Read(buf)
+			if err != nil {
+				server.Close()
+				return
+			}
+			if p.drop.Load() && bytes.Contains(bytes.ToUpper(buf[:n]), []byte("EVALSHA")) {
+				p.drop.Store(false)
+				dropping.Store(true)
+			}
+			if _, err := server.Write(buf[:n]); err != nil {
+				return
+			}
+		}
+	}()
+	buf := make([]byte, 64<<10)
+	for {
+		n, err := server.Read(buf)
+		if err != nil {
+			return
+		}
+		if dropping.Load() {
+			return
+		}
+		if _, err := client.Write(buf[:n]); err != nil {
+			return
+		}
 	}
 }
 

@@ -40,8 +40,9 @@ configured in `auth.tokens`; the token's name appears in access logs as
 `WWW-Authenticate: Bearer realm="catraca"`.
 
 `/healthz`, `/readyz` and `/metrics` take no token. Keep them off the
-public internet, for example by exposing only `/v1` through the load
-balancer.
+public internet: serve them on a port of their own with
+[`server.admin_addr`](config.md#server), or expose only `/v1` through the
+load balancer.
 
 **Request ids.** Every response carries `X-Request-Id`. Send your own (up
 to 128 letters, digits, `-`, `_`, `.` or `:`) to follow a request across
@@ -78,6 +79,7 @@ ruleset reload adds `details`, one entry per problem. The provider routes
 | 500 | `internal` | the audit log could not be read; details are in the server log |
 | 503 | `no_ruleset` | no ruleset is loaded: decisions cannot be made |
 | 503 | `unavailable` | the event could not be decided; retry it |
+| 503 | `audit_unavailable` | the audit database has not opened yet (see [audit](config.md#audit)); decisions are still made, the routes that read or label them answer this until it opens |
 
 **Decisions.** `POST /v1/decide` and `POST /v1/events` answer
 `{"decision": {...}}`:
@@ -286,6 +288,10 @@ is a `key_leak` event; `account_id` is optional for it. From then on
 curl -s -X POST "$CATRACA/v1/events" -H "Authorization: Bearer $TOKEN" \
   -d '{"type": "key_leak", "account_id": "acct_42", "api_key_id": "key_7d3e", "leak": {"source": "support-ticket"}}'
 ```
+
+The leak is written to the store before the event is decided, within
+`engine.deadline`. If the store does not take it in time, the answer is
+`503 unavailable`: send the event again until it is accepted.
 
 ## Decisions and labels
 
@@ -621,25 +627,86 @@ true or false positive label per token.
 `/healthz` answers `200 {"status": "ok"}` while the process serves HTTP: use
 it as the liveness probe.
 
-`/readyz` is the readiness probe. It is ready when a ruleset is loaded, the
-store answers (Redis `PING`; the memory store always does) and the audit
-database answers, and otherwise `503` with the failing check:
+`/readyz` is the readiness probe. It is ready when a ruleset is loaded and
+the server is not shutting down, and otherwise answers `503` with the
+failing check:
 
 ```sh
 curl -s "$CATRACA/readyz"
 ```
 
 ```json
-{"status": "ready", "checks": {"audit": "ok", "rules": "ok", "store": "ok"}}
+{"status": "ready", "checks": {"rules": "ok", "shutdown": "ok"}}
 ```
 
 ```json
-{"status": "not_ready", "checks": {"audit": "ok", "rules": "no ruleset loaded", "store": "ok"}}
+{"status": "not_ready", "checks": {"rules": "no ruleset loaded", "shutdown": "ok"}}
 ```
 
 A server whose ruleset failed to load at start keeps running, not ready,
 until a reload succeeds, so a broken edit never takes down instances that
 are already serving.
+
+A server that received SIGTERM is not ready while it drains
+(`server.drain_delay`, 5s by default), and still serves every route:
+
+```json
+{"status": "not_ready", "checks": {"rules": "ok", "shutdown": "draining"}}
+```
+
+Readiness looks at the server's own state only. Redis and the audit
+database are shared by every instance: if readiness depended on them, an
+outage of either would take every instance out of the load balancer at
+once, while Catraca can still decide without them (degraded without Redis,
+unrecorded without the audit database). Their health is reported
+separately, with `?verbose`:
+
+```sh
+curl -s "$CATRACA/readyz?verbose"
+```
+
+```json
+{"status": "ready", "checks": {"rules": "ok", "shutdown": "ok"},
+ "dependencies": {
+   "audit": {"status": "ok", "since": "2026-10-23T12:00:00Z", "checked_at": "2026-10-23T12:41:05Z", "duration_ms": 0.41},
+   "store": {"status": "timeout", "since": "2026-10-23T12:40:10Z", "checked_at": "2026-10-23T12:41:05Z", "duration_ms": 2000}}}
+```
+
+The server checks each dependency every 5 seconds in the background, all at
+once and each within 2 seconds, so `?verbose` answers from the last checks
+and never waits on a dependency itself. `status` is `ok`, `unavailable`,
+`timeout`, `not_open` for an audit database still being opened (see
+[audit](config.md#audit)), or `unknown` before the first check; `since` is
+when it took that value. Only Redis is listed as `store`; the memory store is not a
+dependency. The reason for a failure is in the log, once when a dependency
+goes down and once when it is back. The same checks feed
+`catraca_dependency_up` and the other metrics below.
+
+**In Kubernetes**, with the image's configuration (`deploy/catraca.yaml`),
+which reads `CATRACA_ADMIN_ADDR` and `CATRACA_DRAIN_DELAY`, the probes go to
+the admin port, and the Service exposes only the API's:
+
+```yaml
+spec:
+  # At least server.drain_delay + server.shutdown_timeout (5s + 30s).
+  terminationGracePeriodSeconds: 40
+  containers:
+    - name: catraca
+      env:
+        - {name: CATRACA_ADMIN_ADDR, value: ":9090"}
+      ports:
+        - {name: http, containerPort: 8080}
+        - {name: admin, containerPort: 9090}
+      livenessProbe:
+        httpGet: {path: /healthz, port: admin}
+      readinessProbe:
+        httpGet: {path: /readyz, port: admin}
+```
+
+No `preStop` hook is needed: on SIGTERM the server drains for
+`server.drain_delay` by itself, still serving while the endpoint is
+removed. Health checks of a load balancer outside the cluster should use
+`/readyz` too, so they see the drain.
 
 ### GET /metrics
 
@@ -667,13 +734,17 @@ Prometheus metrics in the text format.
 | `catraca_ruleset_info{version}` | gauge | 1, labeled with the current ruleset version |
 | `catraca_ruleset_rules{mode}` | gauge | rules by mode |
 | `catraca_ruleset_loads_total{result}` | counter | loads at start and reloads, `ok` or `error` |
+| `catraca_dependency_up{dependency}` | gauge | 1 when the last check of `store` (Redis) or `audit` succeeded, else 0 |
+| `catraca_dependency_check_duration_seconds{dependency}` | gauge | how long the last check took; a timeout counts as 2s |
+| `catraca_dependency_check_failures_total{dependency}` | counter | checks that failed or timed out |
 | `catraca_build_info{version,goversion}` | gauge | 1, labeled with the build |
 
 plus the standard `go_*` and `process_*` metrics. Worth alerting on:
 `catraca_degraded_decisions_total`, `catraca_audit_dropped_total` and
 `catraca_audit_failed_total` rising, `catraca_audit_retention_errors_total`,
-`catraca_hooks_dead_total`, `catraca_ruleset_loads_total{result="error"}`,
-and the `decide_failed` and `resolve_failed` outcomes.
+`catraca_dependency_up` at 0, `catraca_hooks_dead_total`,
+`catraca_ruleset_loads_total{result="error"}`, and the `decide_failed` and
+`resolve_failed` outcomes.
 
 ```sh
 curl -s "$CATRACA/metrics" | grep '^catraca_decisions_total'

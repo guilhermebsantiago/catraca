@@ -45,7 +45,7 @@ func newMemoryBackend(t *testing.T) backend {
 
 func newRedisBackend(t *testing.T) backend {
 	mr := storetest.Miniredis(t)
-	client := redis.NewClient(&redis.Options{Addr: mr.Addr()})
+	client := redis.NewClient(&redis.Options{Addr: mr.Addr(), MaxRetries: -1, ReadTimeout: storetest.MiniredisReadTimeout})
 	t.Cleanup(func() { client.Close() })
 	return backend{Store: NewRedis(client, RedisOptions{Prefix: "test:"}), advance: mr.FastForward}
 }
@@ -55,7 +55,7 @@ func newRedisBackend(t *testing.T) backend {
 // every slot from one node, so this checks the split, not slot ownership.
 func newRedisClusterBackend(t *testing.T) backend {
 	mr := storetest.Miniredis(t)
-	client := redis.NewClusterClient(&redis.ClusterOptions{Addrs: []string{mr.Addr()}})
+	client := redis.NewClusterClient(&redis.ClusterOptions{Addrs: []string{mr.Addr()}, MaxRetries: -1, ReadTimeout: storetest.MiniredisReadTimeout})
 	t.Cleanup(func() { client.Close() })
 	return backend{Store: NewRedis(client, RedisOptions{Prefix: "test:"}), advance: mr.FastForward}
 }

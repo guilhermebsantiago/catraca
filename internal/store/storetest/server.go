@@ -45,13 +45,14 @@ func RedisClusterSkip() string {
 // a key prefix of its own, so tests can share the server. When the test ends,
 // every key under the prefix is deleted and the client is closed. The prefix
 // is letters and digits after a fixed part, so it is also a literal SCAN
-// pattern.
+// pattern. Like the server's client, it never retries a command.
 func RedisServer(tb testing.TB) (*redis.Client, string) {
 	tb.Helper()
 	opts, err := redis.ParseURL(os.Getenv(RedisURLEnv))
 	if err != nil {
 		tb.Fatalf("%s: %v", RedisURLEnv, err)
 	}
+	opts.MaxRetries = -1
 	client := redis.NewClient(opts)
 	return client, connect(tb, client, RedisURLEnv)
 }
@@ -59,7 +60,7 @@ func RedisServer(tb testing.TB) (*redis.Client, string) {
 // RedisCluster is RedisServer for the cluster at RedisClusterEnv.
 func RedisCluster(tb testing.TB) (*redis.ClusterClient, string) {
 	tb.Helper()
-	client := redis.NewClusterClient(&redis.ClusterOptions{Addrs: strings.Split(os.Getenv(RedisClusterEnv), ",")})
+	client := redis.NewClusterClient(&redis.ClusterOptions{Addrs: strings.Split(os.Getenv(RedisClusterEnv), ","), MaxRetries: -1})
 	return client, connect(tb, client, RedisClusterEnv)
 }
 

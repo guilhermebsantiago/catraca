@@ -105,6 +105,22 @@ func TestExampleConfig(t *testing.T) {
 	}
 }
 
+// TestDeployConfigs keeps the configurations in deploy/ valid: the one
+// baked into the image and the one compose.yaml mounts.
+func TestDeployConfigs(t *testing.T) {
+	vars := env(map[string]string{"CATRACA_API_TOKEN": testToken, "CATRACA_FEEDBACK_SECRET": testSecret})
+	for file, want := range map[string]time.Duration{"catraca.yaml": 5 * time.Second, "catraca.compose.yaml": 0} {
+		cfg, err := LoadWith(filepath.Join("..", "..", "deploy", file), vars)
+		if err != nil {
+			t.Errorf("deploy/%s does not load:\n%v", file, err)
+			continue
+		}
+		if cfg.Server.DrainDelay != want {
+			t.Errorf("deploy/%s: drain_delay = %v, want %v", file, cfg.Server.DrainDelay, want)
+		}
+	}
+}
+
 func TestDefaults(t *testing.T) {
 	cfg := mustParse(t, minimal, nil)
 	checks := []struct {
@@ -114,6 +130,8 @@ func TestDefaults(t *testing.T) {
 		{"server.listen", cfg.Server.Listen, ":8080"},
 		{"server.max_body_bytes", cfg.Server.MaxBodyBytes, int64(1 << 20)},
 		{"server.shutdown_timeout", cfg.Server.ShutdownTimeout, 30 * time.Second},
+		{"server.drain_delay", cfg.Server.DrainDelay, 5 * time.Second},
+		{"server.admin_addr", cfg.Server.AdminAddr, ""},
 		{"rules.path", cfg.Rules.Path, "rules/default.yaml"},
 		{"store.backend", cfg.Store.Backend, "memory"},
 		{"audit.dsn", cfg.Audit.DSN.Value(), "sqlite:catraca.db"},
@@ -147,6 +165,8 @@ func TestFullConfig(t *testing.T) {
 	cfg := mustParse(t, `
 server:
   listen: 127.0.0.1:9090
+  admin_addr: 127.0.0.1:9091
+  drain_delay: 10s
   max_body_bytes: 2_097_152
   shutdown_timeout: 1m
 auth:
@@ -215,13 +235,13 @@ logging:
 		"HOOK_SECRET": testSecret,
 		"HOOK_AUTH":   "abc",
 	})
-	if cfg.Server.Listen != "127.0.0.1:9090" || cfg.Server.MaxBodyBytes != 2<<20 || cfg.Server.ShutdownTimeout != time.Minute {
+	if cfg.Server.Listen != "127.0.0.1:9090" || cfg.Server.AdminAddr != "127.0.0.1:9091" || cfg.Server.DrainDelay != 10*time.Second || cfg.Server.MaxBodyBytes != 2<<20 || cfg.Server.ShutdownTimeout != time.Minute {
 		t.Errorf("server = %#v", cfg.Server)
 	}
 	if len(cfg.Auth.Tokens) != 2 || cfg.Auth.Tokens[1].Name != "ops.cli" {
 		t.Errorf("tokens = %#v", cfg.Auth.Tokens)
 	}
-	if cfg.Store.Backend != StoreRedis || cfg.Store.Redis.URL.Value() != "redis://:pw@redis:6379/1" || cfg.Store.Redis.Prefix != "prod:" {
+	if cfg.Store.Backend != StoreRedis || cfg.Store.Redis.URL.Value() != "redis://:pw@redis:6379/1" || cfg.Store.Redis.Prefix != "prod:" || cfg.Store.Redis.Mode != "standalone" {
 		t.Errorf("store = %#v", cfg.Store)
 	}
 	if cfg.Audit.IsSQLite() || cfg.Audit.EventDetail != "full" {
@@ -464,6 +484,10 @@ func TestValidation(t *testing.T) {
 		{"listen port", "server: {listen: 'localhost:'}", "server.listen: the port is missing"},
 		{"body size", "server: {max_body_bytes: 0}", "server.max_body_bytes: must be at least 1024 bytes, got 0"},
 		{"shutdown", "server: {shutdown_timeout: 0s}", "server.shutdown_timeout: must be a positive duration"},
+		{"drain", "server: {drain_delay: -1s}", "server.drain_delay: must not be negative, got -1s"},
+		{"admin addr", "server: {admin_addr: '9090'}", `server.admin_addr: want host:port, such as :9090 or 127.0.0.1:9090, got "9090"`},
+		{"admin addr port", "server: {admin_addr: 'localhost:'}", "server.admin_addr: the port is missing"},
+		{"admin addr same", "server: {listen: ':8080', admin_addr: ':8080'}", "server.admin_addr: is the same address as server.listen"},
 		{"deadline", "engine: {deadline: -1ms}", "engine.deadline: must be a positive duration, got -1ms"},
 		{"max future skew", "engine: {max_future_skew: 0s}", "engine.max_future_skew: must be a positive duration, got 0s"},
 		{"max event age", "engine: {max_event_age: -1h}", "engine.max_event_age: must be a positive duration, got -1h0m0s"},
@@ -473,6 +497,12 @@ func TestValidation(t *testing.T) {
 		{"redis url", "store: {backend: redis}", "store.redis.url: is required with backend: redis"},
 		{"redis scheme", "store: {backend: redis, redis: {url: 'http://x'}}", "store.redis.url: want a redis://, rediss:// or unix:// URL"},
 		{"redis without backend", "store: {redis: {url: 'redis://x'}}", "store.redis.url: is set but store.backend is memory"},
+		{"redis mode without backend", "store: {redis: {mode: cluster}}", "store.redis.mode: is set but store.backend is memory"},
+		{"redis mode", "store: {backend: redis, redis: {url: 'redis://x', mode: ring}}", `store.redis.mode: want standalone, sentinel or cluster, got "ring"`},
+		{"redis sentinel", "store: {backend: redis, redis: {url: 'redis://x:26379', mode: sentinel}}", "store.redis.url: sentinel mode needs master_name"},
+		{"redis cluster scheme", "store: {backend: redis, redis: {url: 'unix:///run/redis.sock', mode: cluster}}", "store.redis.url: invalid URL scheme: unix"},
+		{"redis option", "store: {backend: redis, redis: {url: 'redis://x?pool_sise=10'}}", "store.redis.url: unexpected option: pool_sise"},
+		{"redis retries", "store: {backend: redis, redis: {url: 'redis://x?max_retries=3'}}", "store.redis.url: max_retries is not supported"},
 		{"event detail", "audit: {event_detail: some}", `audit.event_detail: want minimal or full, got "some"`},
 		{"sqlite path", "audit: {dsn: 'sqlite:'}", "audit.dsn: the SQLite path is empty"},
 		{"retention", "audit: {retention: 0s}", "audit.retention: must be a positive duration"},
@@ -507,6 +537,19 @@ func TestValidation(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			requireError(t, parseErrors(t, minimal+tt.yaml+"\n", nil), tt.want)
 		})
+	}
+}
+
+// TestDrainDelayZero checks that 0s, unlike for other durations, is a
+// setting: it turns the drain off.
+func TestDrainDelayZero(t *testing.T) {
+	cfg := mustParse(t, minimal+"server: {drain_delay: 0s}\n", nil)
+	if cfg.Server.DrainDelay != 0 {
+		t.Errorf("drain_delay = %v, want 0", cfg.Server.DrainDelay)
+	}
+	cfg = mustParse(t, minimal+"server: {drain_delay: 15s}\n", nil)
+	if cfg.Server.DrainDelay != 15*time.Second {
+		t.Errorf("drain_delay = %v, want 15s", cfg.Server.DrainDelay)
 	}
 }
 

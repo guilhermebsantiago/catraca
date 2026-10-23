@@ -195,7 +195,10 @@ and the expected matches, so a rule change comes with a test like code does.
    for every event.
 4. The action is the most severe enforced match; Throttle carries the largest
    retry_after among enforced throttles.
-5. For key_leak events, call `Catalog.MarkLeaked` before evaluating.
+5. For key_leak events, call `Catalog.MarkLeaked` before evaluating, under
+   the same deadline as `Observe`. When it fails, the catalog still holds
+   the key in memory, and `Decide` returns an error so the caller sends the
+   event again.
 6. Hand the decision to the Recorder (non-blocking) and, when enforced
    matches that are not `Errored` have effects, to the Dispatcher.
 7. Metrics: decisions by action, matches by rule and mode, errors by rule,
@@ -215,6 +218,11 @@ written one decision at a time, so a decision it cannot store loses only
 itself. An optional retention deletes unlabeled decisions and finished
 deliveries in small batches, and keeps labeled decisions longer (forever by
 default), because the precision gate counts them.
+
+Recording is off the decision path, so the audit database being down
+degrades traceability, not decisions: a Postgres database that cannot be
+reached when the server starts is opened in the background, retried with
+backoff, while decisions are made and queued for it.
 
 ## Precision gate
 
@@ -274,4 +282,14 @@ scanning routes, which authenticate by signature.
 | GET /v1/stats/rules?since=720h | precision per rule |
 | POST /v1/feedback, /v1/feedback/ses, /v1/feedback/usesend | feedback |
 | POST /v1/secret-scanning/github | GitHub partner endpoint |
-| GET /healthz, /readyz, /metrics | health and Prometheus metrics |
+| GET /healthz, /readyz, /metrics | health and Prometheus metrics, on `server.admin_addr` when it is set |
+
+`/readyz` depends on the server's own state only: a ruleset is loaded and
+the server is not draining. Redis and the audit database are shared by
+every instance, so a readiness check on them would take every instance out
+of the load balancer when one of them fails, while decisions still work
+without them. They are checked in the background instead, and reported by
+`/readyz?verbose`, by `catraca_dependency_up` and in the log. On SIGTERM
+the server reports not ready and keeps serving for `server.drain_delay`
+before it stops accepting requests, so load balancers move traffic away
+first.

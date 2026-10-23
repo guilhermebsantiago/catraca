@@ -25,9 +25,13 @@ go build -ldflags "-X main.version=v0.1.0" -o catraca ./cmd/catraca
 catraca serve [-config catraca.yaml]
 ```
 
-Runs the server until SIGINT or SIGTERM, then shuts down gracefully within
-`server.shutdown_timeout`. On Unix, SIGHUP reloads the ruleset. Logs go to
-stderr. See [configuration](config.md) and the [API](api.md).
+Runs the server until SIGINT or SIGTERM. It then drains for
+`server.drain_delay` (5s by default): `/readyz` reports not ready while
+requests are still served, so load balancers stop sending them. Then it
+shuts down gracefully within `server.shutdown_timeout`. A second SIGINT or
+SIGTERM skips the rest of the drain. On Unix, SIGHUP reloads the ruleset.
+Logs go to stderr. See [configuration](config.md#server) and the
+[API](api.md).
 
 ## config check
 

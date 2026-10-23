@@ -130,6 +130,8 @@ func run(bin, out string, keep bool) (err error) {
 const configTemplate = `# Written by examples/demo into a temporary directory.
 server:
   listen: 127.0.0.1:%d
+  # No load balancer to drain from: stop as soon as the scenario is over.
+  drain_delay: 0s
 auth:
   tokens:
     - name: demo

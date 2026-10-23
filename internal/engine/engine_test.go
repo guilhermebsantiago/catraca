@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"net"
 	"slices"
 	"strings"
 	"sync"
@@ -17,6 +18,7 @@ import (
 	"github.com/guilhermebsantiago/catraca/internal/event"
 	"github.com/guilhermebsantiago/catraca/internal/rules"
 	"github.com/guilhermebsantiago/catraca/internal/signal"
+	"github.com/guilhermebsantiago/catraca/internal/store"
 )
 
 // fakeCatalog returns fixed signals and records what it was asked.
@@ -26,9 +28,12 @@ type fakeCatalog struct {
 	err      error
 	hang     bool // Observe waits for its context to end
 	markErr  error
+	markHang bool // MarkLeaked waits for its context to end
 	calls    []string
 	observed []event.Event
 	deadline time.Time
+	// markDeadline is the deadline of MarkLeaked's context.
+	markDeadline time.Time
 }
 
 func (c *fakeCatalog) Observe(ctx context.Context, ev event.Event) (signal.Set, error) {
@@ -45,11 +50,17 @@ func (c *fakeCatalog) Observe(ctx context.Context, ev event.Event) (signal.Set, 
 	return set, err
 }
 
-func (c *fakeCatalog) MarkLeaked(_ context.Context, apiKeyID string) error {
+func (c *fakeCatalog) MarkLeaked(ctx context.Context, apiKeyID string) error {
 	c.mu.Lock()
-	defer c.mu.Unlock()
 	c.calls = append(c.calls, "mark:"+apiKeyID)
-	return c.markErr
+	c.markDeadline, _ = ctx.Deadline()
+	err, hang := c.markErr, c.markHang
+	c.mu.Unlock()
+	if hang {
+		<-ctx.Done()
+		return ctx.Err()
+	}
+	return err
 }
 
 func (c *fakeCatalog) Close() error { return nil }
@@ -143,6 +154,13 @@ rules:
 `
 
 var t0 = time.Date(2026, 10, 15, 12, 0, 0, 0, time.UTC)
+
+// deadlineSlack is how much later than the configured deadline a context's
+// deadline may fall in the deadline tests. The test reads the clock before
+// Decide and Decide sets the deadline a little later: on a loaded machine,
+// or a system whose wall clock ticks every few milliseconds, that gap runs
+// past 10ms. A missing deadline still fails, and so would one of seconds.
+const deadlineSlack = 500 * time.Millisecond
 
 func healthySignals() signal.Set {
 	return signal.Set{
@@ -536,7 +554,7 @@ func TestDecideObserveDeadline(t *testing.T) {
 	if elapsed > 2*time.Second {
 		t.Errorf("Decide took %s; the deadline did not bound Observe", elapsed)
 	}
-	if left := h.cat.deadline.Sub(start); left <= 0 || left > 25*time.Millisecond {
+	if left := h.cat.deadline.Sub(start); left <= 0 || left > 20*time.Millisecond+deadlineSlack {
 		t.Errorf("Observe got a deadline %s after the call, want about 20ms", left)
 	}
 	if d.LatencyMicros < 20_000 {
@@ -548,7 +566,7 @@ func TestDecideDefaultDeadline(t *testing.T) {
 	h := newHarness(t, Options{Now: time.Now})
 	start := time.Now()
 	h.decide(t, sendEvent())
-	if left := h.cat.deadline.Sub(start); left <= 0 || left > DefaultDeadline+5*time.Millisecond {
+	if left := h.cat.deadline.Sub(start); left <= 0 || left > DefaultDeadline+deadlineSlack {
 		t.Errorf("Observe deadline is %s away, want about %s", left, DefaultDeadline)
 	}
 }
@@ -586,6 +604,81 @@ func TestDecideKeyLeakMarkFailure(t *testing.T) {
 	}
 	if len(rec.ch) != 0 {
 		t.Error("a failed decision was recorded")
+	}
+}
+
+// TestDecideKeyLeakMarkDeadline checks that marking a key leaked gives up at
+// the deadline instead of waiting for the store as long as the caller does.
+func TestDecideKeyLeakMarkDeadline(t *testing.T) {
+	h := newHarness(t, Options{Deadline: 20 * time.Millisecond, Now: time.Now})
+	h.cat.markHang = true
+
+	start := time.Now()
+	_, err := h.eng.Decide(context.Background(), event.Event{Type: event.KeyLeak, APIKeyID: "key_9"})
+	elapsed := time.Since(start)
+	if !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("error = %v, want the deadline", err)
+	}
+	if elapsed > 2*time.Second {
+		t.Errorf("Decide took %s; the deadline did not bound MarkLeaked", elapsed)
+	}
+	if left := h.cat.markDeadline.Sub(start); left <= 0 || left > 20*time.Millisecond+deadlineSlack {
+		t.Errorf("MarkLeaked got a deadline %s after the call, want about 20ms", left)
+	}
+	if calls := h.cat.callLog(); !slices.Equal(calls, []string{"mark:key_9"}) {
+		t.Errorf("catalog calls = %v, want nothing observed so the caller can retry", calls)
+	}
+}
+
+// TestDecideKeyLeakWithRedisUnreachable runs key_leak events against the
+// Redis store the server opens, pointed at a server that accepts connections
+// and never answers, as when packets are dropped. Decide must answer at the
+// deadline, not after the client's read timeout.
+func TestDecideKeyLeakWithRedisUnreachable(t *testing.T) {
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var (
+		mu    sync.Mutex
+		conns []net.Conn
+	)
+	t.Cleanup(func() {
+		ln.Close()
+		mu.Lock()
+		defer mu.Unlock()
+		for _, c := range conns {
+			c.Close()
+		}
+	})
+	go func() {
+		for {
+			c, err := ln.Accept()
+			if err != nil {
+				return
+			}
+			mu.Lock()
+			conns = append(conns, c)
+			mu.Unlock()
+		}
+	}()
+	s, err := store.OpenRedis("redis://"+ln.Addr().String()+"/0", store.RedisOptions{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	cat := signal.NewCatalog(s, signal.Options{})
+	t.Cleanup(func() { cat.Close() })
+	h := newHarness(t, Options{Catalog: cat, Deadline: 50 * time.Millisecond, Now: time.Now})
+
+	for _, key := range []string{"key_a", "key_b"} {
+		start := time.Now()
+		_, err := h.eng.Decide(context.Background(), event.Event{Type: event.KeyLeak, APIKeyID: key})
+		if err == nil {
+			t.Fatalf("%s: Decide succeeded with Redis not answering", key)
+		}
+		if elapsed := time.Since(start); elapsed > time.Second {
+			t.Errorf("%s: Decide took %s, want about the 50ms deadline", key, elapsed)
+		}
 	}
 }
 

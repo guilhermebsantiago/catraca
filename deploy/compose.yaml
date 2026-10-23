@@ -25,6 +25,9 @@ services:
       postgres:
         condition: service_healthy
     restart: unless-stopped
+    # A graceful stop may take server.shutdown_timeout (30s) to write the
+    # queued decisions; compose would kill the container after 10s.
+    stop_grace_period: 35s
 
   redis:
     image: redis:7-alpine

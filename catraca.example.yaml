@@ -14,9 +14,17 @@ server:
   # host:port to listen on. Put Catraca behind TLS (a load balancer or a
   # reverse proxy) when it is reachable from outside the platform's network.
   listen: ${CATRACA_LISTEN:-:8080}
+  # Serve /healthz, /readyz and /metrics, which take no token, on a port of
+  # their own that the load balancer does not expose. Left out, the listen
+  # address serves them.
+  # admin_addr: :9090
   # Largest JSON body accepted on the /v1 routes, in bytes.
   max_body_bytes: 1048576
-  # How long a graceful shutdown may take: draining requests, finishing
+  # On SIGTERM, keep serving this long while /readyz reports not ready, so
+  # load balancers stop sending requests first. 0s for one instance with no
+  # load balancer in front.
+  drain_delay: 5s
+  # Then, how long a graceful shutdown may take: finishing requests and
   # leaked-key batches and writing queued decisions to the audit log.
   shutdown_timeout: 30s
 
@@ -39,8 +47,15 @@ store:
   backend: memory
   # backend: redis
   # redis:
-  #   url: ${CATRACA_REDIS_URL}      # redis://:password@localhost:6379/0
+  #   # redis://:password@localhost:6379/0, with connection options as
+  #   # query parameters: ?pool_size=50&read_timeout=1s&dial_timeout=2s
+  #   url: ${CATRACA_REDIS_URL}
+  #   # standalone, sentinel (the URL names the sentinels and adds
+  #   # master_name=...) or cluster (the URL names some of the nodes).
+  #   mode: standalone
   #   prefix: "catraca:"
+  # With a maxmemory limit, run Redis with maxmemory-policy volatile-ttl
+  # (docs/config.md explains why).
 
 audit:
   # The decision log: sqlite:<path> (or a plain path) for one instance,

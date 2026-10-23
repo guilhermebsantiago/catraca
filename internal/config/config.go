@@ -20,6 +20,7 @@ import (
 	"github.com/guilhermebsantiago/catraca/internal/audit"
 	"github.com/guilhermebsantiago/catraca/internal/engine"
 	"github.com/guilhermebsantiago/catraca/internal/precision"
+	"github.com/guilhermebsantiago/catraca/internal/store"
 )
 
 // Defaults for fields left out of the file.
@@ -27,6 +28,7 @@ const (
 	DefaultListen          = ":8080"
 	DefaultMaxBodyBytes    = 1 << 20
 	DefaultShutdownTimeout = 30 * time.Second
+	DefaultDrainDelay      = 5 * time.Second
 	DefaultRulesPath       = "rules/default.yaml"
 	DefaultAuditDSN        = "sqlite:catraca.db"
 	DefaultHookTimeout     = 10 * time.Second
@@ -66,12 +68,21 @@ type Config struct {
 type Server struct {
 	// Listen is the address to listen on, host:port. Default ":8080".
 	Listen string `yaml:"listen"`
+	// AdminAddr, when set, is a second address, host:port, that serves
+	// /healthz, /readyz and /metrics in place of Listen, so they can stay off
+	// the network the API is reachable from. Unset, Listen serves them.
+	AdminAddr string `yaml:"admin_addr"`
 	// MaxBodyBytes limits request bodies on the /v1 JSON routes. Default
 	// 1 MiB. Feedback and secret scanning routes have their own limits.
 	MaxBodyBytes int64 `yaml:"max_body_bytes"`
 	// ShutdownTimeout bounds a graceful shutdown: draining requests and
 	// writing queued decisions. Default 30s.
 	ShutdownTimeout time.Duration `yaml:"shutdown_timeout"`
+	// DrainDelay is how long the server keeps serving after SIGTERM, with
+	// /readyz reporting it not ready, before the shutdown starts, so load
+	// balancers stop sending it requests before it stops accepting them.
+	// Default 5s; 0s turns it off.
+	DrainDelay time.Duration `yaml:"drain_delay"`
 }
 
 // Auth configures the bearer tokens the /v1 routes accept.
@@ -106,8 +117,12 @@ type Store struct {
 // Redis configures the Redis store.
 type Redis struct {
 	// URL is a redis:// or rediss:// URL, for example
-	// "redis://:password@localhost:6379/0".
+	// "redis://:password@localhost:6379/0". Its query parameters set client
+	// options such as pool_size, read_timeout and dial_timeout.
 	URL Secret `yaml:"url"`
+	// Mode is the kind of deployment URL names: "standalone" (the default),
+	// "sentinel" or "cluster".
+	Mode string `yaml:"mode"`
 	// Prefix is prepended to every key. Default "catraca:".
 	Prefix string `yaml:"prefix"`
 }
@@ -309,7 +324,7 @@ func Parse(data []byte, file string, lookup LookupFunc) (*Config, error) {
 	}
 	v := &validator{d: d}
 	v.explicit(cfg)
-	cfg.applyDefaults()
+	cfg.applyDefaults(v.isSet)
 	cfg.resolvePaths(filepath.Dir(file))
 	v.config(cfg)
 	if len(d.errs) > 0 {
@@ -318,7 +333,10 @@ func Parse(data []byte, file string, lookup LookupFunc) (*Config, error) {
 	return cfg, nil
 }
 
-func (c *Config) applyDefaults() {
+// applyDefaults fills in the fields left out of the file. set reports
+// whether a field is written in the file, for the few whose zero value is a
+// valid choice rather than a request for the default.
+func (c *Config) applyDefaults(set func(path string) bool) {
 	if c.Server.Listen == "" {
 		c.Server.Listen = DefaultListen
 	}
@@ -328,11 +346,17 @@ func (c *Config) applyDefaults() {
 	if c.Server.ShutdownTimeout == 0 {
 		c.Server.ShutdownTimeout = DefaultShutdownTimeout
 	}
+	if !set("server.drain_delay") {
+		c.Server.DrainDelay = DefaultDrainDelay
+	}
 	if c.Rules.Path == "" {
 		c.Rules.Path = DefaultRulesPath
 	}
 	if c.Store.Backend == "" {
 		c.Store.Backend = StoreMemory
+	}
+	if c.Store.Backend == StoreRedis && c.Store.Redis.Mode == "" {
+		c.Store.Redis.Mode = store.RedisStandalone
 	}
 	if c.Audit.DSN == "" {
 		c.Audit.DSN = DefaultAuditDSN

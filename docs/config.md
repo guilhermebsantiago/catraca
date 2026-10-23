@@ -73,11 +73,48 @@ is logged or dumped. `config check` shows URLs without their passwords.
 | field | default | |
 |---|---|---|
 | `listen` | `:8080` | `host:port` to listen on. `:8080` listens on every interface; use `127.0.0.1:8080` to listen locally only |
+| `admin_addr` | | a second `host:port` that serves `/healthz`, `/readyz` and `/metrics` in place of `listen`, such as `:9090`. Unset, `listen` serves them |
 | `max_body_bytes` | `1048576` | largest JSON body on the `/v1` routes, at least 1024. Feedback and secret scanning routes have their own limits (1 MiB and 10 MiB) |
-| `shutdown_timeout` | `30s` | how long a graceful shutdown may take: draining requests, finishing accepted leaked-key batches, writing queued decisions. Decisions still queued when it runs out are not written to the audit log ([details](audit.md#how-decisions-are-written)) |
+| `shutdown_timeout` | `30s` | how long a graceful shutdown may take: finishing requests in flight and accepted leaked-key batches, writing queued decisions. Decisions still queued when it runs out are not written to the audit log ([details](audit.md#how-decisions-are-written)) |
+| `drain_delay` | `5s` | how long the server keeps serving after SIGTERM or SIGINT, reporting not ready on `/readyz`, before the shutdown starts. `0s` turns it off |
 
 Catraca serves plain HTTP. Put it behind TLS (a load balancer, an ingress or
 a reverse proxy) when traffic leaves the host or a private network.
+
+**Health and metrics.** `/healthz`, `/readyz` and `/metrics` take no token,
+so only probes and Prometheus should reach them, not the API's clients.
+Without
+`admin_addr` they share the API's listener, and keeping them private is up
+to whatever is in front (expose only `/v1` through the load balancer). With
+`admin_addr` they move to a listener of their own and the API listener
+answers `404` for them: point probes and Prometheus at that port and leave
+it out of the Service or load balancer that carries the API. Every other
+route stays on `listen`. Both listeners drain and stop together.
+
+**Stopping.** On SIGTERM or SIGINT the server first drains: `/readyz`
+answers `503` (`"shutdown": "draining"`), every response closes its
+connection, and requests are still served, for `drain_delay`. Then it stops
+accepting connections and shuts down within `shutdown_timeout`. A second
+signal skips the rest of the drain.
+
+The drain is for load balancers. When Kubernetes stops a pod, it sends
+SIGTERM and removes the pod from the Service at the same time, and kube-proxy,
+ingresses and cloud load balancers take a few seconds to notice; a server
+that stopped accepting at once would refuse the decisions sent to it
+meanwhile. Closing connections moves clients that keep connections open to
+other instances. The image has no shell, so a `preStop` hook that sleeps is
+not an option, and `drain_delay` takes its place.
+
+The default, 5 seconds, covers the usual propagation in Kubernetes and adds
+5 seconds to every stop elsewhere, which is the cheaper mistake: a stop
+that is too slow delays a restart, while a drain that is too short makes
+the platform send without a decision. Set `0s` for one instance with no
+load balancer in front, or for local runs, and raise it when a load
+balancer is slower to deregister (some cloud load balancers need 10 to 15
+seconds). Give the orchestrator time for both phases: in Kubernetes,
+`terminationGracePeriodSeconds` at least `drain_delay` plus
+`shutdown_timeout` (35 seconds with the defaults; Kubernetes defaults to
+30), or the pod is killed before it has written its queued decisions.
 
 ### auth
 
@@ -109,20 +146,61 @@ Where signal counters live.
 | field | default | |
 |---|---|---|
 | `backend` | `memory` | `memory` or `redis` |
-| `redis.url` | required for redis | `redis://[:password@]host:6379/0`, `rediss://` for TLS, or `unix://` |
+| `redis.url` | required for redis | where Redis is, read according to `redis.mode`; see below |
+| `redis.mode` | `standalone` | `standalone` for one server, `sentinel` for a primary found through Redis Sentinel, `cluster` for a Redis Cluster |
 | `redis.prefix` | `catraca:` | prepended to every key, so deployments can share a database |
 
 `memory` keeps counters in the process: right for one instance, and they
 start over on restart. Use `redis` (6.2 or later) when several instances
 decide, so they share counters.
 
+The URL for each mode:
+
+| mode | `redis.url` |
+|---|---|
+| `standalone` | `redis://[user:password@]host:6379/0`, `rediss://` for TLS, or `unix:///path/to/redis.sock` |
+| `sentinel` | `redis://sentinel-1:26379/0?master_name=mymaster&addr=sentinel-2:26379&addr=sentinel-3:26379&password=...`: the sentinels, the name of the primary they watch (required), and the primary's password as `password`; a user and password before the host authenticate to the sentinels |
+| `cluster` | `redis://[user:password@]node-1:6379?addr=node-2:6379&addr=node-3:6379`: some of the cluster's nodes |
+
+Query parameters set the client's connection options. The ones worth
+knowing:
+
+| parameter | default | |
+|---|---|---|
+| `pool_size` | 10 per CPU | connections per Redis node. It also bounds how many round trips can be outstanding at once: a decision gives up at `engine.deadline`, but its round trip finishes in the background on its connection, so its writes still count. When Redis stalls, decisions beyond the pool wait for a connection until their deadline and are decided degraded |
+| `read_timeout` | `5s` | how long a connection waits for a reply before it is closed. It frees connections held by an unresponsive Redis; lower it (to `1s`, say) for a faster recovery, but keep it well above Redis's normal latency, since every timeout costs a new connection |
+| `dial_timeout` | `5s` | how long opening a connection may take |
+
+Other parameters of go-redis's
+[`ParseURL`](https://pkg.go.dev/github.com/redis/go-redis/v9#ParseURL)
+(and `ParseFailoverURL`, `ParseClusterURL`) work too, such as
+`write_timeout`, `pool_timeout` and `client_name`; an unknown one is an
+error. `max_retries` is refused: Catraca never retries a Redis call,
+because a script call whose reply was lost may already have run, and
+running it again would count the event twice. The engine's deadline is the
+budget of a decision; the next decision is the retry.
+
 The Redis store runs each decision's reads and writes as one Lua script
-call, so the server must allow scripting (`EVAL` and `EVALSHA`), as Redis,
-Valkey and the managed services do by default. With ACLs, give Catraca's
-user `+@scripting` and the commands the script calls (`+@read +@write`
-cover them) on keys under the prefix. A script that Redis lost after a
-restart or failover is loaded again on first use. [Benchmarks](benchmark.md)
-has what a decision costs.
+call (one per hash slot on a cluster), so the server must allow scripting
+(`EVAL` and `EVALSHA`), as Redis, Valkey and the managed services do by
+default. With ACLs, give Catraca's user `+@scripting` and the commands the
+script calls (`+@read +@write` cover them) on keys under the prefix. A
+script that Redis lost after a restart or failover is loaded again on first
+use. [Benchmarks](benchmark.md) has what a decision costs.
+
+**Memory.** Every key Catraca writes expires on its own, except the marks
+of keys reported leaked, which are kept until deleted. If Redis has a
+`maxmemory` limit, set `maxmemory-policy volatile-ttl`:
+
+- with `noeviction`, the default, a full Redis refuses writes, and the
+  script fails at its first write, so every decision comes back `degraded`
+  until memory frees up;
+- the `allkeys-*` policies may evict the leaked-key marks, and a leaked key
+  would then send again;
+- the `volatile-*` policies evict only keys that expire anyway, so the
+  leaked-key marks stay; `volatile-ttl` evicts first the keys closest to
+  expiring, mostly short-window counters of senders that went quiet, which
+  costs detection the least.
 
 ### audit
 
@@ -140,8 +218,41 @@ The decision log, labels and the webhook outbox. See [audit](audit.md).
 | `conn_max_idle_time` | `5m` | close connections idle this long |
 
 Use SQLite for one instance and Postgres for several. Opening the database
-applies migrations. A database that cannot be opened stops the server from
-starting.
+applies migrations.
+
+**When the database cannot be opened.** SQLite is a local file, so a
+failure to open it (a missing directory, a permission) is a configuration
+problem, and the server does not start.
+
+A Postgres database that cannot be reached when the server starts (the
+connection is refused or times out, Postgres is starting up or out of
+connections) does not stop it. Exiting would only hand the problem to the
+orchestrator: Kubernetes restarts a crashing container with a backoff of
+up to five minutes and keeps it down that long after the database is back.
+Instead the server opens the database in the background, retrying with
+backoff from 1 to 30 seconds, and serves decisions meanwhile, ready like
+any other instance: decisions do not depend on the audit log, and this is
+what happens anyway when Postgres fails after the server started. Until the
+database opens:
+
+- the decisions made meanwhile wait in the engine's queue (4096 of them)
+  and are written once it opens; those beyond it are dropped and counted
+  in `catraca_records_dropped_total`;
+- the effects of enforced rules are written to the outbox if it opens
+  within 5 seconds, and are otherwise logged and counted in
+  `catraca_hooks_enqueue_errors_total`;
+- `GET /v1/decisions/{id}`, labels, the review queue and the rule stats
+  answer `503 audit_unavailable`.
+
+Each failed attempt is logged at error level with the reason,
+`/readyz?verbose` shows `audit` as `not_open`, and
+`catraca_dependency_up{dependency="audit"}` is 0, which is the alert to
+set. An error that waiting cannot fix (a malformed DSN, a wrong password, a
+database that does not exist, a schema newer than this build) still stops
+the server, right after it starts. A host name that does not resolve counts
+as unreachable, since DNS is often what comes up last. Against a host that
+drops packets, each attempt waits for the operating system to give up on
+the connection; add `connect_timeout=5` to the DSN to bound it.
 
 [Retention](audit.md#retention) is off by default. Durations have no day
 unit, so 90 days is `2160h`. Labeled decisions are kept forever unless
@@ -158,7 +269,7 @@ them and keeps its one connection.
 
 | field | default | |
 |---|---|---|
-| `deadline` | `10ms` | time budget for the signal lookup of one decision. When it runs out, the decision is made without the missing signals and marked `degraded`; each rule's `on_error` decides what that means |
+| `deadline` | `10ms` | time budget for the signal lookup of one decision. When it runs out, the decision is made without the missing signals and marked `degraded`; each rule's `on_error` decides what that means. A `key_leak` event's write of the leak gets the same budget first, and the event answers `503` when it runs out, so the platform sends it again |
 | `max_future_skew` | `5s` | how far ahead of Catraca's clock an event's `time` may be. A later time is replaced by the clock's, since an event cannot come from the future and, counted there, would empty the windows it touches until the clock caught up. Keep it well under a minute, the shortest window |
 | `max_event_age` | `168h` | how far behind Catraca's clock an event's `time` may be. An older event is answered `400 invalid_event`, and the feedback endpoints acknowledge it so the provider does not retry; a `key_leak` takes the clock's time instead. The default is the longest counter window, so nothing a counter could still use is refused. A lower value also stops late feedback from counting; a higher one lets an event move an account's first-seen time further back |
 

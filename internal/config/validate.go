@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/guilhermebsantiago/catraca/internal/audit"
+	"github.com/guilhermebsantiago/catraca/internal/store"
 )
 
 // minSecretLen is the shortest API token or shared secret accepted. Catraca
@@ -79,6 +80,10 @@ func (v *validator) explicit(c *Config) {
 		v.add("server.max_body_bytes", "must be at least 1024 bytes, got %d", c.Server.MaxBodyBytes)
 	}
 	v.positive("server.shutdown_timeout", c.Server.ShutdownTimeout)
+	if c.Server.DrainDelay < 0 {
+		// 0s is allowed: it turns the drain off.
+		v.add("server.drain_delay", "must not be negative, got %s; 0s turns the drain off", c.Server.DrainDelay)
+	}
 	v.positive("engine.deadline", c.Engine.Deadline)
 	v.positive("engine.max_future_skew", c.Engine.MaxFutureSkew)
 	v.positive("engine.max_event_age", c.Engine.MaxEventAge)
@@ -137,15 +142,29 @@ func (v *validator) config(c *Config) {
 }
 
 func (v *validator) server(s Server) {
-	host, port, err := net.SplitHostPort(s.Listen)
+	v.address("server.listen", s.Listen, ":8080 or 127.0.0.1:8080")
+	if s.AdminAddr == "" {
+		return
+	}
+	if v.address("server.admin_addr", s.AdminAddr, ":9090 or 127.0.0.1:9090") && s.AdminAddr == s.Listen {
+		v.add("server.admin_addr", "is the same address as server.listen; use another port, or leave admin_addr out to serve health and metrics on listen")
+	}
+}
+
+// address checks a host:port to listen on and reports whether it is valid.
+func (v *validator) address(path, addr, example string) bool {
+	host, port, err := net.SplitHostPort(addr)
 	switch {
 	case err != nil:
-		v.add("server.listen", "want host:port, such as :8080 or 127.0.0.1:8080, got %q", s.Listen)
+		v.add(path, "want host:port, such as %s, got %q", example, addr)
 	case port == "":
-		v.add("server.listen", "the port is missing in %q", s.Listen)
+		v.add(path, "the port is missing in %q", addr)
 	case strings.ContainsAny(host, "/ "):
-		v.add("server.listen", "invalid host %q", host)
+		v.add(path, "invalid host %q", host)
+	default:
+		return true
 	}
+	return false
 }
 
 func (v *validator) auth(a Auth) {
@@ -195,7 +214,16 @@ func (v *validator) store(s Store) {
 		if s.Redis.URL != "" {
 			v.add("store.redis.url", "is set but store.backend is memory; set backend: redis to use Redis")
 		}
+		if v.isSet("store.redis.mode") {
+			v.add("store.redis.mode", "is set but store.backend is memory; set backend: redis to use Redis")
+		}
 	case StoreRedis:
+		switch s.Redis.Mode {
+		case store.RedisStandalone, store.RedisSentinel, store.RedisCluster:
+		default:
+			v.add("store.redis.mode", "want standalone, sentinel or cluster, got %q", s.Redis.Mode)
+			return
+		}
 		if s.Redis.URL == "" {
 			v.add("store.redis.url", "is required with backend: redis")
 			return
@@ -203,6 +231,14 @@ func (v *validator) store(s Store) {
 		u, err := url.Parse(s.Redis.URL.Value())
 		if err != nil || (u.Scheme != "redis" && u.Scheme != "rediss" && u.Scheme != "unix") {
 			v.add("store.redis.url", "want a redis://, rediss:// or unix:// URL")
+			return
+		}
+		// The rest of what the server would refuse at start: unknown
+		// parameters, a sentinel URL without master_name, max_retries. The
+		// message never repeats the URL.
+		if err := store.CheckRedisURL(s.Redis.URL.Value(), s.Redis.Mode); err != nil {
+			msg := strings.TrimPrefix(err.Error(), "store: redis url: ")
+			v.add("store.redis.url", "%s", strings.TrimPrefix(msg, "redis: "))
 		}
 	default:
 		v.add("store.backend", "want memory or redis, got %q", s.Backend)
