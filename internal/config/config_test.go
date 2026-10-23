@@ -7,11 +7,13 @@ import (
 	"fmt"
 	"log/slog"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"testing"
 	"time"
 
 	"github.com/guilhermebsantiago/catraca/internal/audit"
+	"github.com/guilhermebsantiago/catraca/internal/hooks"
 )
 
 const (
@@ -143,6 +145,8 @@ func TestDefaults(t *testing.T) {
 		{"audit.conn_max_lifetime", cfg.Audit.ConnMaxLifetime, 30 * time.Minute},
 		{"audit.conn_max_idle_time", cfg.Audit.ConnMaxIdleTime, 5 * time.Minute},
 		{"engine.deadline", cfg.Engine.Deadline, 10 * time.Millisecond},
+		{"engine.dispatch_timeout", cfg.Engine.DispatchTimeout, 10 * time.Millisecond},
+		{"outbox.workers", cfg.Outbox.Workers, 16},
 		{"engine.max_future_skew", cfg.Engine.MaxFutureSkew, 5 * time.Second},
 		{"engine.max_event_age", cfg.Engine.MaxEventAge, 168 * time.Hour},
 		{"gate.min_labeled", cfg.Gate.MinLabeled, 30},
@@ -191,6 +195,7 @@ audit:
   conn_max_idle_time: 1m
 engine:
   deadline: 25ms
+  dispatch_timeout: 50ms
   max_future_skew: 30s
   max_event_age: 72h
 gate:
@@ -206,6 +211,11 @@ hooks:
     url: http://notify.internal/catraca
     secret: ${HOOK_SECRET}
     timeout: 3s
+    concurrency: 8
+    max_attempts: 30
+    max_age: 72h
+outbox:
+  workers: 32
 feedback:
   ses:
     topic_arns: [arn:aws:sns:us-east-1:111122223333:catraca]
@@ -253,18 +263,28 @@ logging:
 		opts.Pool != wantPool {
 		t.Errorf("audit options = %+v", opts)
 	}
-	if cfg.Engine.Deadline != 25*time.Millisecond || cfg.Engine.MaxFutureSkew != 30*time.Second || cfg.Engine.MaxEventAge != 72*time.Hour ||
+	if cfg.Engine.Deadline != 25*time.Millisecond || cfg.Engine.DispatchTimeout != 50*time.Millisecond ||
+		cfg.Engine.MaxFutureSkew != 30*time.Second || cfg.Engine.MaxEventAge != 72*time.Hour ||
 		cfg.Gate.MinLabeled != 50 || cfg.Gate.MinPrecision != 0.95 {
 		t.Errorf("engine/gate = %#v %#v", cfg.Engine, cfg.Gate)
+	}
+	if cfg.Outbox.Workers != 32 {
+		t.Errorf("outbox = %#v", cfg.Outbox)
 	}
 	if g := cfg.Gate.Precision(); g.MinLabeled != 50 || g.MinPrecision != 0.95 {
 		t.Errorf("precision gate = %#v", g)
 	}
-	if h := cfg.Hooks[0]; h.Timeout != DefaultHookTimeout || h.Headers["Authorization"].Value() != "Bearer abc" {
+	if h := cfg.Hooks[0]; h.Timeout != DefaultHookTimeout || h.Headers["Authorization"].Value() != "Bearer abc" ||
+		h.Concurrency != 4 || h.MaxAttempts != 15 || h.MaxAge != 24*time.Hour {
 		t.Errorf("hooks[0] = %#v", h)
 	}
-	if cfg.Hooks[1].Timeout != 3*time.Second {
-		t.Errorf("hooks[1].timeout = %v", cfg.Hooks[1].Timeout)
+	want := hooks.Hook{Name: "notify", URL: "http://notify.internal/catraca", Secret: testSecret, Timeout: 3 * time.Second,
+		Headers: map[string]string{}, Concurrency: 8, MaxAttempts: 30, MaxAge: 72 * time.Hour}
+	if h := cfg.Hooks[1].Options(); !reflect.DeepEqual(h, want) {
+		t.Errorf("hooks[1].Options() = %#v, want %#v", h, want)
+	}
+	if h := cfg.Hooks[0].Options(); h.Headers["Authorization"] != "Bearer abc" || h.Secret != testSecret {
+		t.Errorf("hooks[0].Options() = %#v", h)
 	}
 	if cfg.Feedback.SES == nil || cfg.Feedback.SES.AccountTag != "catraca-account" || cfg.Feedback.UseSend.AccountMetadataKey != "account" {
 		t.Errorf("feedback = %#v", cfg.Feedback)
@@ -521,6 +541,13 @@ func TestValidation(t *testing.T) {
 		{"hook secret", "hooks: [{name: a, url: 'https://x', secret: short}]", "hooks[0].secret: is 5 characters; use at least 16"},
 		{"hook timeout", "hooks: [{name: a, url: 'https://x', secret: " + testSecret + ", timeout: 0s}]", "hooks[0].timeout: must be a positive duration"},
 		{"hook header", "hooks: [{name: a, url: 'https://x', secret: " + testSecret + ", headers: {Catraca-Signature: x}}]", "hooks[0].headers.Catraca-Signature: Catraca-* headers are set by Catraca"},
+		{"hook concurrency", "hooks: [{name: a, url: 'https://x', secret: " + testSecret + ", concurrency: 0}]", "hooks[0].concurrency: must be at least 1, got 0"},
+		{"hook concurrency above workers", "outbox: {workers: 4}\nhooks: [{name: a, url: 'https://x', secret: " + testSecret + ", concurrency: 5}]", "hooks[0].concurrency: must be at most outbox.workers (4), got 5"},
+		{"hook max attempts", "hooks: [{name: a, url: 'https://x', secret: " + testSecret + ", max_attempts: -1}]", "hooks[0].max_attempts: must be at least 1, got -1"},
+		{"hook max age", "hooks: [{name: a, url: 'https://x', secret: " + testSecret + ", max_age: 0s}]", "hooks[0].max_age: must be a positive duration"},
+		{"hook max age under timeout", "hooks: [{name: a, url: 'https://x', secret: " + testSecret + ", timeout: 30s, max_age: 30s}]", "hooks[0].max_age: must be longer than the hook's timeout (30s), got 30s"},
+		{"outbox workers", "outbox: {workers: 0}", "outbox.workers: must be at least 1, got 0"},
+		{"dispatch timeout", "engine: {dispatch_timeout: 0s}", "engine.dispatch_timeout: must be a positive duration, got 0s"},
 		{"ses topics", "feedback: {ses: {account_tag: t}}", "feedback.ses.topic_arns: at least one SNS topic ARN is required"},
 		{"ses arn", "feedback: {ses: {topic_arns: [catraca], account_tag: t}}", `feedback.ses.topic_arns[0]: want an SNS topic ARN`},
 		{"ses account", "feedback: {ses: {topic_arns: ['arn:aws:sns:us-east-1:1:t']}}", "feedback.ses: set account_tag, account_header or both"},
@@ -537,6 +564,22 @@ func TestValidation(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			requireError(t, parseErrors(t, minimal+tt.yaml+"\n", nil), tt.want)
 		})
+	}
+}
+
+// TestDerivedDefaults checks the defaults taken from other fields: the
+// dispatch budget from the deadline, and a hook's concurrency from a pool
+// of workers smaller than its default.
+func TestDerivedDefaults(t *testing.T) {
+	cfg := mustParse(t, minimal+`engine: {deadline: 25ms}
+outbox: {workers: 2}
+hooks: [{name: a, url: 'https://x', secret: `+testSecret+`}]
+`, nil)
+	if cfg.Engine.DispatchTimeout != 25*time.Millisecond {
+		t.Errorf("dispatch_timeout = %v, want the deadline, 25ms", cfg.Engine.DispatchTimeout)
+	}
+	if cfg.Hooks[0].Concurrency != 2 {
+		t.Errorf("hooks[0].concurrency = %d, want the 2 workers", cfg.Hooks[0].Concurrency)
 	}
 }
 

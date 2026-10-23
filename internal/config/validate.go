@@ -85,6 +85,7 @@ func (v *validator) explicit(c *Config) {
 		v.add("server.drain_delay", "must not be negative, got %s; 0s turns the drain off", c.Server.DrainDelay)
 	}
 	v.positive("engine.deadline", c.Engine.Deadline)
+	v.positive("engine.dispatch_timeout", c.Engine.DispatchTimeout)
 	v.positive("engine.max_future_skew", c.Engine.MaxFutureSkew)
 	v.positive("engine.max_event_age", c.Engine.MaxEventAge)
 	if v.isSet("gate.min_labeled") && c.Gate.MinLabeled < 1 {
@@ -94,8 +95,13 @@ func (v *validator) explicit(c *Config) {
 		v.add("gate.min_precision", "must be greater than 0 and at most 1, got %g", c.Gate.MinPrecision)
 	}
 	for i, h := range c.Hooks {
-		v.positive(fmt.Sprintf("hooks[%d].timeout", i), h.Timeout)
+		path := fmt.Sprintf("hooks[%d]", i)
+		v.positive(path+".timeout", h.Timeout)
+		v.atLeastOne(path+".concurrency", h.Concurrency)
+		v.atLeastOne(path+".max_attempts", h.MaxAttempts)
+		v.positive(path+".max_age", h.MaxAge)
 	}
+	v.atLeastOne("outbox.workers", c.Outbox.Workers)
 	if v.isSet("audit.max_open_conns") && c.Audit.MaxOpenConns < 1 {
 		v.add("audit.max_open_conns", "must be at least 1, got %d", c.Audit.MaxOpenConns)
 	}
@@ -111,6 +117,12 @@ func (v *validator) explicit(c *Config) {
 func (v *validator) positive(path string, d time.Duration) {
 	if v.isSet(path) && d <= 0 {
 		v.add(path, "must be a positive duration, got %s", d)
+	}
+}
+
+func (v *validator) atLeastOne(path string, n int) {
+	if v.isSet(path) && n < 1 {
+		v.add(path, "must be at least 1, got %d", n)
 	}
 }
 
@@ -135,7 +147,7 @@ func (v *validator) config(c *Config) {
 	}
 	v.store(c.Store)
 	v.audit(c.Audit)
-	v.hooks(c.Hooks)
+	v.hooks(c.Hooks, c.Outbox)
 	v.feedback(c.Feedback)
 	v.github(c.SecretScanning.GitHub)
 	v.logging(c.Logging)
@@ -273,7 +285,7 @@ func (v *validator) audit(a Audit) {
 	}
 }
 
-func (v *validator) hooks(hooks []Hook) {
+func (v *validator) hooks(hooks []Hook, o Outbox) {
 	seen := map[string]bool{}
 	for i, h := range hooks {
 		path := fmt.Sprintf("hooks[%d]", i)
@@ -288,6 +300,14 @@ func (v *validator) hooks(hooks []Hook) {
 		seen[h.Name] = true
 		v.httpURL(path+".url", h.URL, true)
 		v.secret(path+".secret", h.Secret)
+		if o.Workers >= 1 && h.Concurrency > o.Workers {
+			v.add(path+".concurrency", "must be at most outbox.workers (%d), got %d: deliveries of every hook share those workers",
+				o.Workers, h.Concurrency)
+		}
+		if h.MaxAge > 0 && h.Timeout > 0 && h.MaxAge <= h.Timeout {
+			v.add(path+".max_age", "must be longer than the hook's timeout (%s), got %s: it bounds every attempt of a delivery together",
+				durationText(h.Timeout), durationText(h.MaxAge))
+		}
 		for name := range h.Headers {
 			hp := path + ".headers." + name
 			switch {

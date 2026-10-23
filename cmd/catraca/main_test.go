@@ -381,6 +381,10 @@ func TestConfigCheck(t *testing.T) {
 	}
 
 	expect(t, runCLI(t, map[string]string{"TOKEN": testToken, "CATRACA_CONFIG": path}, "config", "check"), exitOK, "is valid")
+	withHook := testConfig(t, "hooks: [{name: revoke_key, url: 'https://platform.internal/revoke', secret: "+testToken+", max_age: 2h}]\noutbox: {workers: 8}\n")
+	expect(t, runCLI(t, env, "config", "check", "-config", withHook), exitOK,
+		"revoke_key -> platform.internal (4 at once, 15 attempts within 2h0m0s)", "8 workers shared by the hooks",
+		"10ms for signals, 10ms for writing effects")
 	expect(t, runCLI(t, nil, "config", "check", "-config", path), exitFailed, "environment variable TOKEN is not set")
 	bad := testConfig(t, "loging:\n  level: debug\n")
 	expect(t, runCLI(t, env, "config", "check", "-config", bad), exitFailed, ":12: loging: unknown field (did you mean logging?)", "1 problem(s)")

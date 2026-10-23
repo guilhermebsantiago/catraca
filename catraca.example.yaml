@@ -80,6 +80,10 @@ engine:
   # Time budget for the signal lookup of one decision. When it runs out the
   # decision is made without the missing signals and marked degraded.
   deadline: 10ms
+  # How long a decision with effects waits for them to be written to the
+  # outbox before it is answered; the write goes on in the background.
+  # Defaults to deadline.
+  # dispatch_timeout: 10ms
   # How far an event's time may be from Catraca's clock. A time further
   # ahead is replaced by the clock's; an event older than max_event_age is
   # rejected (168h is the longest counter window).
@@ -101,6 +105,18 @@ hooks:
     timeout: 10s
     # headers:
     #   Authorization: Bearer ${PLATFORM_HOOK_TOKEN}
+    # Deliveries to this hook attempted at once, at most outbox.workers.
+    concurrency: 4
+    # A delivery is given up after max_attempts failed attempts, or once
+    # max_age has passed since it was queued, whichever comes first.
+    max_attempts: 15
+    max_age: 24h
+
+# Delivery of the hooks: how many deliveries are attempted at once across
+# every hook. Each hook takes at most its own concurrency of them, so one
+# slow endpoint cannot hold up the others.
+outbox:
+  workers: 16
 
 # Delivery feedback. A provider is enabled when its section is present.
 feedback:

@@ -19,6 +19,7 @@ import (
 
 	"github.com/guilhermebsantiago/catraca/internal/audit"
 	"github.com/guilhermebsantiago/catraca/internal/engine"
+	"github.com/guilhermebsantiago/catraca/internal/hooks"
 	"github.com/guilhermebsantiago/catraca/internal/precision"
 	"github.com/guilhermebsantiago/catraca/internal/store"
 )
@@ -54,7 +55,9 @@ type Config struct {
 	Gate   Gate   `yaml:"gate"`
 	// Hooks are the webhooks that carry out the effects of enforced rules,
 	// one per effect name.
-	Hooks          []Hook         `yaml:"hooks"`
+	Hooks []Hook `yaml:"hooks"`
+	// Outbox configures the delivery of the hooks.
+	Outbox         Outbox         `yaml:"outbox"`
 	Feedback       Feedback       `yaml:"feedback"`
 	SecretScanning SecretScanning `yaml:"secret_scanning"`
 	Logging        Logging        `yaml:"logging"`
@@ -176,6 +179,10 @@ type Engine struct {
 	// Deadline bounds the signal lookup of one decision. When it expires
 	// the decision is made without the missing signals. Default 10ms.
 	Deadline time.Duration `yaml:"deadline"`
+	// DispatchTimeout bounds how long a decision with effects waits for
+	// their outbox write before it is answered; the write goes on in the
+	// background. Default: Deadline.
+	DispatchTimeout time.Duration `yaml:"dispatch_timeout"`
 	// MaxFutureSkew is how far ahead of the server's clock an event's time
 	// may be; a later time is replaced by the clock's. Default 5s.
 	MaxFutureSkew time.Duration `yaml:"max_future_skew"`
@@ -211,6 +218,40 @@ type Hook struct {
 	Timeout time.Duration `yaml:"timeout"`
 	// Headers are added to every request, for example Authorization.
 	Headers map[string]Secret `yaml:"headers"`
+	// Concurrency is how many of the hook's deliveries are attempted at
+	// once, at most Outbox.Workers. Default 4, or Outbox.Workers if fewer.
+	Concurrency int `yaml:"concurrency"`
+	// MaxAttempts is how many times a delivery is tried before it is
+	// given up. Default 15.
+	MaxAttempts int `yaml:"max_attempts"`
+	// MaxAge is how long a delivery is tried for, from when it was queued;
+	// one not delivered by then is given up. Default 24h.
+	MaxAge time.Duration `yaml:"max_age"`
+}
+
+// Options returns the hook for the hooks package.
+func (h Hook) Options() hooks.Hook {
+	headers := make(map[string]string, len(h.Headers))
+	for k, v := range h.Headers {
+		headers[k] = v.Value()
+	}
+	return hooks.Hook{
+		Name:        h.Name,
+		URL:         h.URL,
+		Secret:      h.Secret.Value(),
+		Timeout:     h.Timeout,
+		Headers:     headers,
+		Concurrency: h.Concurrency,
+		MaxAttempts: h.MaxAttempts,
+		MaxAge:      h.MaxAge,
+	}
+}
+
+// Outbox configures how the hooks' deliveries are sent.
+type Outbox struct {
+	// Workers is how many deliveries are attempted at once across every
+	// hook; each hook takes at most its own concurrency of them. Default 16.
+	Workers int `yaml:"workers"`
 }
 
 // Feedback configures the delivery feedback routes. A provider is enabled
@@ -379,6 +420,9 @@ func (c *Config) applyDefaults(set func(path string) bool) {
 	if c.Engine.Deadline == 0 {
 		c.Engine.Deadline = engine.DefaultDeadline
 	}
+	if c.Engine.DispatchTimeout == 0 {
+		c.Engine.DispatchTimeout = c.Engine.Deadline
+	}
 	if c.Engine.MaxFutureSkew == 0 {
 		c.Engine.MaxFutureSkew = engine.DefaultMaxFutureSkew
 	}
@@ -391,9 +435,24 @@ func (c *Config) applyDefaults(set func(path string) bool) {
 	if c.Gate.MinPrecision == 0 {
 		c.Gate.MinPrecision = precision.DefaultMinPrecision
 	}
+	if c.Outbox.Workers == 0 {
+		c.Outbox.Workers = hooks.DefaultWorkers
+	}
 	for i := range c.Hooks {
-		if c.Hooks[i].Timeout == 0 {
-			c.Hooks[i].Timeout = DefaultHookTimeout
+		h := &c.Hooks[i]
+		if h.Timeout == 0 {
+			h.Timeout = DefaultHookTimeout
+		}
+		if h.Concurrency == 0 {
+			// Within the workers, so a small pool needs no edit to every
+			// hook.
+			h.Concurrency = max(1, min(hooks.DefaultConcurrency, c.Outbox.Workers))
+		}
+		if h.MaxAttempts == 0 {
+			h.MaxAttempts = hooks.DefaultMaxAttempts
+		}
+		if h.MaxAge == 0 {
+			h.MaxAge = hooks.DefaultMaxAge
 		}
 	}
 	if c.Logging.Level == "" {

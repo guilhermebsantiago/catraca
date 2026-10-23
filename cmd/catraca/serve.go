@@ -148,14 +148,18 @@ func (c *cli) summary(cfg *config.Config, rs *rules.Ruleset) {
 		}
 	}
 	row("audit", "%s, %s events", dsn, cfg.Audit.EventDetail)
-	row("deadline", "%s", cfg.Engine.Deadline)
+	row("deadline", "%s for signals, %s for writing effects", cfg.Engine.Deadline, cfg.Engine.DispatchTimeout)
 	row("event time", "at most %s ahead of the clock (later is clamped), %s behind (older is rejected)", cfg.Engine.MaxFutureSkew, cfg.Engine.MaxEventAge)
 	row("gate", "%d labeled matches, precision lower bound %.2f", cfg.Gate.MinLabeled, cfg.Gate.MinPrecision)
 	names = nil
 	for _, h := range cfg.Hooks {
-		names = append(names, fmt.Sprintf("%s -> %s", h.Name, hostOf(h.URL)))
+		names = append(names, fmt.Sprintf("%s -> %s (%d at once, %d attempts within %s)",
+			h.Name, hostOf(h.URL), h.Concurrency, h.MaxAttempts, h.MaxAge))
 	}
 	row("hooks", "%s", orNone(names))
+	if len(cfg.Hooks) > 0 {
+		row("outbox", "%d workers shared by the hooks", cfg.Outbox.Workers)
+	}
 	names = nil
 	if cfg.Feedback.SES != nil {
 		names = append(names, "ses")

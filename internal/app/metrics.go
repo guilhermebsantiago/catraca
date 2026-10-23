@@ -2,6 +2,7 @@ package app
 
 import (
 	"runtime"
+	"time"
 
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/prometheus/client_golang/prometheus/collectors"
@@ -54,8 +55,13 @@ func (a *App) registerStats() {
 			func() uint64 { return hookStats().Delivered }),
 		counter("catraca_hooks_retries_total", "Failed effect webhook attempts that will be retried.",
 			func() uint64 { return hookStats().Retried }),
-		counter("catraca_hooks_dead_total", "Effect webhook deliveries given up after their last attempt.",
+		counter("catraca_hooks_dead_total", "Effect webhook deliveries given up: after their last attempt, past their hook's max_age, or with no hook.",
 			func() uint64 { return hookStats().Dead }),
+		counter("catraca_hooks_expired_total", "Effect webhook deliveries given up unattempted because they waited past max_age, or have no hook; also counted as dead.",
+			func() uint64 { return hookStats().Expired }),
+		counter("catraca_hooks_enqueue_deferred_total", "Effect webhook deliveries whose outbox write outlasted engine.dispatch_timeout: the decision was answered before they were durable.",
+			func() uint64 { return hookStats().Deferred }),
+		hookBacklog{a},
 
 		&rulesetCollector{holder: a.holder},
 	)
@@ -111,6 +117,45 @@ func (c *rulesetCollector) Collect(ch chan<- prometheus.Metric) {
 	}
 	for mode, n := range count {
 		ch <- prometheus.MustNewConstMetric(rulesetRules, prometheus.GaugeValue, float64(n), string(mode))
+	}
+}
+
+var (
+	hookPending = prometheus.NewDesc("catraca_hooks_pending",
+		"Effect webhook deliveries waiting in the outbox, by hook: due, in flight or waiting out a retry backoff.",
+		[]string{"hook"}, nil)
+	hookPendingDue = prometheus.NewDesc("catraca_hooks_pending_due",
+		"Pending effect webhook deliveries already due, by hook: they wait for a worker, not for a backoff.",
+		[]string{"hook"}, nil)
+	hookOldestPending = prometheus.NewDesc("catraca_hooks_oldest_pending_age_seconds",
+		"How long the oldest pending effect webhook delivery of each hook has waited since it was queued; 0 with none.",
+		[]string{"hook"}, nil)
+)
+
+// hookBacklog exports what waits in the outbox for each hook, as the
+// dispatcher last counted it, every 15 seconds. Every instance counts the
+// whole outbox, so with several, aggregate with max, not sum.
+type hookBacklog struct{ a *App }
+
+func (hookBacklog) Describe(ch chan<- *prometheus.Desc) {
+	ch <- hookPending
+	ch <- hookPendingDue
+	ch <- hookOldestPending
+}
+
+func (c hookBacklog) Collect(ch chan<- prometheus.Metric) {
+	if c.a.hooks == nil {
+		return
+	}
+	now := time.Now()
+	for _, b := range c.a.hooks.Backlog() {
+		age := 0.0
+		if b.Pending > 0 {
+			age = max(0, now.Sub(b.Oldest).Seconds())
+		}
+		ch <- prometheus.MustNewConstMetric(hookPending, prometheus.GaugeValue, float64(b.Pending), b.Effect)
+		ch <- prometheus.MustNewConstMetric(hookPendingDue, prometheus.GaugeValue, float64(b.Due), b.Effect)
+		ch <- prometheus.MustNewConstMetric(hookOldestPending, prometheus.GaugeValue, age, b.Effect)
 	}
 }
 
