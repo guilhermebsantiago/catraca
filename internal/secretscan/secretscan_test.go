@@ -774,7 +774,13 @@ func TestReportAgeBoundsRetries(t *testing.T) {
 	keys := newKeysServer(t, key)
 	res := &resolver{failures: map[string]int{"t": 1000}}
 	var out outcomes
-	h, db := newTestHandler(t, Config{Resolver: res, KeysURL: keys.URL, MaxAge: time.Nanosecond, OnOutcome: out.add})
+	// Windows' clock can read the same instant when the report is stored
+	// and when it is attempted, an age of zero, short of even a nanosecond.
+	// A clock that moves on at every reading puts the attempt past the age.
+	var ticks atomic.Int64
+	base := time.Now()
+	h, db := newTestHandler(t, Config{Resolver: res, KeysURL: keys.URL, MaxAge: time.Nanosecond, OnOutcome: out.add,
+		now: func() time.Time { return base.Add(time.Duration(ticks.Add(1)) * time.Millisecond) }})
 	send(t, h, key, batch(t, match{Token: "t"}))
 	settled(t, db)
 	if res.callsFor("t") != 1 || out.count(OutcomeResolveFailed) != 1 || out.count(OutcomeRetry) != 0 {
