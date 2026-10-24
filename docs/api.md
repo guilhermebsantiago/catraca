@@ -746,15 +746,19 @@ removed. Health checks of a load balancer outside the cluster should use
 
 ### GET /metrics
 
-Prometheus metrics in the text format.
+Prometheus metrics in the text format. While [tracing](tracing.md) is on,
+the OpenMetrics format is offered too, and Prometheus, which asks for it,
+gets the latency histograms with exemplars: the trace of a sampled request
+in each bucket.
 
 | metric | type | |
 |---|---|---|
 | `catraca_decisions_total{action}` | counter | decisions, by action |
 | `catraca_rule_matches_total{rule,mode}` | counter | rule matches |
 | `catraca_rule_errors_total{rule}` | counter | rules that could not be evaluated |
-| `catraca_degraded_decisions_total` | counter | decisions made without some signals |
+| `catraca_degraded_decisions_total` | counter | decisions made without some signals: the store failed or missed the deadline, or was skipped because the breaker was open or the decision was shed |
 | `catraca_decision_duration_seconds` | histogram | time to decide |
+| `catraca_store_call_duration_seconds{call,result}` | histogram | time the store took over a decision's call, `observe` or `mark_leaked`, by `result`: `ok`, `error`, or `timeout` past the deadline. Calls the breaker skipped are not counted |
 | `catraca_records_dropped_total` | counter | decisions the engine could not hand to the audit log |
 | `catraca_event_times_out_of_bounds_total{bound}` | counter | event times too far from Catraca's clock: `future` ones replaced by the clock's, `past` ones rejected ([limits](#limits)) |
 | `catraca_duplicate_events_total{type}` | counter | events sent again with an `id` that had counted already, which did not count again ([retries](#retries)) |
@@ -768,15 +772,21 @@ Prometheus metrics in the text format.
 | `catraca_audit_recorded_total`, `_dropped_total`, `_failed_total` | counter | audit log writes |
 | `catraca_audit_rejected_total` | counter | decisions the audit database refused one at a time while it wrote the rest of their batch, also counted as failed ([details](audit.md#how-decisions-are-written)) |
 | `catraca_audit_queued` | gauge | decisions waiting to be written |
+| `catraca_audit_write_duration_seconds{result}` | histogram | each attempt to write a batch of decisions, by `result`: `ok`, `refused` (a value was refused; the batch is then written a decision at a time) or `error` |
 | `catraca_audit_retention_deleted_total{table}` | counter | rows deleted by [retention](audit.md#retention): `decisions` (with their matches and labels), `outbox` and `leak_reports` |
 | `catraca_audit_retention_errors_total` | counter | retention runs that failed |
 | `go_sql_*{db_name="audit"}` | gauge, counter | the audit database's connection pool: open, in use, idle, waits for a connection and their duration |
 | `catraca_hooks_enqueued_total`, `_enqueue_errors_total`, `_enqueue_deferred_total`, `_delivered_total`, `_retries_total`, `_dead_total`, `_expired_total` | counter | effect webhook deliveries ([metrics](hooks.md#metrics)) |
+| `catraca_hooks_attempts_total{hook,outcome}` | counter | delivery attempts of each hook, by what became of the delivery: `delivered`, `retry` or `dead` |
+| `catraca_hooks_attempt_duration_seconds{hook}` | histogram | how long each hook's requests took, until the answer or the error |
+| `catraca_hooks_delivery_latency_seconds{hook}` | histogram | from when a delivery was queued to its `2xx`, retries included: how late the effect was carried out |
 | `catraca_hooks_pending{hook}`, `_pending_due{hook}`, `_oldest_pending_age_seconds{hook}` | gauge | the outbox backlog of each hook, counted every 15s; aggregate several instances with `max` |
 | `catraca_feedback_outcomes_total{provider,outcome}` | counter | what the feedback endpoints did ([outcomes](feedback.md#metrics)) |
 | `catraca_secret_scanning_outcomes_total{outcome}` | counter | batches and leaked-key reports ([outcomes](secret-scanning.md#metrics)) |
 | `catraca_secret_scanning_reports{status}` | gauge | leaked-key reports `pending` and `dead`, read from the audit database at scrape time |
 | `catraca_secret_scanning_oldest_pending_seconds` | gauge | how long ago the oldest pending leaked-key report arrived |
+| `catraca_secret_scanning_attempt_duration_seconds{outcome}` | histogram | each attempt at a leaked-key report, resolving and deciding, by outcome |
+| `catraca_secret_scanning_report_latency_seconds{outcome}` | histogram | from when a report was queued to when it was done (`leaked`, `not_found`) or given up (`resolve_failed`, `decide_failed`) |
 | `catraca_ruleset_info{version}` | gauge | 1, labeled with the current ruleset version |
 | `catraca_ruleset_rules{mode}` | gauge | rules by mode |
 | `catraca_ruleset_loads_total{result}` | counter | loads at start and reloads, `ok` or `error` |
@@ -785,18 +795,17 @@ Prometheus metrics in the text format.
 | `catraca_dependency_check_failures_total{dependency}` | counter | checks that failed or timed out |
 | `catraca_build_info{version,goversion}` | gauge | 1, labeled with the build |
 
-plus the standard `go_*` and `process_*` metrics. Worth alerting on:
-`catraca_degraded_decisions_total`, `catraca_admission_shed_total`,
-`catraca_audit_dropped_total` and `catraca_audit_failed_total` rising,
-`catraca_audit_retention_errors_total`,
-`catraca_store_breaker_state{state="open"}` at 1,
-`catraca_dependency_up` at 0, `catraca_hooks_dead_total` and
-`catraca_hooks_enqueue_errors_total`, `catraca_hooks_oldest_pending_age_seconds`
-past what an effect may wait,
-`catraca_ruleset_loads_total{result="error"}`,
-`catraca_secret_scanning_reports{status="dead"}` above 0,
-`catraca_secret_scanning_oldest_pending_seconds` above a few minutes, and the
-`decide_failed`, `uncounted` and `resolve_failed` outcomes.
+plus the standard `go_*` and `process_*` metrics. Every series of a
+labeled metric whose values are known up front (each action, each
+configured hook, each outcome) exists from the start at 0, so a rate over
+it is 0 rather than missing.
+
+[docs/slo.md](slo.md) builds service level objectives on these metrics, and
+[`deploy/prometheus/rules.yaml`](../deploy/prometheus/rules.yaml) has the
+recording rules and alerts: burn-rate alerts on the objectives, and alerts
+on the causes behind them, such as the breaker open, a dependency down, an
+outbox or leaked-key queue falling behind, dead deliveries and reports,
+lost effects and audit records, and a ruleset that fails to load.
 
 ```sh
 curl -s "$CATRACA/metrics" | grep '^catraca_decisions_total'
@@ -820,3 +829,8 @@ Every request is logged once, as JSON by default (`logging.format`):
 
 Requests to `/healthz`, `/readyz` and `/metrics` are logged at debug level.
 Tokens, secrets and message content are never logged.
+
+While [tracing](tracing.md) is on, each line also has the request's
+`trace_id` and `span_id`, whether or not the trace was sampled, so a line
+leads to its trace and a trace to its line. A request that sent a W3C
+`traceparent` header gets that trace's id.

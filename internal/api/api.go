@@ -21,6 +21,7 @@ import (
 
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/prometheus/client_golang/prometheus/promhttp"
+	"go.opentelemetry.io/otel/trace"
 
 	"github.com/guilhermebsantiago/catraca/internal/audit"
 	"github.com/guilhermebsantiago/catraca/internal/decision"
@@ -141,6 +142,10 @@ type Options struct {
 	Admission Admission
 	// Now returns the current time; nil means time.Now.
 	Now func() time.Time
+	// TracerProvider, when set, traces each request, continuing the trace
+	// of a W3C traceparent header, adds the trace to its access log line,
+	// and serves exemplars on GET /metrics. Nil turns tracing off.
+	TracerProvider trace.TracerProvider
 }
 
 // Server is the HTTP handler for every route. It is safe for concurrent
@@ -162,6 +167,8 @@ type Server struct {
 	maxBody      int64
 	now          func() time.Time
 	duration     *prometheus.HistogramVec
+	// tracer is nil with tracing off.
+	tracer trace.Tracer
 
 	// decisions and feedback hold the admission slots; see Admission.
 	decisions, feedback *limiter
@@ -243,9 +250,14 @@ func New(opts Options) (*Server, error) {
 	s.handle(s.mux, routeFeedbackUseSend, provider("useSend feedback", "feedback.usesend", s.admitFeedback(routeFeedbackUseSend, opts.UseSendFeedback)))
 	s.handle(s.mux, "POST /v1/secret-scanning/github", provider("GitHub secret scanning", "secret_scanning.github", opts.GitHubSecretScanning))
 
+	if opts.TracerProvider != nil {
+		s.tracer = opts.TracerProvider.Tracer(tracerName)
+	}
 	var metrics http.Handler = provider("metrics", "a Prometheus registry", nil)
 	if opts.Gatherer != nil {
-		metrics = promhttp.HandlerFor(opts.Gatherer, promhttp.HandlerOpts{})
+		// Exemplars exist only with tracing on, and only the OpenMetrics
+		// format carries them; without tracing the format stays as it was.
+		metrics = promhttp.HandlerFor(opts.Gatherer, promhttp.HandlerOpts{EnableOpenMetrics: s.tracer != nil})
 	}
 	for _, route := range []struct {
 		pattern string

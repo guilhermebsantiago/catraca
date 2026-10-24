@@ -10,6 +10,9 @@ import (
 	"time"
 
 	"github.com/prometheus/client_golang/prometheus"
+	"go.opentelemetry.io/otel/trace"
+
+	"github.com/guilhermebsantiago/catraca/internal/monotime"
 )
 
 // Defaults for the fields of BreakerOptions left at zero.
@@ -119,6 +122,11 @@ type storeCall struct {
 	// breaker is open or the decision was shed; cause says which.
 	skip  bool
 	cause error
+	// op is the call, start its monotonic start and span its span, with
+	// tracing on, for measureStore.
+	op    storeOp
+	start time.Duration
+	span  trace.Span
 }
 
 // skipped is the context of the store calls that are skipped. It is
@@ -131,11 +139,11 @@ var skipped = func() context.Context {
 	return ctx
 }()
 
-// storeContext returns the context for one store call of a decision and
-// the call to hand to storeDone with its result. The context is ctx under
-// the deadline, or skipped when the decision is made without the store or
-// the breaker does not let the call through.
-func (e *Engine) storeContext(ctx context.Context, withoutStore bool) (context.Context, storeCall, context.CancelFunc) {
+// storeContext returns the context for one store call of a decision, op,
+// and the call to hand to storeDone with its result. The context is ctx
+// under the deadline, or skipped when the decision is made without the
+// store or the breaker does not let the call through.
+func (e *Engine) storeContext(ctx context.Context, withoutStore bool, op storeOp) (context.Context, storeCall, context.CancelFunc) {
 	if withoutStore {
 		return skipped, storeCall{skip: true, cause: ErrWithoutStore}, func() {}
 	}
@@ -144,12 +152,16 @@ func (e *Engine) storeContext(ctx context.Context, withoutStore bool) (context.C
 		return skipped, call, func() {}
 	}
 	sctx, cancel := context.WithTimeout(ctx, e.deadline)
+	if e.tracer != nil {
+		sctx, call.span = e.startStoreSpan(sctx, op)
+	}
+	call.op, call.start = op, monotime.Now()
 	return sctx, call, cancel
 }
 
-// storeDone tells the breaker how a store call went. A call that failed
-// after ctx, the caller's context, ended is not counted: the caller gave up
-// first, which says nothing about the store.
+// storeDone tells the breaker how a store call went, and measures it. A
+// call that failed after ctx, the caller's context, ended is not counted:
+// the caller gave up first, which says nothing about the store.
 func (e *Engine) storeDone(ctx context.Context, call storeCall, err error) {
 	res := callOK
 	if err != nil {
@@ -159,6 +171,9 @@ func (e *Engine) storeDone(ctx context.Context, call storeCall, err error) {
 		}
 	}
 	e.breaker.end(call, res, err)
+	if !call.skip {
+		e.measureStore(call, res, err)
+	}
 }
 
 // breaker is the circuit breaker described by BreakerOptions. A closed

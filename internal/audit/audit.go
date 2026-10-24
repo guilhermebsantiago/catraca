@@ -16,6 +16,8 @@ import (
 	"log/slog"
 	"time"
 
+	"go.opentelemetry.io/otel/trace"
+
 	"github.com/guilhermebsantiago/catraca/internal/decision"
 	"github.com/guilhermebsantiago/catraca/internal/event"
 	"github.com/guilhermebsantiago/catraca/internal/precision"
@@ -170,6 +172,13 @@ type Options struct {
 	LabeledRetention time.Duration
 	// Logger receives drop and write-failure reports. Default slog.Default().
 	Logger *slog.Logger
+	// OnBatchWrite, when set, is told about every attempt to write a batch
+	// of decisions, for metrics. The writer calls it with the batch's span
+	// in ctx, and waits for it.
+	OnBatchWrite func(ctx context.Context, w BatchWrite)
+	// TracerProvider, when set, traces every batch the writer writes. Nil
+	// turns tracing off.
+	TracerProvider trace.TracerProvider
 }
 
 // Pool bounds the connections to the audit database, so a slow database
@@ -235,6 +244,9 @@ func (o Options) withDefaults() Options {
 	o.Pool = o.Pool.withDefaults()
 	if o.Logger == nil {
 		o.Logger = slog.Default()
+	}
+	if o.OnBatchWrite == nil {
+		o.OnBatchWrite = func(context.Context, BatchWrite) {}
 	}
 	return o
 }

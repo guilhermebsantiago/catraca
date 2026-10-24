@@ -12,6 +12,8 @@ import (
 	"sync/atomic"
 	"time"
 
+	"go.opentelemetry.io/otel/trace"
+
 	_ "github.com/jackc/pgx/v5/stdlib" // registers the "pgx" database/sql driver
 	_ "modernc.org/sqlite"             // registers the "sqlite" database/sql driver
 )
@@ -60,6 +62,9 @@ type DB struct {
 	rejectLog       limiter
 
 	retention retentionCounters
+
+	// tracer is nil with tracing off.
+	tracer trace.Tracer
 }
 
 // Open opens the audit database named by dsn, creating it and applying
@@ -156,6 +161,9 @@ func open(ctx context.Context, sqlDB *sql.DB, d dialect, opts Options) (*DB, err
 		done:     make(chan struct{}),
 		writeCtx: writeCtx,
 		abandon:  abandon,
+	}
+	if opts.TracerProvider != nil {
+		db.tracer = opts.TracerProvider.Tracer(tracerName)
 	}
 	go db.writer()
 	if opts.Retention > 0 {

@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/guilhermebsantiago/catraca/internal/audit"
+	"github.com/guilhermebsantiago/catraca/internal/monotime"
 )
 
 // leaseMargin is how much longer than its hook's timeout a claimed delivery
@@ -156,12 +157,17 @@ func (d *Dispatcher) claim(ctx context.Context, h Hook, n int) ([]audit.Delivery
 func (d *Dispatcher) deliver(ctx context.Context, h Hook, del audit.Delivery) {
 	ctx = context.WithoutCancel(ctx)
 	log := d.log.With("decision_id", del.DecisionID, "effect", del.Effect, "attempt", del.Attempts)
+	ctx, span := d.startAttempt(ctx, h, del)
 
+	start := monotime.Now()
 	status, retryAfter, err := d.send(ctx, h, del)
+	r := AttemptResult{Hook: h.Name, StatusCode: status, Duration: monotime.Since(start)}
 	a := audit.Attempt{At: d.now(), StatusCode: status}
 	if err == nil {
 		d.settle(ctx, log, func(ctx context.Context) error { return d.outbox.MarkDelivered(ctx, del.ID, a) })
 		d.delivered.Add(1)
+		r.Outcome, r.SinceQueued = OutcomeDelivered, a.At.Sub(del.QueuedAt())
+		d.attempted(ctx, span, r)
 		log.Debug("hooks: delivered", "status", status)
 		return
 	}
@@ -171,6 +177,7 @@ func (d *Dispatcher) deliver(ctx context.Context, h Hook, del audit.Delivery) {
 	case del.Attempts >= h.MaxAttempts:
 		d.settle(ctx, log, func(ctx context.Context) error { return d.outbox.MarkDead(ctx, del.ID, a) })
 		d.dead.Add(1)
+		r.Outcome = OutcomeDead
 		log.Error("hooks: delivery dead after max attempts", "status", status, "err", err)
 	case next.After(del.QueuedAt().Add(h.MaxAge)):
 		// Waiting for an attempt that would be given up as too old only
@@ -178,12 +185,15 @@ func (d *Dispatcher) deliver(ctx context.Context, h Hook, del audit.Delivery) {
 		a.Error += fmt.Sprintf("; given up: the next attempt would be past max_age (%s)", h.MaxAge)
 		d.settle(ctx, log, func(ctx context.Context) error { return d.outbox.MarkDead(ctx, del.ID, a) })
 		d.dead.Add(1)
+		r.Outcome = OutcomeDead
 		log.Error("hooks: delivery dead: the next attempt would be past max_age", "status", status, "max_age", h.MaxAge, "err", err)
 	default:
 		d.settle(ctx, log, func(ctx context.Context) error { return d.outbox.Retry(ctx, del.ID, a, next) })
 		d.retried.Add(1)
+		r.Outcome = OutcomeRetry
 		log.Warn("hooks: delivery failed, will retry", "status", status, "next_attempt", next, "err", err)
 	}
+	d.attempted(ctx, span, r)
 }
 
 // settleTimeout bounds an outbox update after an attempt.
