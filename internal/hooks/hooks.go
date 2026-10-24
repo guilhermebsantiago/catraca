@@ -22,6 +22,7 @@ import (
 	"math/rand/v2"
 	"net/http"
 	"net/url"
+	"slices"
 	"strconv"
 	"strings"
 	"sync"
@@ -61,6 +62,10 @@ type Hook struct {
 	URL string
 	// Secret keys the request signature. Required.
 	Secret string
+	// PreviousSecrets are secrets being rotated out. Each request carries a
+	// v1 signature for Secret and then one for each of them, so a receiver
+	// that has not switched to Secret yet still accepts it.
+	PreviousSecrets []string
 	// Timeout bounds one attempt. Default DefaultTimeout.
 	Timeout time.Duration
 	// Headers are added to every request, for example an Authorization
@@ -290,6 +295,12 @@ func New(outbox audit.Outbox, cfg Config) (*Dispatcher, error) {
 	return d, nil
 }
 
+// secrets returns the secrets requests are signed with: Secret first, then
+// the previous ones.
+func (h Hook) secrets() []string {
+	return append([]string{h.Secret}, h.PreviousSecrets...)
+}
+
 func validateHook(h Hook) error {
 	if h.Name == "" {
 		return errors.New("hooks: a hook has no name")
@@ -300,6 +311,9 @@ func validateHook(h Hook) error {
 	}
 	if h.Secret == "" {
 		return fmt.Errorf("hooks: hook %q: secret is required", h.Name)
+	}
+	if slices.Contains(h.PreviousSecrets, "") {
+		return fmt.Errorf("hooks: hook %q: a previous secret is empty", h.Name)
 	}
 	if h.Timeout < 0 || h.Concurrency < 0 || h.MaxAttempts < 0 || h.MaxAge < 0 {
 		return fmt.Errorf("hooks: hook %q: negative timeout, concurrency, max attempts or max age", h.Name)
@@ -469,7 +483,9 @@ func (d *Dispatcher) send(ctx context.Context, h Hook, del audit.Delivery) (int,
 	}
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("User-Agent", "Catraca-Hooks/1")
-	req.Header.Set(signature.Header, signature.Sign(h.Secret, d.now(), del.Payload))
+	// Signed at each attempt, not when queued, so a delivery that waited
+	// through a rotation carries the secrets configured now.
+	req.Header.Set(signature.Header, signature.SignAll(h.secrets(), d.now(), del.Payload))
 	req.Header.Set(IdempotencyKeyHeader, del.DecisionID+":"+del.Effect)
 	req.Header.Set(AttemptHeader, strconv.Itoa(del.Attempts))
 

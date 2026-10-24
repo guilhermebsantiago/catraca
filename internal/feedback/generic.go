@@ -5,6 +5,7 @@ import (
 	"errors"
 	"log/slog"
 	"net/http"
+	"slices"
 	"strings"
 	"time"
 
@@ -19,6 +20,10 @@ type GenericConfig struct {
 	Decider Decider
 	// Secret is the shared secret requests are signed with. Required.
 	Secret string
+	// PreviousSecrets are secrets being rotated out: a request signed with
+	// any of them, or with Secret, is accepted, so the platform can switch
+	// to Secret whenever it is ready.
+	PreviousSecrets []string
 	// Tolerance is how far the signed timestamp may be from now. The
 	// default is signature.DefaultTolerance.
 	Tolerance time.Duration
@@ -34,7 +39,7 @@ type GenericConfig struct {
 
 type genericHandler struct {
 	base
-	secret    string
+	secrets   []string
 	tolerance time.Duration
 }
 
@@ -65,7 +70,11 @@ func NewGenericHandler(cfg GenericConfig) (http.Handler, error) {
 	if cfg.Secret == "" {
 		return nil, errors.New("feedback: the generic handler needs a secret")
 	}
-	return &genericHandler{base: b, secret: cfg.Secret, tolerance: cfg.Tolerance}, nil
+	if slices.Contains(cfg.PreviousSecrets, "") {
+		return nil, errors.New("feedback: a previous secret of the generic handler is empty")
+	}
+	secrets := append([]string{cfg.Secret}, cfg.PreviousSecrets...)
+	return &genericHandler{base: b, secrets: secrets, tolerance: cfg.Tolerance}, nil
 }
 
 func (h *genericHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
@@ -73,7 +82,7 @@ func (h *genericHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	if err := signature.Verify(h.secret, r.Header.Get(signature.Header), body, h.tolerance); err != nil {
+	if err := signature.VerifyAny(h.secrets, r.Header.Get(signature.Header), body, h.tolerance); err != nil {
 		h.onOutcome(OutcomeInvalidSignature)
 		writeError(w, http.StatusUnauthorized, "invalid signature")
 		return

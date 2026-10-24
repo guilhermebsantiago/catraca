@@ -288,5 +288,29 @@ func TestUseSendErrors(t *testing.T) {
 		if _, err := NewUseSendHandler(UseSendConfig{Secret: "s"}); err == nil {
 			t.Error("no decider: want an error")
 		}
+		if _, err := NewUseSendHandler(UseSendConfig{Decider: &recorder{}, Secret: "s", PreviousSecrets: []string{""}}); err == nil {
+			t.Error("an empty previous secret: want an error")
+		}
 	})
+}
+
+// TestUseSendSecretRotation checks that while the webhook's secret changes
+// in useSend, a call signed with the new or a previous secret is accepted.
+func TestUseSendSecretRotation(t *testing.T) {
+	body := []byte(useSendBounce)
+	now := time.Now()
+	for name, tt := range map[string]struct {
+		secret string
+		want   int
+	}{
+		"new secret":         {"whsec_new", http.StatusOK},
+		"previous secret":    {useSendSecret, http.StatusOK},
+		"second previous":    {"whsec_older", http.StatusOK},
+		"a secret never set": {"whsec_other", http.StatusUnauthorized},
+	} {
+		h := newTestUseSend(t, UseSendConfig{Decider: &recorder{}, Secret: "whsec_new", PreviousSecrets: []string{useSendSecret, "whsec_older"}})
+		if rec := post(t, h, body, useSendHeaders(tt.secret, now, body)); rec.Code != tt.want {
+			t.Errorf("%s: status %d, want %d", name, rec.Code, tt.want)
+		}
+	}
 }

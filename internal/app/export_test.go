@@ -1,6 +1,15 @@
 package app
 
-import "time"
+import (
+	"context"
+	"time"
+)
+
+// CheckRules is one look of the ruleset watch at now, so tests drive the
+// watch without its timer.
+func CheckRules(a *App, now time.Time) time.Duration {
+	return a.rulesets.check(context.Background(), now)
+}
 
 // HoldDrain makes a's drain last until release is closed, whatever
 // server.drain_delay says, so tests can look at a draining server without

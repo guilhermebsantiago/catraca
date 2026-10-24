@@ -30,7 +30,9 @@ database; `-out` changes where the recording goes.
   package and records what arrived.
 - **[`rules.yaml`](rules.yaml)**, a copy of the starter ruleset with three
   rules switched to `enforce` so each action can be seen, each marked
-  `DEMO:`. The starter ruleset keeps them in shadow mode.
+  `DEMO:`. The starter ruleset keeps them in shadow mode, and the
+  configuration sets `gate.on_load: off`: a server would otherwise hold
+  them in shadow mode until their labels clear the precision gate.
 
   | rule | here | in `rules/default.yaml` |
   |---|---|---|

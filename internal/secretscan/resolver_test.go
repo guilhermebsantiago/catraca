@@ -142,12 +142,48 @@ func TestHTTPResolverWrongSecretIsRejected(t *testing.T) {
 	}
 }
 
+// TestHTTPResolverDuringRotation checks that with previous secrets each
+// request is signed with the new secret and every previous one, so a
+// platform that still verifies with the old secret answers it, and so does
+// one that switched already.
+func TestHTTPResolverDuringRotation(t *testing.T) {
+	const next = "resolver-secret-next"
+	srv := platform(t, func(w http.ResponseWriter, _ map[string]any) {
+		_, _ = w.Write([]byte(`{"api_key_id":"key_123"}`))
+	})
+	var headers []string
+	switched := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		body, _ := io.ReadAll(r.Body)
+		headers = append(headers, r.Header.Get(signature.Header))
+		if signature.Verify(next, r.Header.Get(signature.Header), body, time.Minute) != nil {
+			w.WriteHeader(http.StatusUnauthorized)
+			return
+		}
+		_, _ = w.Write([]byte(`{"api_key_id":"key_123"}`))
+	}))
+	t.Cleanup(switched.Close)
+
+	for name, url := range map[string]string{"platform with the old secret": srv.URL, "platform with the new secret": switched.URL} {
+		r, err := NewHTTPResolver(HTTPResolverConfig{URL: url, Secret: next, PreviousSecrets: []string{resolverSecret}})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if key, err := r.Resolve(context.Background(), testToken); err != nil || key.APIKeyID != "key_123" {
+			t.Errorf("%s: key %+v, err %v", name, key, err)
+		}
+	}
+	if len(headers) != 1 || strings.Count(headers[0], "v1=") != 2 {
+		t.Errorf("signature headers %q, want one with two v1 values", headers)
+	}
+}
+
 func TestNewHTTPResolverValidatesConfig(t *testing.T) {
 	for _, cfg := range []HTTPResolverConfig{
 		{Secret: "s"},
 		{URL: "ftp://platform/resolve", Secret: "s"},
 		{URL: "https:///resolve", Secret: "s"},
 		{URL: "https://platform.example.com/resolve"},
+		{URL: "https://platform.example.com/resolve", Secret: "s", PreviousSecrets: []string{""}},
 	} {
 		if _, err := NewHTTPResolver(cfg); err == nil {
 			t.Errorf("%+v: want an error", cfg)

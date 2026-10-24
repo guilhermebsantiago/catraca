@@ -144,7 +144,7 @@ caveats: [docs/benchmark.md](docs/benchmark.md).
 ## Docs
 
 - [Design](docs/design.md): principles, packages, signals, rules, engine
-- [HTTP API](docs/api.md) · [Configuration](docs/config.md) · [Command line](docs/cli.md)
+- [HTTP API](docs/api.md) · [Configuration](docs/config.md) · [Command line](docs/cli.md) · [Rotating secrets](docs/rotation.md)
 - [Signals](docs/signals.md) · [Writing rules](docs/rules.md)
 - [Audit log and the precision gate](docs/audit.md) · [Hooks](docs/hooks.md)
 - [Feedback: SES, useSend](docs/feedback.md) · [GitHub secret scanning](docs/secret-scanning.md)

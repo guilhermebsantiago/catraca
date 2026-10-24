@@ -240,8 +240,11 @@ The platform must verify `Catraca-Signature` before answering: `t` is the
 Unix time in seconds and `v1` the hex HMAC-SHA256 of `<t>.<raw body>` with
 the shared secret, the same scheme as Catraca's outgoing webhooks (see
 [Hooks](hooks.md#verifying-the-signature) for the steps and a Node.js
-version). Reject a timestamp more than a few minutes old. A platform in Go
-uses the public [`signature`](../signature) package:
+version). While the secret is rotated, the header has a `v1` for the new
+secret and one for each of `previous_secrets`, so check every `v1` value
+([rotating secrets](rotation.md#resolver-secret)). Reject a timestamp more
+than a few minutes old. A platform in Go uses the public
+[`signature`](../signature) package:
 
 ```go
 import "github.com/guilhermebsantiago/catraca/signature"
@@ -305,11 +308,13 @@ Catraca keeps it out of every place it could linger:
 - The encrypted token is deleted as soon as the token resolves to a key or
   the report is done. A dead report whose token never resolved keeps it, so
   it can be requeued, until retention deletes the report.
-- After a change of `resolver.secret`, a stored token can no longer be
-  decrypted, and a report that still needs it dies with an error that says
-  so: change the secret when no report is waiting to resolve
-  (`catraca secretscan list --status pending` shows none without an API
-  key).
+- When `resolver.secret` changes, keep the old one in
+  `resolver.previous_secrets`: new tokens are sealed with the new secret,
+  and a token sealed with the old one still opens, so the reports waiting
+  across the change still resolve. Without it, a stored token can no longer
+  be decrypted, and a report that still needs it dies with an error that
+  says so. [Rotating secrets](rotation.md#resolver-secret) says how long to
+  keep the old one.
 - The token is never logged: `secretscan.Token` leaves the raw value out of
   its `String`, `GoString` and `slog` representations, and logs carry only
   the token type, source and URL.

@@ -36,7 +36,9 @@ TOKEN=...   # one of auth.tokens in catraca.yaml
 `Authorization: Bearer <token>`, except the feedback and secret scanning
 routes, which authenticate each request by its signature instead. Tokens are
 configured in `auth.tokens`; the token's name appears in access logs as
-`client`. A missing or wrong token gets `401` with
+`client`, and a request with a token being rotated out (`previous_tokens`)
+also has `"previous_token": true` ([rotating secrets](rotation.md#api-tokens)).
+A missing or wrong token gets `401` with
 `WWW-Authenticate: Bearer realm="catraca"`.
 
 `/healthz`, `/readyz` and `/metrics` take no token. Keep them off the
@@ -455,7 +457,10 @@ curl -s "$CATRACA/v1/rules" -H "Authorization: Bearer $TOKEN"
 
 Reads the ruleset file (`rules.path`) again and swaps it in atomically.
 Decisions in flight finish on the ruleset they started with. On Unix,
-`SIGHUP` does the same.
+`SIGHUP` does the same, and every instance also reloads the file by itself
+when its content changes ([`rules.watch_interval`](config.md#rules)). A
+reload always loads the file, changed or not, so it also runs the
+[precision gate](config.md#gate) again on the rules it holds.
 
 ```sh
 curl -s -X POST "$CATRACA/v1/rules/reload" -H "Authorization: Bearer $TOKEN"
@@ -472,8 +477,27 @@ curl -s -X POST "$CATRACA/v1/rules/reload" -H "Authorization: Bearer $TOKEN"
 ```
 
 `warnings` are the lint findings of the new ruleset (see
-[rules](rules.md#load-time-checks-and-lint)). A file that does not load
-leaves the current ruleset serving and answers `422`:
+[rules](rules.md#load-time-checks-and-lint)). With
+[`gate.on_load`](config.md#gate) at `enforce`, `held` lists the rules the
+file enforces that are held in shadow mode because they have not passed
+the precision gate, with why (`insufficient_labels`, `below_precision`, or
+`unavailable` when the audit database could not answer); `version` is then
+the version of the ruleset as applied, with those rules in shadow mode.
+With `warn`, `ungated` lists the rules that enforce without having passed:
+
+```json
+{
+  "version": "7c2f9e1a0b3d",
+  "previous_version": "5b1e0c7d9a42",
+  "changed": true,
+  "rules": 9,
+  "warnings": [],
+  "held": [{"rule": "new-account-burst", "status": "insufficient_labels"}]
+}
+```
+
+A file that does not load leaves the current ruleset serving and answers
+`422`:
 
 ```json
 {
@@ -705,8 +729,25 @@ curl -s "$CATRACA/readyz?verbose"
 {"status": "ready", "checks": {"rules": "ok", "shutdown": "ok"},
  "dependencies": {
    "audit": {"status": "ok", "since": "2026-10-23T12:00:00Z", "checked_at": "2026-10-23T12:41:05Z", "duration_ms": 0.41},
-   "store": {"status": "timeout", "since": "2026-10-23T12:40:10Z", "checked_at": "2026-10-23T12:41:05Z", "duration_ms": 2000}}}
+   "store": {"status": "timeout", "since": "2026-10-23T12:40:10Z", "checked_at": "2026-10-23T12:41:05Z", "duration_ms": 2000}},
+ "ruleset": {"version": "7c2f9e1a0b3d", "file_version": "5b1e0c7d9a42", "path": "/etc/catraca/rules/default.yaml",
+   "source": "watch", "loaded_at": "2026-10-23T12:30:02Z", "gate": "enforce",
+   "held": [{"rule": "new-account-burst", "status": "insufficient_labels"}]}}
 ```
+
+`ruleset` is the ruleset the instance decides with, so comparing it across
+instances shows whether a change reached them all:
+
+| field | |
+|---|---|
+| `version` | the version decisions are made with and record |
+| `file_version` | the version of the file as written, present when the [gate](config.md#gate) holds rules in shadow mode and the two differ |
+| `path` | the ruleset file, `rules.path` |
+| `source` | what loaded it: `start`, `watch` (the file changed), `signal` (SIGHUP) or `api` (`POST /v1/rules/reload`) |
+| `loaded_at` | when it took effect |
+| `gate` | `gate.on_load`: `enforce`, `warn` or `off` |
+| `held`, `ungated` | the rules the gate held in shadow mode (`enforce`) or let enforce without passing (`warn`), with why |
+| `failed_at` | present when a later attempt to load the file failed: the file is then not what the instance runs, and the log says why |
 
 The server checks each dependency every 5 seconds in the background, all at
 once and each within 2 seconds, so `?verbose` answers from the last checks
@@ -778,8 +819,10 @@ Prometheus metrics in the text format.
 | `catraca_secret_scanning_reports{status}` | gauge | leaked-key reports `pending` and `dead`, read from the audit database at scrape time |
 | `catraca_secret_scanning_oldest_pending_seconds` | gauge | how long ago the oldest pending leaked-key report arrived |
 | `catraca_ruleset_info{version}` | gauge | 1, labeled with the current ruleset version |
-| `catraca_ruleset_rules{mode}` | gauge | rules by mode |
-| `catraca_ruleset_loads_total{result}` | counter | loads at start and reloads, `ok` or `error` |
+| `catraca_ruleset_rules{mode}` | gauge | rules by mode, as applied: a rule the gate holds counts as shadow |
+| `catraca_ruleset_loads_total{result}` | counter | loads at start and reloads, by SIGHUP, the API or the watch, `ok` or `error` |
+| `catraca_ruleset_loaded_timestamp_seconds{source}` | gauge | when the current ruleset took effect, labeled with what loaded it: `start`, `watch`, `signal` or `api` |
+| `catraca_ruleset_gate_failures{status}` | gauge | rules the file newly enforces that had not passed the [precision gate](config.md#gate) when it loaded, by `insufficient_labels`, `below_precision` and `unavailable`: held in shadow mode with `gate.on_load: enforce`, enforcing with `warn` |
 | `catraca_dependency_up{dependency}` | gauge | 1 when the last check of `store` (Redis) or `audit` succeeded, else 0 |
 | `catraca_dependency_check_duration_seconds{dependency}` | gauge | how long the last check took; a timeout counts as 2s |
 | `catraca_dependency_check_failures_total{dependency}` | counter | checks that failed or timed out |
@@ -794,6 +837,8 @@ plus the standard `go_*` and `process_*` metrics. Worth alerting on:
 `catraca_hooks_enqueue_errors_total`, `catraca_hooks_oldest_pending_age_seconds`
 past what an effect may wait,
 `catraca_ruleset_loads_total{result="error"}`,
+`catraca_ruleset_gate_failures` above 0, instances with different
+`catraca_ruleset_info` versions for longer than a rollout,
 `catraca_secret_scanning_reports{status="dead"}` above 0,
 `catraca_secret_scanning_oldest_pending_seconds` above a few minutes, and the
 `decide_failed`, `uncounted` and `resolve_failed` outcomes.

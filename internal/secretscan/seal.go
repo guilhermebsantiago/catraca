@@ -23,8 +23,13 @@ import (
 // A sealed token is "v1:" and the base64 of a random nonce followed by the
 // AES-256-GCM ciphertext. The report key is the additional data, so a
 // sealed token copied into another report does not open.
+//
+// While the secret is rotated, tokens are sealed with the key of the new
+// secret and opened with the key of whichever secret opens them, so a
+// report that waited in the queue through the rotation still resolves.
 type sealer struct {
-	aead cipher.AEAD
+	// aeads has a cipher per secret, the current one first.
+	aeads []cipher.AEAD
 }
 
 const sealVersion = "v1:"
@@ -33,28 +38,38 @@ const sealVersion = "v1:"
 // keys the HMAC of resolver requests.
 const sealInfo = "catraca secretscan raw token v1"
 
-var errUnseal = errors.New("secretscan: the stored raw token cannot be decrypted; was secret_scanning.github.resolver.secret changed since it was stored?")
+var errUnseal = errors.New("secretscan: the stored raw token cannot be decrypted; was secret_scanning.github.resolver.secret changed since it was stored, without keeping the old one in previous_secrets?")
 
-func newSealer(secret string) (*sealer, error) {
-	key, err := hkdf.Key(sha256.New, []byte(secret), nil, sealInfo, 32)
-	if err != nil {
-		return nil, err
+// newSealer returns a sealer that seals with a key derived from secret and
+// opens with that key or one derived from any of previous.
+func newSealer(secret string, previous ...string) (*sealer, error) {
+	s := &sealer{}
+	for _, sec := range append([]string{secret}, previous...) {
+		if sec == "" {
+			return nil, errors.New("secretscan: empty raw token secret")
+		}
+		key, err := hkdf.Key(sha256.New, []byte(sec), nil, sealInfo, 32)
+		if err != nil {
+			return nil, err
+		}
+		block, err := aes.NewCipher(key)
+		if err != nil {
+			return nil, err
+		}
+		aead, err := cipher.NewGCM(block)
+		if err != nil {
+			return nil, err
+		}
+		s.aeads = append(s.aeads, aead)
 	}
-	block, err := aes.NewCipher(key)
-	if err != nil {
-		return nil, err
-	}
-	aead, err := cipher.NewGCM(block)
-	if err != nil {
-		return nil, err
-	}
-	return &sealer{aead: aead}, nil
+	return s, nil
 }
 
 func (s *sealer) seal(raw, reportKey string) string {
-	nonce := make([]byte, s.aead.NonceSize())
+	aead := s.aeads[0]
+	nonce := make([]byte, aead.NonceSize())
 	_, _ = rand.Read(nonce)
-	return sealVersion + base64.RawStdEncoding.EncodeToString(s.aead.Seal(nonce, nonce, []byte(raw), []byte(reportKey)))
+	return sealVersion + base64.RawStdEncoding.EncodeToString(aead.Seal(nonce, nonce, []byte(raw), []byte(reportKey)))
 }
 
 func (s *sealer) open(sealed, reportKey string) (string, error) {
@@ -63,13 +78,19 @@ func (s *sealer) open(sealed, reportKey string) (string, error) {
 		return "", errUnseal
 	}
 	b, err := base64.RawStdEncoding.DecodeString(enc)
-	if err != nil || len(b) < s.aead.NonceSize() {
-		return "", errUnseal
-	}
-	n := s.aead.NonceSize()
-	raw, err := s.aead.Open(nil, b[:n], b[n:], []byte(reportKey))
 	if err != nil {
 		return "", errUnseal
 	}
-	return string(raw), nil
+	for _, aead := range s.aeads {
+		n := aead.NonceSize()
+		if len(b) < n {
+			return "", errUnseal
+		}
+		// GCM authenticates the ciphertext, so a key other than the one
+		// that sealed it fails here rather than returning garbage.
+		if raw, err := aead.Open(nil, b[:n], b[n:], []byte(reportKey)); err == nil {
+			return string(raw), nil
+		}
+	}
+	return "", errUnseal
 }

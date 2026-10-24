@@ -26,6 +26,10 @@ type UseSendConfig struct {
 	// Secret is the webhook's signing secret, shown when the webhook is
 	// created in useSend. Required.
 	Secret string
+	// PreviousSecrets are secrets being rotated out. useSend signs with one
+	// secret, its webhook's current one, so while the webhook's secret
+	// changes a call signed with any of these, or with Secret, is accepted.
+	PreviousSecrets []string
 	// Tolerance is how far the signed timestamp may be from now. The
 	// default, 5 minutes, matches useSend's SDK.
 	Tolerance time.Duration
@@ -48,7 +52,7 @@ type UseSendConfig struct {
 
 type useSendHandler struct {
 	base
-	secret      []byte
+	secrets     [][]byte
 	tolerance   time.Duration
 	metadataKey string
 	now         func() time.Time
@@ -72,13 +76,20 @@ func NewUseSendHandler(cfg UseSendConfig) (http.Handler, error) {
 	if cfg.Secret == "" {
 		return nil, errors.New("feedback: useSend needs the webhook signing secret")
 	}
+	secrets := [][]byte{[]byte(cfg.Secret)}
+	for _, s := range cfg.PreviousSecrets {
+		if s == "" {
+			return nil, errors.New("feedback: a previous useSend secret is empty")
+		}
+		secrets = append(secrets, []byte(s))
+	}
 	tol := cfg.Tolerance
 	if tol <= 0 {
 		tol = 5 * time.Minute
 	}
 	return &useSendHandler{
 		base:        b,
-		secret:      []byte(cfg.Secret),
+		secrets:     secrets,
 		tolerance:   tol,
 		metadataKey: cfg.AccountMetadataKey,
 		now:         time.Now,
@@ -113,11 +124,19 @@ func (h *useSendHandler) verify(r *http.Request, body []byte) bool {
 	if err != nil {
 		return false
 	}
-	mac := hmac.New(sha256.New, h.secret)
-	mac.Write([]byte(ts))
-	mac.Write([]byte{'.'})
-	mac.Write(body)
-	return hmac.Equal(got, mac.Sum(nil))
+	// Every secret is tried, without stopping at the first match, so the
+	// time taken does not tell which one signed the call.
+	ok = false
+	for _, secret := range h.secrets {
+		mac := hmac.New(sha256.New, secret)
+		mac.Write([]byte(ts))
+		mac.Write([]byte{'.'})
+		mac.Write(body)
+		if hmac.Equal(got, mac.Sum(nil)) {
+			ok = true
+		}
+	}
+	return ok
 }
 
 // useSendWebhook is the webhook envelope.

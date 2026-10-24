@@ -14,15 +14,16 @@ database (`internal/audit`), and the signature scheme in the public
 ## Configuring hooks
 
 Each hook is named after the effect it carries out. In `catraca.yaml` the
-fields are `name`, `url`, `secret`, `timeout`, `headers`, `concurrency`,
-`max_attempts` and `max_age` ([configuration](config.md#hooks)); in Go,
-`hooks.Hook`:
+fields are `name`, `url`, `secret`, `previous_secrets`, `timeout`,
+`headers`, `concurrency`, `max_attempts` and `max_age`
+([configuration](config.md#hooks)); in Go, `hooks.Hook`:
 
 | field | | |
 |---|---|---|
 | `Name` | required | the effect, as rules list it: `revoke_key`, `suspend_account`, `notify`, ... |
 | `URL` | required | an absolute `http` or `https` URL that receives a POST |
 | `Secret` | required | the key for the request signature; generate a long random value per hook |
+| `PreviousSecrets` | | secrets being rotated out; each request is also signed with each of them ([rotation](rotation.md#webhook-secrets)) |
 | `Timeout` | 10s | bound on one attempt |
 | `Headers` | | extra request headers, for example `Authorization`; they cannot replace the `Catraca-*` headers |
 | `Concurrency` | 4 | the hook's deliveries attempted at once, at most `Workers` |
@@ -137,7 +138,7 @@ queued on your side). Anything else is a failed attempt.
 
 | header | |
 |---|---|
-| `Catraca-Signature` | `t=<unix seconds>,v1=<hex HMAC-SHA256>`; see below |
+| `Catraca-Signature` | `t=<unix seconds>,v1=<hex HMAC-SHA256>`, with a `v1` per secret while one is rotated; see below |
 | `Catraca-Idempotency-Key` | `<decision id>:<effect>`, the same on every attempt |
 | `Catraca-Attempt` | the attempt number, from 1 |
 
@@ -161,8 +162,11 @@ To verify a request:
 4. Reject when `t` is more than a few minutes (Catraca uses 5 by default) from
    your clock, so a captured request cannot be replayed later.
 
-To rotate a secret, accept both the old and the new secret on the receiver,
-switch Catraca to the new one, then drop the old one.
+While a hook's secret is rotated, Catraca signs each request with the new
+secret and with each of the hook's `previous_secrets`, one `v1` value per
+secret, so a receiver that knows either accepts it; step 3 is what makes
+that work. See [rotating secrets](rotation.md#webhook-secrets) for the
+order of the steps.
 
 ### Go
 
@@ -180,8 +184,9 @@ err := signature.Verify(secret, r.Header.Get(signature.Header), body, 0)
 be parsed), `signature.ErrMismatch` (no `v1` matches: forged, altered, or
 signed with another secret), `signature.ErrExpired` (authentic, but the
 timestamp is outside the tolerance) and `signature.ErrEmptySecret`. A zero
-tolerance means `signature.DefaultTolerance`, five minutes. During a secret
-rotation, try the new secret and then the old one.
+tolerance means `signature.DefaultTolerance`, five minutes. A receiver that
+accepts the old and the new secret during a rotation calls
+`signature.VerifyAny([]string{newSecret, oldSecret}, header, body, 0)`.
 
 In a handler:
 

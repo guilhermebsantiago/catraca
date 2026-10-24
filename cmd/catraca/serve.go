@@ -49,8 +49,9 @@ func (c *cli) serve(ctx context.Context, args []string) int {
 
 Runs the server until it receives SIGINT or SIGTERM, then reports not ready
 for server.drain_delay while it still serves, and shuts down gracefully. A
-second signal skips the rest of the delay. On Unix, SIGHUP reloads the
-ruleset. Logs go to stderr.
+second signal skips the rest of the delay. The ruleset is reloaded when its
+file changes (rules.watch_interval) and, on Unix, on SIGHUP. Logs go to
+stderr.
 `)
 	path := c.configFlag(fs)
 	if _, code := parse(fs, args, 0, 0); code >= 0 {
@@ -129,13 +130,21 @@ func (c *cli) summary(cfg *config.Config, rs *rules.Ruleset) {
 		names = append(names, t.Name)
 	}
 	row("api tokens", "%s", strings.Join(names, ", "))
-	enforced := 0
+	enforced, unproven := 0, 0
 	for _, r := range rs.Rules() {
 		if r.Mode == decision.Enforce {
 			enforced++
+			if r.Override == nil {
+				unproven++
+			}
 		}
 	}
 	row("ruleset", "%s (version %s, %d rules: %d enforced, %d shadow)", cfg.Rules.Path, rs.Version(), len(rs.Rules()), enforced, len(rs.Rules())-enforced)
+	if cfg.Rules.WatchInterval > 0 {
+		row("reload", "when the file changes (read every %s), on SIGHUP and on POST /v1/rules/reload", cfg.Rules.WatchInterval)
+	} else {
+		row("reload", "on SIGHUP and on POST /v1/rules/reload")
+	}
 	if cfg.Store.Backend == config.StoreRedis {
 		row("store", "redis (%s) at %s, prefix %q", cfg.Store.Redis.Mode, hostOf(cfg.Store.Redis.URL.Value()), cfg.Store.Redis.Prefix)
 	} else {
@@ -150,7 +159,18 @@ func (c *cli) summary(cfg *config.Config, rs *rules.Ruleset) {
 	row("audit", "%s, %s events", dsn, cfg.Audit.EventDetail)
 	row("deadline", "%s for signals, %s for writing effects", cfg.Engine.Deadline, cfg.Engine.DispatchTimeout)
 	row("event time", "at most %s ahead of the clock (later is clamped), %s behind (older is rejected)", cfg.Engine.MaxFutureSkew, cfg.Engine.MaxEventAge)
-	row("gate", "%d labeled matches, precision lower bound %.2f", cfg.Gate.MinLabeled, cfg.Gate.MinPrecision)
+	var onLoad string
+	switch {
+	case cfg.Gate.OnLoad == config.GateOff:
+		onLoad = "not checked on load"
+	case unproven == 0:
+		onLoad = fmt.Sprintf("checked on load (%s), no enforced rule without an override to check now", cfg.Gate.OnLoad)
+	case cfg.Gate.OnLoad == config.GateEnforce:
+		onLoad = fmt.Sprintf("checked on load: %d enforced rule(s) without an override stay in shadow mode until their labels pass", unproven)
+	default:
+		onLoad = fmt.Sprintf("checked on load: %d enforced rule(s) without an override are logged if their labels do not pass", unproven)
+	}
+	row("gate", "%d labeled matches, precision lower bound %.2f; %s", cfg.Gate.MinLabeled, cfg.Gate.MinPrecision, onLoad)
 	names = nil
 	for _, h := range cfg.Hooks {
 		names = append(names, fmt.Sprintf("%s -> %s (%d at once, %d attempts within %s)",

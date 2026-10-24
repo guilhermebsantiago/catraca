@@ -4,7 +4,7 @@ A Catraca ruleset is a YAML file kept in git and reviewed like code. Each rule
 is a [CEL](https://cel.dev) expression over the signals of an event, the
 action to take when it matches, and what to do when it cannot be evaluated.
 This page covers the file format, the expression environment, how decisions
-are combined, fixtures, versioning and hot reload. The starter ruleset in
+are combined, fixtures, versioning and reloading. The starter ruleset in
 [`rules/default.yaml`](../rules/default.yaml) is a working example of all of
 it.
 
@@ -16,7 +16,8 @@ The life of a rule:
 3. Ship it. Shadow rules are evaluated and recorded on every decision but
    never change the action.
 4. Label its matches. Once its measured precision clears the gate
-   (`catraca rules gate`), switch it to **enforce**.
+   (`catraca rules gate`), switch it to **enforce**. The server checks the
+   gate too, and keeps a rule that has not cleared it in shadow mode.
 
 ## The file
 
@@ -103,7 +104,9 @@ An **enforce** rule changes the action and triggers its effects.
 The promotion gate (`catraca rules gate`, in CI) fails when an enforced rule
 has fewer than `gate.min_labeled` labeled matches or the Wilson lower bound
 of its precision is below `gate.min_precision`, unless the rule carries an
-`override`.
+`override`. The server applies the same gate when it loads a ruleset
+([`gate.on_load`](config.md#gate)): a rule switched to enforce that has not
+passed it stays in shadow mode, and the rest of the file loads.
 
 ## When a rule cannot be evaluated: `on_error`
 
@@ -385,17 +388,25 @@ do not change it; any change to a rule's behavior, reason, description,
 owner, tags or override, to a list, or to rule order does. Every decision
 stores the version it was made with, so each one traces back to a commit.
 
-## Hot reload
+## Reloading
 
-The server keeps the ruleset in a `rules.Holder`. `POST /v1/rules/reload`
-calls `Holder.Reload`, which parses the file again and swaps the new ruleset
-in atomically:
+The server reloads the ruleset when the file's content changes (every
+instance checks it every [`rules.watch_interval`](config.md#rules), 5
+seconds by default, and loads a change once it has settled for two
+seconds), on `POST /v1/rules/reload` and, on Unix, on `SIGHUP`. A load
+parses and compiles the file, as `catraca rules check` does, holds back in
+shadow mode the rules the [precision gate](config.md#gate) does not let
+enforce yet, and swaps the result in atomically:
 
 - decisions in flight finish on the ruleset they started with;
-- a file that fails to load leaves the current ruleset serving, and the
-  reload returns the errors;
+- a file that fails to load leaves the current ruleset serving, the error
+  is logged once, and a reload through the API returns it;
 - a `Ruleset` encodes to JSON with defaults applied and its version, which
-  is what `GET /v1/rules` serves.
+  is what `GET /v1/rules` serves; held rules show as `shadow` there, and
+  `/readyz?verbose` lists them with the file's own version.
+
+In a Go program, a `rules.Holder` keeps a ruleset and swaps it the same
+way:
 
 ```go
 var holder rules.Holder

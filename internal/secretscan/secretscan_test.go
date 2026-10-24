@@ -791,6 +791,71 @@ func TestRawTokens(t *testing.T) {
 	}
 }
 
+// TestRawTokensSurviveRotation checks that a report whose raw token was
+// sealed before resolver.secret was rotated still resolves after it, when
+// the old secret is kept among the previous ones, instead of dying because
+// its token cannot be decrypted; and that the token of a report stored
+// after the rotation is sealed with the new secret.
+func TestRawTokensSurviveRotation(t *testing.T) {
+	key := newTestKey(t, "k1")
+	keys := newKeysServer(t, key)
+	const old, next = "resolver-secret-0123456789abcdef", "resolver-secret-next-0123456789ab"
+	const raw = "acme_live_SECRET"
+
+	// Stored under the old secret while the resolver is down, and left
+	// pending by a shutdown.
+	reports := openReports(t)
+	before, _ := newTestHandler(t, Config{Resolver: &resolver{gate: make(chan struct{})}, Reports: reports, KeysURL: keys.URL,
+		RawTokenSecret: old, Workers: 1, ResolveTimeout: time.Minute})
+	send(t, before, key, batch(t, match{Token: raw, Type: "t"}))
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	_ = before.Shutdown(ctx)
+	if r := stored(t, reports, raw, "t", "", ""); r.Status != audit.LeakReportPending || r.SealedToken == "" {
+		t.Fatalf("report %+v, want it pending with its sealed token", r)
+	}
+
+	// The secret is rotated, the old one kept as previous: the pending
+	// report resolves with its raw token.
+	rotated := &resolver{keys: map[string]Key{raw: {APIKeyID: "key_1"}, "acme_live_LATER": {APIKeyID: "key_2"}}, gate: make(chan struct{})}
+	var out outcomes
+	after, _ := newTestHandler(t, Config{Resolver: rotated, Reports: reports, KeysURL: keys.URL,
+		RawTokenSecret: next, RawTokenPreviousSecrets: []string{old}, OnOutcome: out.add, ResolveTimeout: time.Minute,
+		now: func() time.Time { return time.Now().Add(time.Hour) }})
+	send(t, after, key, batch(t, match{Token: "acme_live_LATER", Type: "t"}))
+
+	// A token stored after the rotation is sealed with the new secret
+	// alone: a handler that knows only the new one opens it.
+	later := stored(t, reports, "acme_live_LATER", "t", "", "")
+	onlyNew, err := newSealer(next)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got, err := onlyNew.open(later.SealedToken, later.Key); err != nil || got != "acme_live_LATER" {
+		t.Errorf("token stored after the rotation: open with the new secret = %q, %v", got, err)
+	}
+	onlyOld, _ := newSealer(old)
+	if _, err := onlyOld.open(later.SealedToken, later.Key); !errors.Is(err, errUnseal) {
+		t.Errorf("token stored after the rotation opens with the old secret: %v", err)
+	}
+
+	close(rotated.gate)
+	settled(t, reports)
+	if r := stored(t, reports, raw, "t", "", ""); r.Status != audit.LeakReportDone || r.APIKeyID != "key_1" || r.SealedToken != "" {
+		t.Errorf("report sealed before the rotation: %+v, want it done, resolved to key_1, its token gone", r)
+	}
+	seen := map[string]bool{}
+	for _, tok := range rotated.seen() {
+		seen[tok.Raw] = true
+	}
+	if !seen[raw] || !seen["acme_live_LATER"] {
+		t.Errorf("resolver saw %v, want both raw tokens", seen)
+	}
+	if out.count(OutcomeResolveFailed) != 0 || out.count(OutcomeLeaked) != 2 {
+		t.Errorf("outcomes %v, want two leaked and none failed", &out)
+	}
+}
+
 func TestSealer(t *testing.T) {
 	s, err := newSealer("resolver-secret-0123456789abcdef")
 	if err != nil {

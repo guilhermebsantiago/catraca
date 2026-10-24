@@ -36,3 +36,16 @@ func (s Secret) MarshalJSON() ([]byte, error) { return json.Marshal(s.String()) 
 
 // MarshalYAML encodes the redacted form.
 func (s Secret) MarshalYAML() (any, error) { return s.String(), nil }
+
+// Values returns the values of secrets, for the packages that take them as
+// strings.
+func Values(secrets []Secret) []string {
+	if len(secrets) == 0 {
+		return nil
+	}
+	out := make([]string, len(secrets))
+	for i, s := range secrets {
+		out[i] = s.Value()
+	}
+	return out
+}

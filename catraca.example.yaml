@@ -39,16 +39,21 @@ server:
 
 auth:
   # Bearer tokens for the /v1 routes (feedback and secret scanning
-  # authenticate by signature instead). Give each client its own token; to
-  # rotate one, add the new token, move the client, then remove the old one.
+  # authenticate by signature instead). Give each client its own token. To
+  # rotate one, make the new one token and the old one a previous token,
+  # move the client, then remove the old one (docs/rotation.md).
   tokens:
     - name: platform
       token: ${CATRACA_API_TOKEN}
+      # previous_tokens: ["${CATRACA_API_TOKEN_OLD}"]
 
 rules:
-  # The ruleset, kept in git. Reload it without a restart with
-  # POST /v1/rules/reload or, on Unix, SIGHUP.
+  # The ruleset, kept in git.
   path: rules/default.yaml
+  # The file is read this often and loaded when its content changed, so an
+  # edit or a Kubernetes ConfigMap update reaches every instance; 0s turns
+  # the watch off. POST /v1/rules/reload and, on Unix, SIGHUP reload it too.
+  watch_interval: 5s
 
 store:
   # memory keeps counters in the process: fine for one instance, lost on
@@ -117,6 +122,11 @@ gate:
   # a Wilson 95% lower bound on precision of at least min_precision.
   min_labeled: 30
   min_precision: 0.9
+  # A rule a ruleset load would make enforce, new in enforce mode or switched
+  # from shadow and without an override, must pass the gate on the labels in
+  # the audit database: enforce holds it in shadow mode until it does, warn
+  # lets it enforce and logs it, off does not check.
+  on_load: enforce
 
 # Webhooks that carry out the effects of enforced rules, one per effect name.
 # Each request is signed with the hook's secret (see docs/hooks.md).
@@ -124,6 +134,9 @@ hooks:
   - name: revoke_key
     url: ${CATRACA_REVOKE_KEY_URL:-https://platform.internal/hooks/catraca/revoke-key}
     secret: ${CATRACA_HOOK_SECRET}
+    # While the secret is rotated, requests are signed with the old one too,
+    # so the receiver accepts them before it switches (docs/rotation.md).
+    # previous_secrets: ["${CATRACA_HOOK_SECRET_OLD}"]
     timeout: 10s
     # headers:
     #   Authorization: Bearer ${PLATFORM_HOOK_TOKEN}
@@ -153,9 +166,11 @@ feedback:
   # usesend:
   #   secret: ${USESEND_WEBHOOK_SECRET}
 
-  # Catraca's own format, signed with a shared secret.
+  # Catraca's own format, signed with a shared secret. Requests signed with
+  # a previous secret are accepted while the platform switches.
   generic:
     secret: ${CATRACA_FEEDBACK_SECRET}
+    # previous_secrets: ["${CATRACA_FEEDBACK_SECRET_OLD}"]
 
 secret_scanning:
   # GitHub's secret scanning partner endpoint (docs/secret-scanning.md).
@@ -165,6 +180,7 @@ secret_scanning:
       # The platform endpoint that says which API key a token is.
       url: https://platform.internal/internal/catraca/resolve-key
       secret: ${CATRACA_RESOLVER_SECRET:-}
+      # previous_secrets: ["${CATRACA_RESOLVER_SECRET_OLD}"]
       # Send the raw token, not only its SHA-256. Needs an https URL.
       send_raw_token: false
     # Answer GitHub with true/false positive labels, once GitHub enables it.

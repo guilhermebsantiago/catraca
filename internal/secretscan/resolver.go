@@ -9,6 +9,7 @@ import (
 	"io"
 	"net/http"
 	"net/url"
+	"slices"
 	"time"
 
 	"github.com/guilhermebsantiago/catraca/signature"
@@ -21,6 +22,11 @@ type HTTPResolverConfig struct {
 	// Secret signs each request in signature.Header, the scheme Catraca
 	// signs all its outgoing requests with. Required.
 	Secret string
+	// PreviousSecrets are secrets being rotated out. Each request carries a
+	// v1 signature for Secret and then one for each of them, as webhooks
+	// do, so the platform accepts it whether or not it has switched to
+	// Secret yet.
+	PreviousSecrets []string
 	// SendRawToken adds the raw token to the request. By default only its
 	// SHA-256 is sent, which is enough for a platform that stores key
 	// hashes; enable this only for a platform that cannot look keys up by
@@ -44,11 +50,11 @@ type HTTPResolverConfig struct {
 // "account_id": "acct_456"} when the token is one of its keys, and 404 when
 // it is not. Any other answer is an error.
 type HTTPResolver struct {
-	url    string
-	secret string
-	raw    bool
-	client *http.Client
-	now    func() time.Time
+	url     string
+	secrets []string
+	raw     bool
+	client  *http.Client
+	now     func() time.Time
 }
 
 // NewHTTPResolver returns an HTTPResolver.
@@ -60,6 +66,9 @@ func NewHTTPResolver(cfg HTTPResolverConfig) (*HTTPResolver, error) {
 	if cfg.Secret == "" {
 		return nil, errors.New("secretscan: resolver secret is required")
 	}
+	if slices.Contains(cfg.PreviousSecrets, "") {
+		return nil, errors.New("secretscan: a previous resolver secret is empty")
+	}
 	var c http.Client
 	if cfg.Client != nil {
 		c = *cfg.Client
@@ -67,7 +76,8 @@ func NewHTTPResolver(cfg HTTPResolverConfig) (*HTTPResolver, error) {
 		c.Timeout = 10 * time.Second
 	}
 	c.CheckRedirect = func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }
-	return &HTTPResolver{url: cfg.URL, secret: cfg.Secret, raw: cfg.SendRawToken, client: &c, now: time.Now}, nil
+	secrets := append([]string{cfg.Secret}, cfg.PreviousSecrets...)
+	return &HTTPResolver{url: cfg.URL, secrets: secrets, raw: cfg.SendRawToken, client: &c, now: time.Now}, nil
 }
 
 type resolveRequest struct {
@@ -99,7 +109,7 @@ func (r *HTTPResolver) Resolve(ctx context.Context, t Token) (Key, error) {
 	}
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("User-Agent", "catraca-secretscan")
-	req.Header.Set(signature.Header, signature.Sign(r.secret, r.now(), body))
+	req.Header.Set(signature.Header, signature.SignAll(r.secrets, r.now(), body))
 
 	resp, err := r.client.Do(req)
 	if err != nil {

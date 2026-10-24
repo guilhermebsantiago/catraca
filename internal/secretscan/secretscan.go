@@ -155,6 +155,13 @@ type Config struct {
 	// SendRawToken. Without it only the token's SHA-256 is stored, and
 	// Token.Raw is empty.
 	RawTokenSecret string
+	// RawTokenPreviousSecrets are secrets RawTokenSecret replaced. Raw
+	// tokens are sealed with RawTokenSecret only, and opened with whichever
+	// of these sealed them, so the reports that wait in the queue while
+	// the secret is rotated still resolve. Keep each until no report
+	// sealed with it can still be retried: MaxAge after the rotation, and
+	// until the dead reports have been requeued or dropped.
+	RawTokenPreviousSecrets []string
 
 	// Feedback makes the answer to GitHub a JSON array that labels each
 	// token resolved within FeedbackTimeout as "true_positive" (a key was
@@ -346,7 +353,7 @@ func New(cfg Config) (*Handler, error) {
 	h.lease = 2*h.resolveTimeout + settleTimeout + 30*time.Second
 	if cfg.RawTokenSecret != "" {
 		var err error
-		if h.seal, err = newSealer(cfg.RawTokenSecret); err != nil {
+		if h.seal, err = newSealer(cfg.RawTokenSecret, cfg.RawTokenPreviousSecrets...); err != nil {
 			return nil, err
 		}
 	}

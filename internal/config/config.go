@@ -36,6 +36,8 @@ const (
 	DefaultInflightWait    = 2 * time.Millisecond
 	DefaultInflightLimit   = InflightAdaptive
 	DefaultRulesPath       = "rules/default.yaml"
+	DefaultWatchInterval   = 5 * time.Second
+	DefaultGateOnLoad      = GateEnforce
 	DefaultAuditDSN        = "sqlite:catraca.db"
 	DefaultHookTimeout     = 10 * time.Second
 	DefaultLogLevel        = "info"
@@ -46,6 +48,14 @@ const (
 const (
 	StoreMemory = "memory"
 	StoreRedis  = "redis"
+)
+
+// What loading a ruleset does with a rule that has not passed the
+// precision gate, the values of gate.on_load.
+const (
+	GateOff     = "off"
+	GateWarn    = "warn"
+	GateEnforce = "enforce"
 )
 
 // Kinds of decision limit, the values of server.inflight_limit.
@@ -123,12 +133,20 @@ type Token struct {
 	// logged.
 	Name  string `yaml:"name"`
 	Token Secret `yaml:"token"`
+	// PreviousTokens are tokens of the same client being rotated out. They
+	// are accepted like Token, under the same name, so the client can move
+	// to Token whenever it is ready.
+	PreviousTokens []Secret `yaml:"previous_tokens"`
 }
 
 // Rules configures the ruleset.
 type Rules struct {
 	// Path is the ruleset file. Default "rules/default.yaml".
 	Path string `yaml:"path"`
+	// WatchInterval is how often the server reads the ruleset file, to
+	// reload it when its content has changed. Default 5s; 0s turns the
+	// watch off, leaving reloads to SIGHUP and POST /v1/rules/reload.
+	WatchInterval time.Duration `yaml:"watch_interval"`
 }
 
 // Store configures where signal counters are kept.
@@ -249,6 +267,11 @@ type Gate struct {
 	MinLabeled int `yaml:"min_labeled"`
 	// MinPrecision is the required Wilson 95% lower bound. Default 0.9.
 	MinPrecision float64 `yaml:"min_precision"`
+	// OnLoad is what loading a ruleset does with a rule it would make
+	// enforce that the server is not enforcing yet, has no override and has
+	// not passed the gate: "enforce" (the default) holds it in shadow mode,
+	// "warn" lets it enforce and logs a warning, "off" does not check.
+	OnLoad string `yaml:"on_load"`
 }
 
 // Precision returns the gate for the precision package.
@@ -265,6 +288,9 @@ type Hook struct {
 	URL string `yaml:"url"`
 	// Secret keys the Catraca-Signature header.
 	Secret Secret `yaml:"secret"`
+	// PreviousSecrets are secrets being rotated out: each request is also
+	// signed with them, so the receiver accepts it before it switches.
+	PreviousSecrets []Secret `yaml:"previous_secrets"`
 	// Timeout bounds one attempt. Default 10s.
 	Timeout time.Duration `yaml:"timeout"`
 	// Headers are added to every request, for example Authorization.
@@ -287,14 +313,15 @@ func (h Hook) Options() hooks.Hook {
 		headers[k] = v.Value()
 	}
 	return hooks.Hook{
-		Name:        h.Name,
-		URL:         h.URL,
-		Secret:      h.Secret.Value(),
-		Timeout:     h.Timeout,
-		Headers:     headers,
-		Concurrency: h.Concurrency,
-		MaxAttempts: h.MaxAttempts,
-		MaxAge:      h.MaxAge,
+		Name:            h.Name,
+		URL:             h.URL,
+		Secret:          h.Secret.Value(),
+		PreviousSecrets: Values(h.PreviousSecrets),
+		Timeout:         h.Timeout,
+		Headers:         headers,
+		Concurrency:     h.Concurrency,
+		MaxAttempts:     h.MaxAttempts,
+		MaxAge:          h.MaxAge,
 	}
 }
 
@@ -328,6 +355,9 @@ type SES struct {
 type UseSend struct {
 	// Secret is the webhook signing secret shown by useSend. Required.
 	Secret Secret `yaml:"secret"`
+	// PreviousSecrets are secrets the webhook had before; calls signed with
+	// them are still accepted while its secret changes.
+	PreviousSecrets []Secret `yaml:"previous_secrets"`
 	// AccountMetadataKey reads the account id from the email's metadata
 	// instead of the useSend team id.
 	AccountMetadataKey string `yaml:"account_metadata_key"`
@@ -337,6 +367,9 @@ type UseSend struct {
 type Generic struct {
 	// Secret is the shared secret requests are signed with. Required.
 	Secret Secret `yaml:"secret"`
+	// PreviousSecrets are secrets being rotated out; requests signed with
+	// them are still accepted.
+	PreviousSecrets []Secret `yaml:"previous_secrets"`
 }
 
 // SecretScanning configures leaked key reports.
@@ -371,6 +404,9 @@ type GitHub struct {
 type Resolver struct {
 	URL    string `yaml:"url"`
 	Secret Secret `yaml:"secret"`
+	// PreviousSecrets are secrets being rotated out: requests are also
+	// signed with them, and raw tokens sealed with them still open.
+	PreviousSecrets []Secret `yaml:"previous_secrets"`
 	// SendRawToken adds the raw token to resolver requests, for platforms
 	// that cannot look keys up by hash. It requires an https URL.
 	SendRawToken bool `yaml:"send_raw_token"`
@@ -459,6 +495,9 @@ func (c *Config) applyDefaults(set func(path string) bool) {
 	if c.Rules.Path == "" {
 		c.Rules.Path = DefaultRulesPath
 	}
+	if !set("rules.watch_interval") {
+		c.Rules.WatchInterval = DefaultWatchInterval
+	}
 	if c.Store.Backend == "" {
 		c.Store.Backend = StoreMemory
 	}
@@ -515,6 +554,9 @@ func (c *Config) applyDefaults(set func(path string) bool) {
 	}
 	if c.Gate.MinPrecision == 0 {
 		c.Gate.MinPrecision = precision.DefaultMinPrecision
+	}
+	if c.Gate.OnLoad == "" {
+		c.Gate.OnLoad = DefaultGateOnLoad
 	}
 	if c.Outbox.Workers == 0 {
 		c.Outbox.Workers = hooks.DefaultWorkers

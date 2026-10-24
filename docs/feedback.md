@@ -245,7 +245,9 @@ Setup:
 1. In useSend, open **Webhooks**, add
    `https://catraca.example.com/v1/feedback/usesend`, and select
    `email.bounced`, `email.complained` and `email.delivered`.
-2. Copy the signing secret into Catraca's configuration.
+2. Copy the signing secret into Catraca's configuration. When it changes
+   later, keep the old one in `previous_secrets` for a while; see
+   [rotating secrets](rotation.md#usesend-secret).
 
 ```go
 h, err := feedback.NewUseSendHandler(feedback.UseSendConfig{
@@ -312,9 +314,11 @@ Catraca-Signature: t=1760529600,v1=5f1c...e9
 (see [Hooks](hooks.md#verifying-the-signature)): `t` is the Unix time in
 seconds and `v1` the hex HMAC-SHA256 of `<t>.<raw body>` with the shared
 secret. The timestamp must be within five minutes of Catraca's clock
-(`GenericConfig.Tolerance`). Several `v1` values may be sent while rotating
-the secret. In Go, sign with the public
-[`signature`](../signature) package:
+(`GenericConfig.Tolerance`). While the secret is rotated, Catraca accepts a
+request signed with `feedback.generic.secret` or any of its
+`previous_secrets`, and the platform may send several `v1` values
+(`signature.SignAll`); see [rotating secrets](rotation.md#generic-feedback-secret).
+In Go, sign with the public [`signature`](../signature) package:
 
 ```go
 import "github.com/guilhermebsantiago/catraca/signature"

@@ -62,9 +62,11 @@ finds them whatever its working directory.
 **Durations** are Go durations with a unit: `10ms`, `30s`, `2h`. A plain
 number such as `30` is an error.
 
-**Secrets** (tokens, hook secrets, provider secrets, `store.redis.url`,
-`audit.dsn`, hook headers) print as `[redacted]` wherever the configuration
-is logged or dumped. `config check` shows URLs without their passwords.
+**Secrets** (tokens, hook secrets, provider secrets, current and previous,
+`store.redis.url`, `audit.dsn`, hook headers) print as `[redacted]`
+wherever the configuration is logged or dumped. `config check` shows URLs
+without their passwords. Each token and shared secret can be rotated
+without refusing valid requests; see [rotating secrets](rotation.md).
 
 ## Reference
 
@@ -170,21 +172,63 @@ limits at work, and each shed request's access log line has `"shed": true`.
 | `tokens` | required | the bearer tokens the `/v1` routes accept, at least one |
 | `tokens[].name` | required | identifies the client in access logs (`client`); letters, digits, `.`, `_`, `-` |
 | `tokens[].token` | required | at least 16 characters; generate one with `openssl rand -hex 32` |
+| `tokens[].previous_tokens` | | tokens of the same client being rotated out, accepted like `token` under the same name; requests with one are logged with `"previous_token": true` |
 
-Give each client its own token. To rotate one, add the new token, move the
-client to it, then remove the old one. Tokens are compared in constant time.
-Feedback and secret scanning routes take no token; they verify signatures.
+Give each client its own token. To rotate one, make the new token `token`
+and the old one a previous token, move the client to the new one, then
+remove the old one; see [rotating secrets](rotation.md#api-tokens). A token,
+current or previous, may appear once in the whole list. Tokens are compared
+in constant time. Feedback and secret scanning routes take no token; they
+verify signatures.
 
 ### rules
 
 | field | default | |
 |---|---|---|
 | `path` | `rules/default.yaml` | the ruleset file; see [rules](rules.md) |
+| `watch_interval` | `5s` | how often the server reads the file, to reload it when its content changed; at least `1s`. `0s` turns the watch off |
 
-The ruleset is reloaded from this path by `POST /v1/rules/reload` and, on
-Unix, by `SIGHUP`. If it does not load when the server starts, the server
-runs anyway, reports not ready and answers decisions with `503` until a
-reload succeeds.
+The ruleset is reloaded from this path when its content changes, by
+`POST /v1/rules/reload` and, on Unix, by `SIGHUP`. A load reads the file,
+parses and compiles it as [`catraca rules check`](cli.md) does, puts the
+rules it would newly enforce through the [precision gate](#gate), and swaps
+the result in at once; decisions in flight finish on the ruleset they
+started with. A file that does not load leaves the current ruleset
+serving: the error is logged once and counted in
+`catraca_ruleset_loads_total{result="error"}`. If the file does not load
+when the server starts, the server runs anyway, reports not ready and
+answers decisions with `503` until a reload succeeds.
+
+**The watch.** Every `watch_interval` the server reads the file and
+compares its SHA-256 with what it last loaded. A change is loaded once the
+file has kept the same content for two seconds, so a file still being
+written, or a burst of saves, loads once and whole; a change undone in the
+meantime loads nothing. Any change of the bytes counts, a comment
+included, which is a way to make every instance run the gate again.
+Reading the content, rather than waiting for file system events, follows
+every way a file is replaced: in place, by renaming another file over it,
+or as a Kubernetes ConfigMap does. Each instance watches its own file, so
+a ConfigMap update reaches every pod by itself, without a signal to each.
+
+In Kubernetes, mount the ConfigMap as a directory and point `path` into it:
+
+```yaml
+volumes:
+  - name: rules
+    configMap: {name: catraca-rules}
+containers:
+  - name: catraca
+    env:
+      - {name: CATRACA_RULES, value: /etc/catraca/rules/default.yaml}
+    volumeMounts:
+      - {name: rules, mountPath: /etc/catraca/rules, readOnly: true}
+```
+
+The kubelet updates the files of such a mount within a minute or two of a
+`kubectl apply`, by swapping a symlink, and the watch loads the new
+ruleset a few seconds later; `/readyz?verbose` on each pod shows the
+version it runs. A ConfigMap mounted with `subPath` is never updated:
+pods keep the file they started with until they restart.
 
 ### store
 
@@ -381,15 +425,63 @@ fail, so its breaker stays closed.
 ### gate
 
 The [precision gate](audit.md#the-precision-gate) that `GET /v1/stats/rules`
-evaluates rules against.
+evaluates rules against, and that a rule must pass before a ruleset load
+lets it enforce.
 
 | field | default | |
 |---|---|---|
 | `min_labeled` | `30` | labeled matches a rule needs, at least 1 |
 | `min_precision` | `0.9` | required Wilson 95% lower bound on precision, in (0, 1] |
+| `on_load` | `enforce` | what loading a ruleset does with a rule it would newly enforce that has not passed the gate: `enforce` holds it in shadow mode, `warn` lets it enforce and logs a warning, `off` does not check |
 
 `catraca rules gate` and `catraca report` take the same values as
 `--min-labeled` and `--min-precision`, so CI does not need this file.
+
+**The gate on load.** `catraca rules gate` keeps unproven rules out of a
+ruleset in CI; `on_load` keeps them out of a running server too, whatever
+way the file got there. When a ruleset loads, at start or on a reload, each
+rule it would make enforce that this server does not enforce now (a new
+rule in enforce mode, or one switched from shadow) and that has no
+`override` is checked against the labels in the audit database, counted
+over all time as `catraca rules gate` counts them. With `enforce`, a rule
+that does not pass is held in shadow mode and the rest of the file loads:
+
+- held rules are evaluated and recorded as shadow rules, so they keep
+  collecting the labels that will let them pass;
+- decisions carry the version of the ruleset as it is applied, which is
+  the version the file would have with those rules written in shadow mode,
+  so every decision says which rules could act;
+- each held rule is logged with its labels and what it lacks, listed under
+  `held` in `/readyz?verbose` and in the answer of `POST /v1/rules/reload`,
+  and counted in `catraca_ruleset_gate_failures{status}`;
+- the gate runs again on the next load: once its matches are labeled,
+  reload, or change the file, and the rule enforces.
+
+The whole file is not refused, because that would also hold back every
+other change in it, such as a fix to a rule that blocks good senders, and
+an instance starting with it would have no ruleset at all. Shadow mode is
+where every rule starts anyway: holding one there costs detection, never a
+false positive.
+
+A rule this server already enforces is not checked again when the file
+changes elsewhere, nor when its condition changes: a promotion is a change
+of mode, as in CI. At start the server enforces nothing yet, so every
+enforced rule without an override is checked; a rule whose precision fell
+below the gate after it was promoted is held by instances that start after
+that, while the others keep enforcing it until it is retired.
+`catraca report` lists such rules.
+
+**When the audit database cannot answer** (a Postgres database still being
+opened at start, or down), the gate cannot run. With `enforce`, the rules
+it would check stay in shadow mode, listed with the status `unavailable`,
+and the gate is tried again every few seconds, without reading the file
+again; once the database answers, the rules that pass enforce. A rule
+with an `override` never waits for the gate, so give one to a rule that
+must enforce from the first second whatever happens to the database. With
+`warn` the rules enforce, and the log says the gate could not run.
+
+`warn` suits a deployment that gates promotions in CI and wants the server
+only to point out what slipped through; `off` skips the labels query.
 
 ### hooks
 
@@ -401,6 +493,7 @@ See [hooks](hooks.md) for the request and how to verify it.
 | `[].name` | required | the effect, as rules list it under `effects`: lowercase letters, digits and `_` |
 | `[].url` | required | an absolute `http` or `https` URL |
 | `[].secret` | required | signs each request; at least 16 characters |
+| `[].previous_secrets` | | secrets being rotated out: each request is also signed with each of them, so a receiver that has not switched yet accepts it; see [rotating secrets](rotation.md#webhook-secrets) |
 | `[].timeout` | `10s` | bound on one attempt |
 | `[].headers` | | extra headers, for example `Authorization`; `Catraca-*` headers cannot be set |
 | `[].concurrency` | `4`, or `outbox.workers` if fewer | deliveries to this hook attempted at once, at most `outbox.workers` |
@@ -452,8 +545,10 @@ see [feedback](feedback.md) for each provider's setup.
 | `ses.account_tag` | | the SES message tag holding the account id |
 | `ses.account_header` | | the email header holding the account id, the fallback; one of the two is required |
 | `usesend.secret` | required | the webhook signing secret shown by useSend, for `/v1/feedback/usesend` |
+| `usesend.previous_secrets` | | secrets the webhook had before; calls signed with them are still accepted |
 | `usesend.account_metadata_key` | | read the account id from the email's metadata instead of the team id |
 | `generic.secret` | required | the shared secret `/v1/feedback` requests are signed with; at least 16 characters |
+| `generic.previous_secrets` | | secrets being rotated out; requests signed with them are still accepted |
 
 ```yaml
 feedback:
@@ -474,6 +569,7 @@ GitHub's secret scanning partner endpoint, `/v1/secret-scanning/github`. See
 | `github.enabled` | `false` | turn the endpoint on; the fields below are checked only when it is |
 | `github.resolver.url` | required | the platform endpoint that says which API key a token is |
 | `github.resolver.secret` | required | signs resolver requests; at least 16 characters |
+| `github.resolver.previous_secrets` | | secrets being rotated out: requests are also signed with them, and raw tokens sealed with them still open; see [rotating secrets](rotation.md#resolver-secret) |
 | `github.resolver.send_raw_token` | `false` | send the raw token, not only its SHA-256; requires an `https` URL |
 | `github.feedback` | `false` | answer GitHub with true and false positive labels, once GitHub enables feedback for the partnership |
 | `github.github_token` | | a GitHub token without scopes, to raise the rate limit on GitHub's public keys endpoint |

@@ -146,6 +146,11 @@ type ReloadResponse struct {
 	Changed  bool     `json:"changed"`
 	Rules    int      `json:"rules"`
 	Warnings []string `json:"warnings"`
+	// Held are the rules the file enforces that the precision gate holds in
+	// shadow mode, and Ungated those enforcing without having passed it;
+	// see RulesetStatus.
+	Held    []GateHold `json:"held,omitempty"`
+	Ungated []GateHold `json:"ungated,omitempty"`
 }
 
 func (s *Server) reload(w http.ResponseWriter, r *http.Request) {
@@ -180,13 +185,18 @@ func (s *Server) reload(w http.ResponseWriter, r *http.Request) {
 		warnings = append(warnings, wn.String())
 	}
 	annotate(r, slog.String("ruleset_version", rs.Version()))
-	writeJSON(w, http.StatusOK, ReloadResponse{
+	resp := ReloadResponse{
 		Version:         rs.Version(),
 		PreviousVersion: prev,
 		Changed:         rs.Version() != prev,
 		Rules:           len(rs.Rules()),
 		Warnings:        warnings,
-	})
+	}
+	if s.rulesetFn != nil {
+		st := s.rulesetFn()
+		resp.Held, resp.Ungated = st.Held, st.Ungated
+	}
+	writeJSON(w, http.StatusOK, resp)
 }
 
 // ReviewResponse is the body of GET /v1/rules/{id}/review.

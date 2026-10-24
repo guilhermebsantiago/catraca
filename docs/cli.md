@@ -30,8 +30,9 @@ Runs the server until SIGINT or SIGTERM. It then drains for
 `server.drain_delay` (5s by default): `/readyz` reports not ready while
 requests are still served, so load balancers stop sending them. Then it
 shuts down gracefully within `server.shutdown_timeout`. A second SIGINT or
-SIGTERM skips the rest of the drain. On Unix, SIGHUP reloads the ruleset.
-Logs go to stderr. See [configuration](config.md#server) and the
+SIGTERM skips the rest of the drain. The ruleset is reloaded when its file
+changes ([`rules.watch_interval`](config.md#rules)) and, on Unix, on
+SIGHUP. Logs go to stderr. See [configuration](config.md#server) and the
 [API](api.md).
 
 ## config check
@@ -49,6 +50,7 @@ catraca.yaml is valid (1 warning(s))
   listen      :8080
   api tokens  platform
   ruleset     rules/default.yaml (version 098086f42c27, 9 rules: 1 enforced, 8 shadow)
+  reload      when the file changes (read every 5s), on SIGHUP and on POST /v1/rules/reload
   store       memory (one instance; counters are lost on restart)
   audit       sqlite:catraca.db, minimal events
   ...

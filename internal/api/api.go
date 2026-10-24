@@ -69,6 +69,10 @@ type Token struct {
 	Name string
 	// Value is the bearer token.
 	Value string
+	// Previous marks a token being rotated out. Requests with it are
+	// accepted, and their access log lines say previous_token, so the
+	// operator can tell when the client has moved to its new token.
+	Previous bool
 }
 
 // Check is one readiness check. It answers from the server's own state,
@@ -98,6 +102,41 @@ type DependencyStatus struct {
 	DurationMS float64   `json:"duration_ms"`
 }
 
+// RulesetStatus describes the ruleset the server decides with and where it
+// came from, as GET /readyz?verbose shows it. It holds no secrets.
+type RulesetStatus struct {
+	// Version is the version decisions are made with. FileVersion is the
+	// version of the file as written, set when rules the precision gate
+	// holds in shadow mode make the two differ.
+	Version     string `json:"version,omitempty"`
+	FileVersion string `json:"file_version,omitempty"`
+	// Path is the ruleset file, and Source what loaded the current
+	// ruleset from it: start, watch, signal or api.
+	Path     string    `json:"path"`
+	Source   string    `json:"source,omitempty"`
+	LoadedAt time.Time `json:"loaded_at,omitzero"`
+	// Gate is what loading does with a rule that has not passed the
+	// precision gate (gate.on_load): off, warn or enforce. Held are the
+	// rules the file enforces that are held in shadow mode for it, and
+	// Ungated those enforcing without having passed it, with warn.
+	Gate    string     `json:"gate"`
+	Held    []GateHold `json:"held,omitempty"`
+	Ungated []GateHold `json:"ungated,omitempty"`
+	// FailedAt is when the latest attempt to load the file failed, if one
+	// did since the current ruleset loaded: the file is then not what the
+	// server decides with. The log has the reason.
+	FailedAt time.Time `json:"failed_at,omitzero"`
+}
+
+// GateHold is a rule that has not passed the precision gate when its
+// ruleset loaded.
+type GateHold struct {
+	Rule string `json:"rule"`
+	// Status is the gate's verdict: insufficient_labels or below_precision,
+	// or unavailable when the audit database could not answer.
+	Status string `json:"status"`
+}
+
 // Options configure a Server. Decider, Rules, Audit and at least one Token
 // are required.
 type Options struct {
@@ -124,6 +163,10 @@ type Options struct {
 	// uses, by name, for GET /readyz?verbose. They never make it not ready.
 	// Nil leaves them out.
 	Dependencies func() map[string]DependencyStatus
+	// Ruleset describes the current ruleset for GET /readyz?verbose, and
+	// the rules the precision gate held back for POST /v1/rules/reload.
+	// Nil leaves it out.
+	Ruleset func() RulesetStatus
 	// Gatherer is served on GET /metrics. Nil answers 404.
 	Gatherer prometheus.Gatherer
 	// SeparateAdmin serves GET /healthz, /readyz and /metrics from Admin
@@ -153,6 +196,7 @@ type Server struct {
 	decider      Decider
 	rules        RuleSource
 	reloadFn     func() (*rules.Ruleset, error)
+	rulesetFn    func() RulesetStatus
 	audit        AuditLog
 	gate         precision.Gate
 	tokens       []tokenHash
@@ -170,8 +214,9 @@ type Server struct {
 }
 
 type tokenHash struct {
-	name string
-	sum  [sha256.Size]byte
+	name     string
+	sum      [sha256.Size]byte
+	previous bool
 }
 
 // New returns a Server with every route registered.
@@ -192,6 +237,7 @@ func New(opts Options) (*Server, error) {
 		decider:      opts.Decider,
 		rules:        opts.Rules,
 		reloadFn:     opts.Reload,
+		rulesetFn:    opts.Ruleset,
 		audit:        opts.Audit,
 		gate:         opts.Gate,
 		checks:       opts.Checks,
@@ -204,7 +250,7 @@ func New(opts Options) (*Server, error) {
 		if t.Value == "" {
 			return nil, fmt.Errorf("api: token %q is empty", t.Name)
 		}
-		s.tokens = append(s.tokens, tokenHash{name: t.Name, sum: sha256.Sum256([]byte(t.Value))})
+		s.tokens = append(s.tokens, tokenHash{name: t.Name, sum: sha256.Sum256([]byte(t.Value)), previous: t.Previous})
 	}
 	if s.log == nil {
 		s.log = slog.New(slog.DiscardHandler)
@@ -335,6 +381,9 @@ type ReadyResponse struct {
 	// Dependencies is the health of the services the server uses, with
 	// ?verbose only. It does not affect Status.
 	Dependencies map[string]DependencyStatus `json:"dependencies,omitempty"`
+	// Ruleset is the ruleset decisions are made with and where it came
+	// from, with ?verbose only.
+	Ruleset *RulesetStatus `json:"ruleset,omitempty"`
 }
 
 func (s *Server) readyz(w http.ResponseWriter, r *http.Request) {
@@ -350,6 +399,10 @@ func (s *Server) readyz(w http.ResponseWriter, r *http.Request) {
 	}
 	if r.URL.Query().Has("verbose") && s.dependencies != nil {
 		resp.Dependencies = s.dependencies()
+	}
+	if r.URL.Query().Has("verbose") && s.rulesetFn != nil {
+		rs := s.rulesetFn()
+		resp.Ruleset = &rs
 	}
 	writeJSON(w, status, resp)
 }

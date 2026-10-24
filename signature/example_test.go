@@ -70,3 +70,22 @@ func ExampleSign() {
 	// Output:
 	// t=1760529600,v1=408234c16d3bc535d84c75089dbcc4972a14c15efab2053804947f672bc0804e
 }
+
+// While a secret is rotated, the sender signs with the new secret and the
+// old one, and a receiver accepts either, so neither side has to switch
+// first.
+func ExampleSignAll() {
+	body := []byte(`{"effect":"revoke_key","api_key_id":"key_7d3e"}`)
+	header := signature.SignAll([]string{"whsec_new_0123456789", "whsec_old_0123456789"}, time.Now(), body)
+
+	// A receiver that has not heard of the new secret yet.
+	fmt.Println(signature.Verify("whsec_old_0123456789", header, body, 0))
+	// A receiver that already accepts both.
+	fmt.Println(signature.VerifyAny([]string{"whsec_new_0123456789", "whsec_old_0123456789"}, header, body, 0))
+	// A receiver that dropped the old secret.
+	fmt.Println(signature.Verify("whsec_new_0123456789", header, body, 0))
+	// Output:
+	// <nil>
+	// <nil>
+	// <nil>
+}
