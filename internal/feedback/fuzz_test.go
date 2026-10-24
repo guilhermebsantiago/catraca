@@ -2,6 +2,7 @@ package feedback
 
 import (
 	"bytes"
+	"context"
 	"encoding/base64"
 	"encoding/json"
 	"fmt"
@@ -14,6 +15,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/guilhermebsantiago/catraca/internal/decision"
 	"github.com/guilhermebsantiago/catraca/internal/event"
 	"github.com/guilhermebsantiago/catraca/signature"
 )
@@ -24,9 +26,29 @@ import (
 // provider names the notification, and nothing decided for a request whose
 // signature does not hold.
 
-// validating is a Decider that refuses invalid events, as the engine does.
-func validating() *recorder {
-	return &recorder{refuse: func(ev event.Event) bool { return ev.Validate() != nil }}
+// validating is a Decider that refuses invalid events, as the engine does,
+// and keeps every event it is handed, refused or not, so their positions
+// in a notification can be checked.
+type validating struct {
+	mu    sync.Mutex
+	tried []event.Event
+}
+
+func (v *validating) Decide(_ context.Context, ev event.Event) (decision.Decision, error) {
+	v.mu.Lock()
+	v.tried = append(v.tried, ev)
+	v.mu.Unlock()
+	if err := ev.Validate(); err != nil {
+		return decision.Decision{}, err
+	}
+	return decision.Decision{ID: "dec_1", EventID: ev.ID, Action: decision.Allow, Time: time.Unix(0, 0).UTC()}, nil
+}
+
+// got returns every event handed to Decide.
+func (v *validating) got() []event.Event {
+	v.mu.Lock()
+	defer v.mu.Unlock()
+	return slices.Clone(v.tried)
 }
 
 // checkEvents checks the events a handler decided for one notification:
@@ -75,7 +97,7 @@ func checkEvents(t *testing.T, evs []event.Event, provider string, id func(i int
 // an authentic message from one whose signature should have failed.
 type fuzzSNS struct {
 	h       *sesHandler
-	dec     *recorder
+	dec     *validating
 	fetched func() int32
 	mu      sync.Mutex
 	signed  map[string]bool
@@ -84,7 +106,7 @@ type fuzzSNS struct {
 
 func newFuzzSNS(tb testing.TB) *fuzzSNS {
 	tb.Helper()
-	s := &fuzzSNS{dec: validating(), signed: map[string]bool{}}
+	s := &fuzzSNS{dec: &validating{}, signed: map[string]bool{}}
 	f := &fetcher{}
 	s.fetched = f.calls.Load
 	confirm := &http.Client{Transport: roundTripper(func(r *http.Request) (*http.Response, error) {
@@ -155,6 +177,9 @@ func FuzzSESNotification(f *testing.F) {
 		`{"notificationType":"Complaint","complaint":{"complaintFeedbackType":"not-spam"},"mail":{"tags":{"catraca-account":["a"]}}}`,
 		`{"eventType":"Open","mail":{"tags":{"catraca-account":["a"]}}}`,
 		`{"eventType":"Bounce","bounce":{},"mail":{"tags":{"catraca-account":["  ", "\u0000"]}}}`,
+		// The engine refuses the second event, and the third keeps its id.
+		`{"eventType":"Bounce","bounce":{"bounceType":"Permanent","bouncedRecipients":[{"emailAddress":"a@x.example"},
+		{"emailAddress":"b\u0000@x.example"},{"emailAddress":"c@x.example"}]},"mail":{"tags":{"catraca-account":["a"]}}}`,
 		"Successfully validated SNS topic for Amazon SES event publishing.",
 	} {
 		f.Add(msg, "22b80b92-fdea-4c2c-8f9d-bdfb0c7bf324", "", byte(0), "")
@@ -300,7 +325,7 @@ func FuzzUseSend(f *testing.F) {
 	} {
 		f.Add([]byte(seed), []byte(seed+" "))
 	}
-	dec := validating()
+	dec := &validating{}
 	h, err := NewUseSendHandler(UseSendConfig{Decider: dec, Secret: useSendSecret})
 	if err != nil {
 		f.Fatal(err)
@@ -359,7 +384,7 @@ func FuzzGeneric(f *testing.F) {
 	} {
 		f.Add([]byte(seed), []byte(strings.Replace(seed, "a", "b", 1)))
 	}
-	dec := validating()
+	dec := &validating{}
 	h, err := NewGenericHandler(GenericConfig{Decider: dec, Secret: genericSecret})
 	if err != nil {
 		f.Fatal(err)
@@ -371,7 +396,7 @@ func FuzzGeneric(f *testing.F) {
 		evs := dec.got()[before:]
 		switch rec.Code {
 		case http.StatusAccepted:
-			if len(evs) != 1 {
+			if len(evs) != 1 || evs[0].Validate() != nil {
 				t.Fatalf("202 with %d events decided", len(evs))
 			}
 			var in event.Event
@@ -381,7 +406,8 @@ func FuzzGeneric(f *testing.F) {
 			// The platform's own id, which its retries keep.
 			checkEvents(t, evs, in.Attributes["provider"], func(int) string { return in.ID })
 		case http.StatusBadRequest:
-			if len(evs) != 0 {
+			// Refused before the Decider, or by it, as invalid.
+			if len(evs) > 1 || len(evs) == 1 && evs[0].Validate() == nil {
 				t.Fatalf("400 with %d events decided", len(evs))
 			}
 		default:
