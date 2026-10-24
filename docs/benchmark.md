@@ -62,12 +62,13 @@ Medians of three to five interleaved runs on a quiet machine.
 
 | benchmark | time | allocations |
 |---|---|---|
-| `BenchmarkDecide`: the engine with a canned signal set and the default ruleset | 3.5 µs | 38 |
-| `BenchmarkDecideParallel`: the same from 12 goroutines, per decision | 0.76 µs | 38 |
+| `BenchmarkDecide`: the engine with a canned signal set and the default ruleset | 3.1 µs | 38 |
+| `BenchmarkDecideParallel`: the same from 12 goroutines, per decision | 0.82 µs | 38 |
+| `BenchmarkServeDecide`: `POST /v1/decide` through the HTTP layer, around a decider that answers at once | 8.0 µs | 53 |
 | `BenchmarkEvaluateDefault`: the default ruleset alone | 2.2 µs | 31 |
 
 ```sh
-go test ./internal/engine ./internal/rules -run '^$' -bench 'Decide|EvaluateDefault'
+go test ./internal/engine ./internal/rules ./internal/api -run '^$' -bench 'Decide|EvaluateDefault'
 ```
 
 ### Observe
@@ -408,6 +409,45 @@ for a Redis that would not answer in time, which brought the median from
 about 9 ms to 2.7 ms. The adaptive limit sat between 3 and 6, and the
 breaker stayed closed, since Redis kept answering: slow is not down. Both
 were back to no degraded decisions the second the slowdown ended.
+
+## Tracing
+
+[Tracing](tracing.md) is off by default, and off it must cost a decision
+nothing: every place that would make a span checks for a tracer first. With
+it on, the spans cost what they cost. "Before" is commit 3f2967e with
+`BenchmarkServeDecide` added; "after" is this branch with tracing off, and
+"on" is this branch tracing every request into no exporter, which is the
+cost of the spans, the trace in the access log and the exemplars, apart
+from sending them. Medians of 8 to 12 interleaved runs of half a second
+each, on a quiet machine.
+
+| benchmark | before | after, tracing off | on, every trace sampled |
+|---|---|---|---|
+| `BenchmarkDecide` | 3.0 µs, 42 allocations | 3.1 µs, 38 | 5.5 µs, 68 |
+| `BenchmarkDecideParallel` | 0.79 µs | 0.82 µs | |
+| `BenchmarkServeDecide`: the HTTP layer around a decider that answers at once | 8.0 µs, 53 allocations, 10.76 KB | 8.0 µs, 53, 10.77 KB | 10.4 µs, 89, 13.9 KB |
+| `BenchmarkServeDecideParallel` | 6.0 µs | 5.8 µs | |
+
+Off, the differences are within the spread between runs, about 3%, and a
+build with tracing's checks but without the new
+`catraca_store_call_duration_seconds` measured the same as both. That
+histogram, which a decision pays for whether tracing is on or not, reads
+the clock twice more per decision. On Windows a reading is the performance
+counter, about 80 ns through a system call; each reading also allocated
+twice, a cost the decision had paid since `monotime` was added, and the
+branch reads it without allocating, which is why a decision makes 38
+allocations again instead of 42. On Linux the clock is read without a
+system call. The HTTP layer keeps one more pointer per request, the 16
+bytes above.
+
+Tracing adds 0.9 MB to the Linux binary (`-trimpath -ldflags="-s -w"`,
+25.7 to 26.6 MB), with an OTLP exporter of Catraca's own; OpenTelemetry's
+own exporter added 12.6 MB, for the gRPC stack it links
+([why](tracing.md#otlp-over-http)).
+
+```sh
+go test ./internal/engine ./internal/api -run '^$' -bench 'Decide' -benchmem
+```
 
 ## Caveats
 

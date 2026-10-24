@@ -43,7 +43,8 @@ func infoFrom(ctx context.Context) *reqInfo {
 }
 
 // annotate adds attributes to the request's access log line, and to its
-// span with tracing on.
+// span with tracing on, so they must say what happened, never about whom:
+// an id Catraca made, an action, a verdict, not an account or an address.
 func annotate(r *http.Request, attrs ...slog.Attr) {
 	if ri := infoFrom(r.Context()); ri != nil {
 		ri.attrs = append(ri.attrs, attrs...)

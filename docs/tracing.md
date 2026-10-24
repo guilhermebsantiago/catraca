@@ -13,7 +13,9 @@ tracing:
 ```
 
 [`tracing`](config.md#tracing) in the configuration reference has every
-field.
+field. The container image's configuration turns it on with
+`CATRACA_TRACING=true`, and reads the collector from
+`OTEL_EXPORTER_OTLP_ENDPOINT`.
 
 ## What is traced
 

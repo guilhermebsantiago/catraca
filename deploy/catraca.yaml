@@ -37,3 +37,8 @@ feedback:
 logging:
   level: ${CATRACA_LOG_LEVEL:-info}
   format: json
+
+# Set CATRACA_TRACING=true and OTEL_EXPORTER_OTLP_ENDPOINT to trace
+# (docs/tracing.md); the other OTEL_* variables apply too.
+tracing:
+  enabled: ${CATRACA_TRACING:-false}
