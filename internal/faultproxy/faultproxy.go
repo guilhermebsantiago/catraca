@@ -175,9 +175,10 @@ func (p *Proxy) SetRefuse(on bool) {
 // DropReply arms a lost reply: the next request whose bytes contain
 // pattern, ignoring ASCII case, is forwarded to the target, and when the
 // target's reply comes back the proxy closes the connection instead of
-// passing it on. The server acted on the request; the client sees the
-// connection closed and cannot tell whether it did. It fires once; call it
-// again for another.
+// passing it on. The server acted on the request; the client sees EOF and
+// cannot tell whether it did. The close is orderly rather than a reset
+// because EOF is what clients such as go-redis retry on, which is the case
+// worth testing. It fires once; call it again for another.
 func (p *Proxy) DropReply(pattern string) {
 	p.update(func(f *faults) { f.dropReply = string(bytes.ToLower([]byte(pattern))) })
 }

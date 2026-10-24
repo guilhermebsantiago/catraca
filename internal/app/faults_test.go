@@ -603,11 +603,13 @@ func TestFaultRedisBlackhole(t *testing.T) {
 	h.checkNoPanics()
 }
 
-// TestFaultRedisLostReply loses the reply to a script call after Redis ran
-// it, as when a connection is reset at the wrong moment. The decision comes
-// back uncounted, so feedback is answered 503 and sent again, and the
-// retry, with the same event id, counts once: the script applied the first
-// time, and the dedupe key it set makes the retry a duplicate.
+// TestFaultRedisLostReply closes the connection after Redis ran a script
+// call and before its reply, as a connection lost at the wrong moment
+// does. The decision comes back uncounted, so feedback is answered 503 and
+// sent again, and the retry, with the same event id, counts once: the
+// script applied the first time, and the dedupe key it set makes the retry
+// a duplicate. The client does not resend the call itself, which on the
+// EOF it sees would count the event twice.
 func TestFaultRedisLostReply(t *testing.T) {
 	needFaults(t)
 	leakCheck(t)
