@@ -905,7 +905,15 @@ func TestSealer(t *testing.T) {
 		t.Errorf("open = %q, %v", raw, err)
 	}
 	other, _ := newSealer("another-secret-0123456789abcdef")
-	tampered := sealed[:len(sealed)-2] + "AA"
+	// Change one character in the middle, where all six of its bits are
+	// data, to one it is not: setting the end to "AA" changed nothing when
+	// the token already ended so, about once in 4,096 runs.
+	i := len(sealed) / 2
+	c := byte('A')
+	if sealed[i] == 'A' {
+		c = 'B'
+	}
+	tampered := sealed[:i] + string(c) + sealed[i+1:]
 	for name, open := range map[string]func() (string, error){
 		"another secret":     func() (string, error) { return other.open(sealed, "report-1") },
 		"another report":     func() (string, error) { return s.open(sealed, "report-2") },
