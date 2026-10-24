@@ -253,8 +253,17 @@ promoted to enforce when it has at least `gate.min_labeled` labeled matches
 (default 30) and the lower bound is at least `gate.min_precision` (default
 0.9). `catraca rules gate` checks every enforced rule of a ruleset against
 the audit database and fails (exit 1) when one is below the gate without an
-`override`: run it in CI. `catraca report` lists rules whose precision
-dropped below the gate as candidates to retire.
+`override`: run it in CI. The server checks the same gate when it loads a
+ruleset (`gate.on_load`, enforce by default): a rule the load would newly
+make enforce that has not passed it, without an override, is held in
+shadow mode, and the rest of the file loads. `catraca report` lists rules
+whose precision dropped below the gate as candidates to retire.
+
+Each instance reloads the ruleset by itself when the file's content changes,
+read every `rules.watch_interval`, so a ConfigMap update reaches a whole
+Kubernetes deployment; SIGHUP and `POST /v1/rules/reload` reload it at
+once. A file that does not parse and compile leaves the current ruleset
+serving.
 
 ## Effects and hooks
 
@@ -263,7 +272,10 @@ name (`revoke_key`, `suspend_account`, `notify`, ...). Payload: effect,
 decision id, event type, account, key, rule, reason. Signed with
 HMAC-SHA256 over `timestamp.body` in a `Catraca-Signature: t=..,v1=..`
 header (package `signature`; the generic feedback endpoint and the secret
-scanning resolver use the same scheme). Deliveries are written to an outbox table in the audit database
+scanning resolver use the same scheme). While a secret is rotated, the
+sender adds a `v1` per secret and the receiver accepts any it knows, so
+neither side refuses the other in between ([rotation](rotation.md)).
+Deliveries are written to an outbox table in the audit database
 first, retried with exponential backoff and jitter, and are idempotent per
 (decision id, effect). Each hook claims its own deliveries, up to its
 concurrency, from a pool of workers shared by all hooks, so one slow

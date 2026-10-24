@@ -18,7 +18,15 @@ auth:
       token: ${CATRACA_API_TOKEN}
 
 rules:
+  # In Kubernetes, point this into a ConfigMap mounted as a directory (not
+  # with subPath): each pod reloads the ruleset when the ConfigMap changes.
   path: ${CATRACA_RULES:-rules/default.yaml}
+  watch_interval: ${CATRACA_RULES_WATCH_INTERVAL:-5s}
+
+# A rule the ruleset newly enforces, without an override, stays in shadow
+# mode until its labels pass the precision gate; warn or off to relax it.
+gate:
+  on_load: ${CATRACA_GATE_ON_LOAD:-enforce}
 
 store:
   backend: memory

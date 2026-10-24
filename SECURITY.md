@@ -23,7 +23,13 @@ them on a listener of their own, off the API's port, and expose only the
 API's port to clients; without it they share the API's listener and
 whatever is in front must keep them private. They show no secrets: metrics
 carry rule ids, counts and the build, and `/readyz?verbose` says whether
-Redis and the audit database answer, without hostnames or errors.
+Redis and the audit database answer, without hostnames or errors, and
+which ruleset version runs, from which file path, with the ids of the
+rules the precision gate holds back.
+
+Every API token and shared secret can be rotated with an overlap, so a
+leaked one can be replaced without refusing valid traffic; see
+[rotating secrets](docs/rotation.md).
 
 ## Leaked-key reports at rest
 
@@ -34,8 +40,9 @@ URL), the API key and account it resolved to, and the outcome. The raw
 token is stored only when `secret_scanning.github.resolver.send_raw_token`
 is on, because the resolver then needs it and a report may wait for the
 resolver across a restart. It is then encrypted with AES-256-GCM under a
-key derived from the resolver's secret, which is never stored, and deleted
-as soon as the token resolves or the report is done; a dead report keeps
+key derived from the resolver's secret, which is never stored (while the
+secret is rotated, a token sealed with a previous one still opens), and
+deleted as soon as the token resolves or the report is done; a dead report keeps
 it until it is requeued or retention deletes the report. A copy of the
 audit database, a backup or a read-only user therefore never holds a usable
 token; the platform, the other holder of the secret, receives raw tokens in

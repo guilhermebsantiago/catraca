@@ -120,6 +120,9 @@ func TestDeployConfigs(t *testing.T) {
 		if cfg.Server.DrainDelay != want {
 			t.Errorf("deploy/%s: drain_delay = %v, want %v", file, cfg.Server.DrainDelay, want)
 		}
+		if cfg.Rules.WatchInterval != DefaultWatchInterval || cfg.Gate.OnLoad != GateEnforce {
+			t.Errorf("deploy/%s: rules = %+v, gate = %+v; want the watch and the gate on load at their defaults", file, cfg.Rules, cfg.Gate)
+		}
 	}
 }
 
