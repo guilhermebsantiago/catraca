@@ -93,3 +93,68 @@ func TestVerifyUsesTheClock(t *testing.T) {
 		t.Errorf("Verify of an hour-old signature = %v, want ErrExpired", err)
 	}
 }
+
+func TestSignAll(t *testing.T) {
+	body := []byte(`{"effect":"revoke_key"}`)
+	at := time.Unix(1700000000, 0)
+	if got, want := SignAll([]string{secret}, at, body), Sign(secret, at, body); got != want {
+		t.Errorf("SignAll with one secret = %q, want Sign's %q", got, want)
+	}
+	// The new secret first, then the old one: one v1 each, in that order.
+	if got, want := SignAll([]string{"whsec_next_0123456789", secret}, at, body),
+		Sign("whsec_next_0123456789", at, body)+",v1="+knownMAC; got != want {
+		t.Errorf("SignAll = %q, want %q", got, want)
+	}
+}
+
+func TestVerifyAny(t *testing.T) {
+	now := time.Unix(1700000000, 0)
+	body := []byte(`{"effect":"revoke_key","decision_id":"d1"}`)
+	const next = "whsec_next_0123456789"
+	both := SignAll([]string{next, secret}, now, body)
+
+	tests := []struct {
+		name    string
+		secrets []string
+		header  string
+		now     time.Time
+		want    error
+	}{
+		{"old secret, receiver knows both", []string{next, secret}, Sign(secret, now, body), now, nil},
+		{"new secret, receiver knows both", []string{next, secret}, Sign(next, now, body), now, nil},
+		{"both signatures, receiver knows the old one", []string{secret}, both, now, nil},
+		{"both signatures, receiver knows the new one", []string{next}, both, now, nil},
+		{"both signatures, receiver knows both", []string{secret, next}, both, now, nil},
+		{"one secret is Verify", []string{secret}, Sign(secret, now, body), now, nil},
+		{"neither secret", []string{"not-the-secret", "nor-this-one"}, both, now, ErrMismatch},
+		{"expired is checked after the match", []string{next, secret}, both, now.Add(time.Hour), ErrExpired},
+		{"forged and old is a mismatch", []string{"not-the-secret"}, both, now.Add(time.Hour), ErrMismatch},
+		{"malformed", []string{secret}, "t=1700000000", now, ErrMalformed},
+		{"no secrets", nil, both, now, ErrEmptySecret},
+		{"an empty secret among others", []string{secret, ""}, both, now, ErrEmptySecret},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if err := verifyAny(tt.secrets, tt.header, body, time.Minute, tt.now); !errors.Is(err, tt.want) {
+				t.Errorf("verifyAny = %v, want %v", err, tt.want)
+			}
+		})
+	}
+
+	// An empty secret is refused even when the header was signed with it:
+	// anyone can compute that HMAC.
+	if err := verifyAny([]string{""}, Sign("", now, body), body, time.Minute, now); !errors.Is(err, ErrEmptySecret) {
+		t.Errorf("verifyAny with an empty secret = %v, want ErrEmptySecret", err)
+	}
+}
+
+func TestVerifyAnyUsesTheClock(t *testing.T) {
+	body := []byte(`{}`)
+	secrets := []string{"whsec_next_0123456789", secret}
+	if err := VerifyAny(secrets, Sign(secret, time.Now(), body), body, time.Minute); err != nil {
+		t.Errorf("VerifyAny of a fresh signature: %v", err)
+	}
+	if err := VerifyAny(secrets, Sign(secret, time.Now().Add(-time.Hour), body), body, time.Minute); !errors.Is(err, ErrExpired) {
+		t.Errorf("VerifyAny of an hour-old signature = %v, want ErrExpired", err)
+	}
+}

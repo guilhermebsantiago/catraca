@@ -20,6 +20,13 @@
 // a new secret while the secret is rotated; Verify accepts the request when
 // any of them matches. Keys other than t and v1 are ignored, which leaves
 // room for new schemes next to v1.
+//
+// Rotation works from either side without a moment where valid requests are
+// refused. A sender that knows the new and the old secret signs with both
+// (SignAll), so a receiver that still knows only the old one accepts its
+// requests; a receiver that knows both verifies with either (VerifyAny), so
+// a sender may switch whenever it is ready. Verify and Sign are the
+// one-secret cases of the two.
 package signature
 
 import (
@@ -27,6 +34,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"errors"
+	"slices"
 	"strconv"
 	"strings"
 	"time"
@@ -39,11 +47,13 @@ const Header = "Catraca-Signature"
 // receiver's clock when Verify is given no tolerance.
 const DefaultTolerance = 5 * time.Minute
 
-// Errors returned by Verify. Each is returned as is, so callers can compare
-// with errors.Is to tell a broken sender (ErrMalformed) from a forged or
-// altered request (ErrMismatch) and a replayed or delayed one (ErrExpired).
+// Errors returned by Verify and VerifyAny. Each is returned as is, so
+// callers can compare with errors.Is to tell a broken sender (ErrMalformed)
+// from a forged or altered request (ErrMismatch) and a replayed or delayed
+// one (ErrExpired).
 var (
-	// ErrEmptySecret means Verify was called without a secret.
+	// ErrEmptySecret means Verify was called without a secret, or
+	// VerifyAny without secrets or with an empty one among them.
 	ErrEmptySecret = errors.New("signature: empty secret")
 	// ErrMalformed means the header could not be parsed: it is empty, lacks
 	// t or v1, has two t values, or has a value that is not a number or hex.
@@ -60,8 +70,23 @@ var (
 // Sign returns the Header value for body sent at t, signed with secret. Pass
 // the exact bytes that will be sent as the request body.
 func Sign(secret string, t time.Time, body []byte) string {
+	return SignAll([]string{secret}, t, body)
+}
+
+// SignAll returns the Header value for body sent at t with one v1 signature
+// per secret, in the order given: "t=<unix>,v1=<sig>,v1=<sig>". While a
+// secret is rotated, pass the new secret first and the old one after it,
+// so a receiver that knows either accepts the request. With a single
+// secret it is Sign.
+func SignAll(secrets []string, t time.Time, body []byte) string {
 	ts := strconv.FormatInt(t.Unix(), 10)
-	return "t=" + ts + ",v1=" + hex.EncodeToString(mac(secret, ts, body))
+	var b strings.Builder
+	b.WriteString("t=" + ts)
+	for _, secret := range secrets {
+		b.WriteString(",v1=")
+		b.WriteString(hex.EncodeToString(mac(secret, ts, body)))
+	}
+	return b.String()
 }
 
 // Verify checks a Header value against the raw request body. It returns nil
@@ -75,8 +100,21 @@ func Verify(secret, header string, body []byte, tolerance time.Duration) error {
 	return verify(secret, header, body, tolerance, time.Now())
 }
 
+// VerifyAny is Verify for a receiver that accepts several secrets, the new
+// and the old one while a secret is rotated: it returns nil when one of the
+// header's v1 signatures matches any of secrets. Every secret must be
+// non-empty, since anyone can compute an HMAC keyed with an empty one: an
+// empty list, or an empty secret in it, is ErrEmptySecret.
+func VerifyAny(secrets []string, header string, body []byte, tolerance time.Duration) error {
+	return verifyAny(secrets, header, body, tolerance, time.Now())
+}
+
 func verify(secret, header string, body []byte, tolerance time.Duration, now time.Time) error {
-	if secret == "" {
+	return verifyAny([]string{secret}, header, body, tolerance, now)
+}
+
+func verifyAny(secrets []string, header string, body []byte, tolerance time.Duration, now time.Time) error {
+	if len(secrets) == 0 || slices.Contains(secrets, "") {
 		return ErrEmptySecret
 	}
 	var ts string
@@ -108,12 +146,16 @@ func verify(secret, header string, body []byte, tolerance time.Duration, now tim
 		return ErrMalformed
 	}
 
-	expected := mac(secret, ts, body)
+	// Every secret is tried against every signature, without stopping at
+	// the first match, so the time taken does not tell which secret the
+	// request was signed with.
 	matched := false
-	for _, sig := range sigs {
-		if hmac.Equal(sig, expected) {
-			matched = true
-			break
+	for _, secret := range secrets {
+		expected := mac(secret, ts, body)
+		for _, sig := range sigs {
+			if hmac.Equal(sig, expected) {
+				matched = true
+			}
 		}
 	}
 	if !matched {
