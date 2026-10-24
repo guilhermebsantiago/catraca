@@ -128,9 +128,9 @@ type Config struct {
 	// OnAttempt, when set, is told about every attempt, for metrics. It
 	// must be safe for concurrent use and return quickly.
 	OnAttempt func(ctx context.Context, a AttemptResult)
-	// TracerProvider, when set, traces each attempt, and each outbox write
-	// as part of the decision's trace. Nil turns tracing off. Requests carry
-	// the attempt's W3C traceparent either way when there is one.
+	// TracerProvider, when set, traces each attempt, whose request then
+	// carries its W3C traceparent, and each outbox write as part of the
+	// decision's trace. Nil turns tracing off.
 	TracerProvider trace.TracerProvider
 }
 
@@ -492,8 +492,8 @@ func (d *Dispatcher) send(ctx context.Context, h Hook, del audit.Delivery) (int,
 	req.Header.Set(signature.Header, signature.Sign(h.Secret, d.now(), del.Payload))
 	req.Header.Set(IdempotencyKeyHeader, del.DecisionID+":"+del.Effect)
 	req.Header.Set(AttemptHeader, strconv.Itoa(del.Attempts))
-	// The attempt's trace, when there is one, so the receiver's own spans
-	// join it. It replaces any traceparent among the hook's headers.
+	// With tracing on, the attempt's trace, so the receiver's own spans
+	// join it; it replaces a traceparent among the hook's headers.
 	traceContext.Inject(ctx, propagation.HeaderCarrier(req.Header))
 
 	resp, err := d.cfg.Client.Do(req)

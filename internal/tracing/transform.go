@@ -1,6 +1,8 @@
 package tracing
 
 import (
+	"math"
+
 	"go.opentelemetry.io/otel/attribute"
 	"go.opentelemetry.io/otel/codes"
 	"go.opentelemetry.io/otel/sdk/instrumentation"
@@ -200,4 +202,6 @@ func array[T any](xs []T, value func(T) attribute.Value) *commonpb.AnyValue_Arra
 
 func unixNano(n int64) uint64 { return uint64(max(0, n)) }
 
-func count(n int) uint32 { return uint32(min(max(0, n), int(^uint32(0)>>1))) }
+// count converts a number of dropped attributes, events or links, which the
+// SDK's limits keep far below the clamp.
+func count(n int) uint32 { return uint32(max(0, min(n, math.MaxInt32))) }
