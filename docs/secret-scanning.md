@@ -133,7 +133,9 @@ seconds), as webhook deliveries are claimed from the outbox: on Postgres
 with `FOR UPDATE SKIP LOCKED`, so instances that share the database never
 work on the same report at once. The outcome of an attempt is recorded only
 if no later claim has replaced it, so a worker whose lease ran out cannot
-overwrite a newer attempt.
+overwrite a newer attempt. A claim gives up after 10 seconds and is tried
+again at the next poll, so a query on a connection the network dropped
+holds the workers up for that long, not until TCP gives up on it.
 
 On shutdown, Catraca stops claiming reports and waits for the attempts in
 flight, within `server.shutdown_timeout`. Reports still pending stay in the
