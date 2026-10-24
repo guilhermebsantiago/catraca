@@ -2,7 +2,7 @@
 
 What a decision costs, measured on one developer machine: the Go benchmarks
 for each piece, then `POST /v1/decide` under load with the memory and the
-Redis store. The Redis numbers come before and after the change that runs
+Redis store, and what happens when Redis saturates, stalls or slows down. The Redis numbers come before and after the change that runs
 each decision's store work as one Lua script (see
 [the Redis store](#the-redis-store)). The caveats at the end say what these
 numbers do not show.
@@ -266,11 +266,13 @@ p50 of 29 ms.
 Past capacity (4000 req/s here) every decision still answers within the
 deadline, but nearly all of them degrade: the round trips that reach Redis
 queue behind each other and miss the deadline too. A smaller pool
-(`?pool_size=8` in the URL) let 19% through instead of none. Shedding load
-before it reaches Redis would take admission control, which Catraca does
-not have yet, so size Redis for the peak. The deadline fix alone, on the old
-pipeline, kept decisions under 12 ms at 1000 req/s (p50 6.7, p99 10.4, 7%
-degraded) but added no capacity.
+(`?pool_size=8` in the URL) let 19% through instead of none; part of that
+is the Windows build of Redis, which slows down with more than 63
+connections (see [overload and outages](#overload-and-outages)). The
+deadline fix alone, on the old pipeline, kept decisions under 12 ms at 1000
+req/s (p50 6.7, p99 10.4, 7% degraded) but added no capacity. Admission
+control now sheds what Redis cannot take in time; the next section has the
+numbers.
 
 ### Memory
 
@@ -287,6 +289,126 @@ No decision was dropped from the SQLite audit queue in any run.
 go run ./bench/load -url http://localhost:8080 -token $CATRACA_API_TOKEN -rps 1000 -duration 20s
 ```
 
+## Overload and outages
+
+What happens when Redis saturates, stalls or slows down: before and after
+[admission control](config.md#admission) and the
+[store breaker](config.md#engine), with their defaults (a 10 ms deadline,
+`max_inflight` 256 with an adaptive limit and a 2 ms wait; the breaker opens
+after 500 ms of failures, at least 20, and probes every 2 s). "Before" is
+commit 7871246, "after" this branch, run one after the other on the same
+Redis, each on an empty database.
+
+**Method.** The load is `bench/load` as above, sends only, with `-timeline`
+and `-metrics` to print each second's latency, degraded share, decision
+limit, breaker state and what was shed. Redis was slowed down with
+`DEBUG SLEEP` (`--enable-debug-command local`). Two things differ from the
+tables above. This machine was shared with other work, so a few seconds of
+some runs show hiccups unrelated to Catraca; each comparison was run more
+than once, and the tables give runs whose hiccups did not fall in the
+interesting seconds. And the Redis URL sets `?pool_size=32`, because the
+Windows build of Redis slows down sharply once more than 63 connections are
+open, which go-redis's default pool (10 per CPU, 120 here) reaches under
+load:
+
+| other connections open | PING p50 | p90 | p99 |
+|---|---|---|---|
+| none | 0 ms | 0.5 ms | 1.0 ms |
+| 60 | 0.5 ms | 0.5 ms | 1.0 ms |
+| 64 | 0.5 ms | 42.6 ms | 46.1 ms |
+| 120 | 0.5 ms | 17.0 ms | 53.1 ms |
+
+With 120 connections idle in the pool after an overload, a lone call to an
+idle Redis missed the 10 ms deadline more often than not, so the breaker's
+probes kept failing: that measured the build's `select` loop (Cygwin's,
+which waits on at most 64 handles at once), not Catraca. Redis on Linux
+uses epoll and has no such limit.
+
+### Load past capacity
+
+Round trip in ms. Degraded is the share of decisions made without signals;
+shed is the part of it admission control answered without the store, the
+rest being decisions that missed the deadline.
+
+| req/s | | p50 | p90 | p99 | max | degraded | shed |
+|---|---|---|---|---|---|---|---|
+| 1000 | before | 2.42 | 2.84 | 3.96 | 26.8 | 0.2% | |
+| | after | 2.31 | 2.78 | 3.38 | 5.17 | 0 | 0 |
+| 2000 | before | 4.53 | 10.9 | 34.7 | 101 | 16.6% | |
+| | after | 3.99 | 5.45 | 12.1 | 131 | 4.7% | 4.6% |
+| 4000 | before | 10.6 | 11.2 | 14.0 | 58.9 | 99.9% | |
+| | after | 3.21 | 5.37 | 7.68 | 12.7 | 45.9% | 45.9% |
+| 1000 after 4000 | before | 2.44 | 3.02 | 5.18 | 14.6 | 0.1% | |
+| | after | 2.29 | 2.62 | 3.06 | 3.95 | 0 | 0 |
+
+At 4000 req/s Redis here serves a little over 2000 decisions a second.
+Before, every decision went to it, the round trips queued behind each
+other, and 99.9% missed the deadline: about 4 decisions a second got their
+signals. After, the adaptive limit settles between 7 and 14 decisions at
+once, those get their signals in a few milliseconds, and the rest are
+answered at once without the store: 2,160 decisions a second with their
+signals, none of the admitted ones missing the deadline, and the breaker
+stays closed. At 2000 req/s, near capacity, shedding 4.6% kept the rest
+from tipping into deadline misses. Back at 1000 req/s, nothing is shed.
+Another 1000 req/s pair had the hiccup in the other run (0.3% degraded
+after, 0 before): at that rate the two are the same. The server held 133 to
+197 goroutines at 4000 req/s before and 74 to 107 after.
+
+```sh
+go run ./bench/load -url http://localhost:8080 -token $CATRACA_API_TOKEN \
+  -metrics http://localhost:8080/metrics -timeline -phases 4000x20s,1000x10s
+```
+
+### Redis stalls for five seconds
+
+`DEBUG SLEEP 5` at 1000 req/s, from about second 10 to second 15 (the two
+runs' seconds are a few tenths apart):
+
+| second | | p50 | p99 | degraded | breaker | decision limit | short-circuited | goroutines |
+|---|---|---|---|---|---|---|---|---|
+| 9 | before | 2.55 | 10.7 | 24% | | | | 76 |
+| | after | 2.37 | 3.30 | 0 | closed | 11 | 0 | 38 |
+| 10 | before | 10.3 | 10.7 | 100% | | | | 82 |
+| | after | 2.39 | 11.8 | 96% | open | 1 | 440 | 67 |
+| 11 to 14 | before | 10.2 | 10.9 | 77 to 100% | | | | 35 to 83 |
+| | after | 0.31 | 2.61 | 100% | open | 1 | 1000 a second | 65 to 71 |
+| 15 | before | 2.54 | 3.31 | 0 | | | | 35 |
+| | after | 0.32 | 1.46 | 100% | open | 1 | 999 | 31 |
+| 16 | before | 2.53 | 2.98 | 0 | | | | 31 |
+| | after | 0.40 | 3.10 | 59% | closed | 10 | 589 | 34 |
+| 17 | after | 2.49 | 3.07 | 0 | closed | 10 | 0 | 35 |
+
+Before, every decision of the stall waited out the 10 ms deadline. After,
+the adaptive limit dropped to 1 within about a tenth of a second, so the
+rest were shed, and the breaker opened 0.55 s in, after 84 calls had
+failed over 507 ms; from then on decisions were answered in a third of a
+millisecond without touching Redis. The probes at 2 and 4 seconds failed
+against the sleeping Redis and the one at 6 succeeded, so the breaker closed
+1.5 s after Redis was back, the cost of probing every 2 s: before recovered
+at once. Either way the decisions of the stall were degraded, as they must
+be with Redis asleep; the difference is how long the platform waited for
+them. The goroutines left during the stall are the round trips that reached
+Redis before the breaker opened, one per pooled connection, waiting for it
+to wake.
+
+### Redis slows down
+
+A Redis that keeps answering, slowly: `DEBUG SLEEP 0.008` four hundred
+times, 2 ms apart, about twelve seconds of a Redis that is asleep most of
+the time, at 1000 req/s. Per second, during the slowdown:
+
+| | p50 | p99 | degraded | shed | breaker |
+|---|---|---|---|---|---|
+| before | 8.1 to 10.2 | 10.8 to 23.4 | 39 to 51% | | |
+| after | 2.64 to 2.69 | 10.6 to 11.1 | 44 to 48% | 23 to 31% | closed |
+
+Shedding adds no capacity, so about as many decisions degraded; what
+changed is that the shed ones were answered at once instead of waiting
+for a Redis that would not answer in time, which brought the median from
+about 9 ms to 2.7 ms. The adaptive limit sat between 3 and 6, and the
+breaker stayed closed, since Redis kept answering: slow is not down. Both
+were back to no degraded decisions the second the slowdown ended.
+
 ## Caveats
 
 - **One machine.** The load generator, Catraca and Redis share six cores,
@@ -296,9 +418,10 @@ go run ./bench/load -url http://localhost:8080 -token $CATRACA_API_TOKEN -rps 10
 - **A Windows Redis build.** The msys2 build from redis-windows is not the
   official Linux Redis: it multiplexes with `select` and spends far more per
   argument and per call than Redis on Linux, which makes the argument count
-  weigh more here. Read absolute numbers as indicative, and the before and
-  after ratios as the result. A three-node cluster on one machine shows the
-  split into calls, not a cluster's capacity.
+  weigh more here, and it slows down past 63 open connections. Read
+  absolute numbers as indicative, and the before and after ratios as the
+  result. A three-node cluster on one machine shows the split into calls,
+  not a cluster's capacity.
 - **Synthetic traffic.** Sends only, one recipient each, from skewed but
   made-up accounts, and every HTTP run starts on an empty database, so most
   counters hold a bucket or two, as in `BenchmarkObserve`.

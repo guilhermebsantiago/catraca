@@ -50,7 +50,9 @@ const MinWindow = time.Second
 type Store interface {
 	// Do runs the operations queued on b, in order, in one round trip to the
 	// backend, and fills their results. When Do returns an error, results may
-	// be unfilled or partially filled and must not be used.
+	// be unfilled or partially filled and must not be used. When ctx is
+	// already done, Do runs nothing and returns ctx's error at once: the
+	// engine skips the store that way while its breaker is open.
 	Do(ctx context.Context, b *Batch) error
 	// Close releases the store's resources.
 	Close() error

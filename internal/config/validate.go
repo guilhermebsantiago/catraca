@@ -84,6 +84,13 @@ func (v *validator) explicit(c *Config) {
 		// 0s is allowed: it turns the drain off.
 		v.add("server.drain_delay", "must not be negative, got %s; 0s turns the drain off", c.Server.DrainDelay)
 	}
+	if v.isSet("server.max_inflight") && c.Server.MaxInflight < 1 {
+		v.add("server.max_inflight", "must be at least 1, got %d", c.Server.MaxInflight)
+	}
+	if c.Server.InflightWait < 0 {
+		// 0s is allowed: a request over the limit is shed at once.
+		v.add("server.inflight_wait", "must not be negative, got %s; 0s sheds at once", c.Server.InflightWait)
+	}
 	v.positive("engine.deadline", c.Engine.Deadline)
 	v.positive("engine.dispatch_timeout", c.Engine.DispatchTimeout)
 	v.positive("engine.max_future_skew", c.Engine.MaxFutureSkew)
@@ -92,6 +99,14 @@ func (v *validator) explicit(c *Config) {
 		// 0s is allowed: it turns deduplication off. Below a second it
 		// would outlast no retry.
 		v.add("engine.dedupe_ttl", "must be at least 1s, or 0s to turn deduplication off, got %s", d)
+	}
+	if v.isSet("engine.breaker.failure_threshold") && c.Engine.Breaker.FailureThreshold < 1 {
+		v.add("engine.breaker.failure_threshold", "must be at least 1, got %d", c.Engine.Breaker.FailureThreshold)
+	}
+	v.positive("engine.breaker.failure_window", c.Engine.Breaker.FailureWindow)
+	v.positive("engine.breaker.cooldown", c.Engine.Breaker.Cooldown)
+	if v.isSet("engine.breaker.probes") && c.Engine.Breaker.Probes < 1 {
+		v.add("engine.breaker.probes", "must be at least 1, got %d", c.Engine.Breaker.Probes)
 	}
 	if v.isSet("gate.min_labeled") && c.Gate.MinLabeled < 1 {
 		v.add("gate.min_labeled", "must be at least 1, got %d", c.Gate.MinLabeled)
@@ -164,6 +179,9 @@ func (v *validator) config(c *Config) {
 
 func (v *validator) server(s Server) {
 	v.address("server.listen", s.Listen, ":8080 or 127.0.0.1:8080")
+	if s.InflightLimit != InflightAdaptive && s.InflightLimit != InflightStatic {
+		v.add("server.inflight_limit", "want adaptive or static, got %q", s.InflightLimit)
+	}
 	if s.AdminAddr == "" {
 		return
 	}

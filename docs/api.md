@@ -78,7 +78,8 @@ ruleset reload adds `details`, one entry per problem. The provider routes
 | 422 | `invalid_ruleset` | a reload found errors; the current ruleset keeps serving |
 | 500 | `internal` | the audit log could not be read; details are in the server log |
 | 503 | `no_ruleset` | no ruleset is loaded: decisions cannot be made |
-| 503 | `unavailable` | the event could not be decided; retry it |
+| 503 | `unavailable` | the event could not be decided; retry it after `Retry-After` |
+| 503 | `overloaded` | too many events are being decided, and this one is a `feedback` or `key_leak` event that a decision without the store would not record ([admission](config.md#admission)); send it again after `Retry-After` |
 | 503 | `audit_unavailable` | the audit database has not opened yet (see [audit](config.md#audit)); decisions are still made, the routes that read or label them answer this until it opens |
 
 **Decisions.** `POST /v1/decide` and `POST /v1/events` answer
@@ -199,7 +200,14 @@ Errors: `400 invalid_event` or `invalid_json` for an event that cannot be
 decided, `503 no_ruleset` while no ruleset is loaded, `503 unavailable` when
 nothing could be observed (retry). When Catraca is unreachable or answers
 `5xx`, the platform should send anyway: a broken anti-abuse service must not
-stop every good sender. A `400` is about the event itself: the same event
+stop every good sender.
+
+Under load Catraca keeps answering this route with decisions. When more
+decisions are in flight than it lets in at once, the excess is decided at
+once without the store, and when Redis keeps failing, its breaker skips it
+for a while: either way the decision is `degraded`, exactly as when Redis
+misses the deadline, and comes back in well under the deadline. See
+[admission](config.md#admission) and [the store breaker](config.md#engine). A `400` is about the event itself: the same event
 gets the same answer, so fix the integration rather than retrying.
 
 ```sh
@@ -309,8 +317,13 @@ curl -s -X POST "$CATRACA/v1/events" -H "Authorization: Bearer $TOKEN" \
 ```
 
 The leak is written to the store before the event is decided, within
-`engine.deadline`. If the store does not take it in time, the answer is
-`503 unavailable`: send the event again until it is accepted.
+`engine.deadline`. If the store does not take it in time, or its
+[breaker](config.md#engine) is open, the answer is `503 unavailable`, and
+when too many events are being decided it is `503 overloaded`: either way,
+send the event again after `Retry-After` until it is accepted. A `feedback`
+event shed for load gets `503 overloaded` too, so that it is counted when
+sent again; other events shed for load are decided without the store
+([admission](config.md#admission)).
 
 ## Decisions and labels
 
@@ -745,7 +758,13 @@ Prometheus metrics in the text format.
 | `catraca_records_dropped_total` | counter | decisions the engine could not hand to the audit log |
 | `catraca_event_times_out_of_bounds_total{bound}` | counter | event times too far from Catraca's clock: `future` ones replaced by the clock's, `past` ones rejected ([limits](#limits)) |
 | `catraca_duplicate_events_total{type}` | counter | events sent again with an `id` that had counted already, which did not count again ([retries](#retries)) |
+| `catraca_store_breaker_state{state}` | gauge | 1 for the state the [store breaker](config.md#engine) is in, `closed`, `open` or `half_open`, and 0 for the others |
+| `catraca_store_breaker_transitions_total{from,to}` | counter | changes of the breaker's state |
+| `catraca_short_circuited_decisions_total` | counter | decisions that skipped the store because the breaker was open |
 | `catraca_http_request_duration_seconds{route,status}` | histogram | HTTP requests, by route pattern (`POST /v1/decide`, `unmatched`) and status |
+| `catraca_admission_inflight{route}` | gauge | decisions on `/v1/decide` and `/v1/events`, and feedback requests, holding an [admission](config.md#admission) slot |
+| `catraca_admission_shed_total{route}` | counter | requests that found no slot in time: decided without the store, or answered `503` with `Retry-After` |
+| `catraca_admission_limit{group}` | gauge | how many slots there are for `decisions` (adaptive unless `server.inflight_limit` is `static`) and for `feedback` |
 | `catraca_audit_recorded_total`, `_dropped_total`, `_failed_total` | counter | audit log writes |
 | `catraca_audit_rejected_total` | counter | decisions the audit database refused one at a time while it wrote the rest of their batch, also counted as failed ([details](audit.md#how-decisions-are-written)) |
 | `catraca_audit_queued` | gauge | decisions waiting to be written |
@@ -767,8 +786,10 @@ Prometheus metrics in the text format.
 | `catraca_build_info{version,goversion}` | gauge | 1, labeled with the build |
 
 plus the standard `go_*` and `process_*` metrics. Worth alerting on:
-`catraca_degraded_decisions_total`, `catraca_audit_dropped_total` and
-`catraca_audit_failed_total` rising, `catraca_audit_retention_errors_total`,
+`catraca_degraded_decisions_total`, `catraca_admission_shed_total`,
+`catraca_audit_dropped_total` and `catraca_audit_failed_total` rising,
+`catraca_audit_retention_errors_total`,
+`catraca_store_breaker_state{state="open"}` at 1,
 `catraca_dependency_up` at 0, `catraca_hooks_dead_total` and
 `catraca_hooks_enqueue_errors_total`, `catraca_hooks_oldest_pending_age_seconds`
 past what an effect may wait,

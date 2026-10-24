@@ -77,6 +77,9 @@ is logged or dumped. `config check` shows URLs without their passwords.
 | `max_body_bytes` | `1048576` | largest JSON body on the `/v1` routes, at least 1024. Feedback and secret scanning routes have their own limits (1 MiB and 10 MiB) |
 | `shutdown_timeout` | `30s` | how long a graceful shutdown may take: finishing requests in flight and accepted leaked-key batches, writing queued decisions. Decisions still queued when it runs out are not written to the audit log ([details](audit.md#how-decisions-are-written)) |
 | `drain_delay` | `5s` | how long the server keeps serving after SIGTERM or SIGINT, reporting not ready on `/readyz`, before the shutdown starts. `0s` turns it off |
+| `max_inflight` | `256` | most decisions in flight at once on `/v1/decide` and `/v1/events` together, and apart, most requests on the feedback routes; see [admission](#admission) |
+| `inflight_wait` | `2ms` | how long a request over the limit waits for a slot before it is shed. `0s` sheds at once |
+| `inflight_limit` | `adaptive` | `adaptive`: the decision limit drops while decisions take half of `engine.deadline` or more and climbs back as they speed up, never above `max_inflight`. `static` keeps it at `max_inflight` |
 
 Catraca serves plain HTTP. Put it behind TLS (a load balancer, an ingress or
 a reverse proxy) when traffic leaves the host or a private network.
@@ -115,6 +118,50 @@ seconds). Give the orchestrator time for both phases: in Kubernetes,
 `terminationGracePeriodSeconds` at least `drain_delay` plus
 `shutdown_timeout` (35 seconds with the defaults; Kubernetes defaults to
 30), or the pod is killed before it has written its queued decisions.
+
+#### Admission
+
+When Redis slows down or saturates, more decisions wait on it at once, and
+past its capacity every one of them waits out `engine.deadline` and is
+degraded anyway. So the server bounds the decisions in flight on
+`/v1/decide` and `/v1/events` together. A request over the limit, its body
+read, waits up to `inflight_wait` for a slot, first come first served, and
+is then shed: decided at once without the store. That is the decision a
+deadline miss gives, `degraded: true`, with each rule's `on_error` applied
+and the keys this server knows leaked still blocked, so the platform acts on
+it as usual; a `5xx` before a send would stop good senders or come back as
+retries that add to the load. Two kinds of event are not decided when shed,
+since a decision without the store would not record them: a `feedback`
+event is answered `503 overloaded` and a `key_leak` too, both with
+`Retry-After`, to be sent again.
+
+With `inflight_limit: adaptive`, the default, the limit starts at
+`max_inflight`, so nothing is shed while decisions are fast. When a
+decision takes half the deadline or more, Redis (or the server) is falling
+behind, and the limit drops by a fifth, at most once per round of decisions
+so that one stall does not collapse it. Half the deadline, not all of it,
+leaves room for the spread of a loaded Redis's latency, so the decisions let
+in rarely miss the deadline. While at least half the slots are busy, each
+decision that finishes in time with its signals raises the limit by about
+one per limit's worth of decisions. Past Redis's capacity, the decisions let
+in keep getting their signals in time and the rest are shed without a round
+trip, where without a limit nearly all of them would wait out the deadline
+and degrade; [benchmarks](benchmark.md#overload-and-outages) has the
+numbers. Each instance finds its own limit, so instances sharing a Redis
+share it out between them. A `static` limit sheds only once `max_inflight`
+decisions are in flight: it bounds memory and goroutines, but the number
+that protects Redis depends on how fast it is and how many instances share
+it.
+
+The feedback routes have `max_inflight` slots of their own, never adaptive,
+so a burst of sends never sheds feedback. Beyond them a request is answered
+`503` with `Retry-After`, which providers retry. The first MiB of a
+feedback body is read before the request takes a slot, so a sender that
+trickles its body holds a connection, not a slot. Secret scanning, labels
+and the read routes are not limited: they are rare, and none waits on Redis
+in the request. `catraca_admission_inflight`, `catraca_admission_shed_total`
+and `catraca_admission_limit` ([metrics](api.md#get-metrics)) show the
+limits at work, and each shed request's access log line has `"shed": true`.
 
 ### auth
 
@@ -275,6 +322,10 @@ them and keeps its one connection.
 | `max_future_skew` | `5s` | how far ahead of Catraca's clock an event's `time` may be. A later time is replaced by the clock's, since an event cannot come from the future and, counted there, would empty the windows it touches until the clock caught up. Keep it well under a minute, the shortest window |
 | `max_event_age` | `168h` | how far behind Catraca's clock an event's `time` may be. An older event is answered `400 invalid_event`, and the feedback endpoints acknowledge it so the provider does not retry; a `key_leak` takes the clock's time instead. The default is the longest counter window, so nothing a counter could still use is refused. A lower value also stops late feedback from counting; a higher one lets an event move an account's first-seen time further back |
 | `dedupe_ttl` | `10m` | how long the `id` of an event that counted is remembered, so that the event sent again meanwhile, a retry after a timeout or a provider's redelivery, does not count twice ([retries](api.md#retries)). `0s` turns it off: every sending counts |
+| `breaker.failure_threshold` | `20` | the fewest store calls in a row that must fail or miss `deadline` for the store breaker to open |
+| `breaker.failure_window` | `500ms` | how long they must keep failing, with none succeeding, for it to open |
+| `breaker.cooldown` | `2s` | how long the breaker stays open, deciding without the store, before it probes the store |
+| `breaker.probes` | `5` | decisions the half-open breaker lets reach the store: when they all succeed it closes, and when one fails it opens for another `cooldown` |
 
 Both bounds apply to every route that brings events in. `catraca replay`
 ignores them, since it decides historical events. See
@@ -298,6 +349,34 @@ later still. An event sent again after the window counts again. Raise
 with `maxmemory-policy volatile-ttl` (see [redis](#store)), the entries are
 among the first keys evicted under memory pressure, which costs retries
 their protection before it costs counters.
+
+**The store breaker.** With Redis down or stalled, every decision would
+still wait out its deadline before degrading, and send another round trip
+to a Redis that is struggling. Once store calls have failed or missed the
+deadline for `breaker.failure_window`, none succeeding, and at least
+`breaker.failure_threshold` of them, the breaker opens: for
+`breaker.cooldown`, decisions skip Redis and are degraded at once, the same
+decision a deadline miss gives, and `key_leak` events answer `503` with
+`Retry-After` at once (the server still blocks the key from memory). Then
+`breaker.probes` decisions go to Redis; when they all succeed the breaker
+closes, and otherwise it opens for another cooldown.
+
+The window is what tells an outage from an overload. An overload makes
+decisions miss the deadline in bursts too, and a count alone would open
+the breaker within milliseconds of one, cutting every decision off from
+Redis for the cooldown; but the [adaptive limit](#admission) brings an
+overload under control within a few rounds of the deadline, and calls
+succeed again, while in an outage none does. During the window an outage
+holds the decisions let in for the deadline at most, and the adaptive limit
+sheds most of the others. The threshold keeps a few failures spread over a
+quiet period from opening it. The cooldown is short because a probe costs a
+few decisions a deadline each, while a degraded second costs detection; it
+is also how long the breaker may keep deciding without Redis after Redis is
+back. The breaker logs each change of state (`store breaker opened`,
+`half-open`, `closed`, with how long it was open) and reports it in
+`catraca_store_breaker_state`, `catraca_store_breaker_transitions_total`
+and `catraca_short_circuited_decisions_total`. The memory store does not
+fail, so its breaker stays closed.
 
 ### gate
 

@@ -97,6 +97,11 @@ queue on the subscription keeps what it gives up on. A redelivered
 notification keeps its `MessageId`, and Catraca names the events of a
 notification `ses:<MessageId>:<n>`, so they count once.
 
+On every feedback endpoint, when more requests are in flight than
+`server.max_inflight`, the server answers `503` with `Retry-After` before it
+looks at the request, so providers send it again later
+([admission](config.md#admission)).
+
 ### Setup with a configuration set (recommended)
 
 Event publishing through a configuration set is the only SES feature that

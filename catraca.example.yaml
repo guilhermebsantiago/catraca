@@ -27,6 +27,15 @@ server:
   # Then, how long a graceful shutdown may take: finishing requests and
   # leaked-key batches and writing queued decisions to the audit log.
   shutdown_timeout: 30s
+  # Decisions in flight at once on /v1/decide and /v1/events (and, apart,
+  # feedback requests). A request over the limit waits up to inflight_wait,
+  # then is shed: decided at once without the store, degraded, or for
+  # feedback and key_leak events, answered 503 with Retry-After. adaptive
+  # lowers the limit while decisions take half of engine.deadline or more;
+  # static keeps it at max_inflight.
+  max_inflight: 256
+  inflight_wait: 2ms
+  inflight_limit: adaptive
 
 auth:
   # Bearer tokens for the /v1 routes (feedback and secret scanning
@@ -93,6 +102,15 @@ engine:
   # again meanwhile (a retry, a provider's redelivery) counts once. Each event
   # with an id costs a store entry for this long; 0s turns it off.
   dedupe_ttl: 10m
+  # When store calls keep failing or missing the deadline for
+  # failure_window, none succeeding, and at least failure_threshold of them,
+  # decide without the store for cooldown, then let probes through to see
+  # whether it is back.
+  breaker:
+    failure_threshold: 20
+    failure_window: 500ms
+    cooldown: 2s
+    probes: 5
 
 gate:
   # A rule may enforce once it has at least min_labeled labeled matches and

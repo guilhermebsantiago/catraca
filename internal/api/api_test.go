@@ -28,6 +28,10 @@ func (f deciderFunc) Decide(ctx context.Context, ev event.Event) (decision.Decis
 	return f(ctx, ev)
 }
 
+func (f deciderFunc) DecideWithoutStore(ctx context.Context, ev event.Event) (decision.Decision, error) {
+	return f(ctx, ev)
+}
+
 type noRules struct{}
 
 func (noRules) Current() *rules.Ruleset { return nil }
