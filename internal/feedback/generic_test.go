@@ -188,9 +188,40 @@ func TestGenericEventRefused(t *testing.T) {
 	}
 }
 
+// TestGenericSecretRotation checks that with previous secrets, a request
+// signed with any configured secret is accepted, whichever the platform
+// signs with while it switches, and one signed with another is not.
+func TestGenericSecretRotation(t *testing.T) {
+	const old, older = "old-feedback-secret", "older-feedback-secret"
+	h, err := NewGenericHandler(GenericConfig{Decider: &recorder{}, Secret: genericSecret, PreviousSecrets: []string{old, older}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	body := []byte(`{"account_id":"a","feedback":{"kind":"delivery"}}`)
+	now := time.Now()
+	for name, tt := range map[string]struct {
+		header string
+		want   int
+	}{
+		"new secret":            {signature.Sign(genericSecret, now, body), http.StatusAccepted},
+		"previous secret":       {signature.Sign(old, now, body), http.StatusAccepted},
+		"second previous":       {signature.Sign(older, now, body), http.StatusAccepted},
+		"new and old together":  {signature.SignAll([]string{genericSecret, old}, now, body), http.StatusAccepted},
+		"a secret never set":    {signature.Sign("other", now, body), http.StatusUnauthorized},
+		"a previous one, stale": {signature.Sign(old, now.Add(-10*time.Minute), body), http.StatusUnauthorized},
+	} {
+		if rec := post(t, h, body, http.Header{signature.Header: {tt.header}}); rec.Code != tt.want {
+			t.Errorf("%s: status %d, want %d", name, rec.Code, tt.want)
+		}
+	}
+}
+
 func TestNewGenericHandlerValidatesConfig(t *testing.T) {
 	if _, err := NewGenericHandler(GenericConfig{Decider: &recorder{}}); err == nil {
 		t.Error("no secret: want an error")
+	}
+	if _, err := NewGenericHandler(GenericConfig{Decider: &recorder{}, Secret: "s", PreviousSecrets: []string{""}}); err == nil {
+		t.Error("an empty previous secret: want an error")
 	}
 	if _, err := NewGenericHandler(GenericConfig{Secret: "s"}); err == nil {
 		t.Error("no decider: want an error")

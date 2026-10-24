@@ -832,6 +832,49 @@ func TestParseRetryAfter(t *testing.T) {
 	}
 }
 
+// TestDeliverDuringRotation checks that a hook with previous secrets signs
+// each request with the new secret and every previous one, so a receiver
+// that knows any of them accepts it, and that a delivery queued before the
+// rotation is signed with the secrets of the attempt.
+func TestDeliverDuringRotation(t *testing.T) {
+	const next, older = "whsec_next_0123456789", "whsec_older_012345678"
+	db := openOutbox(t)
+	rcv := newReceiver(t, http.StatusServiceUnavailable, http.StatusNoContent)
+	before, _ := newTestDispatcher(t, db, Config{Hooks: []Hook{{Name: "revoke_key", URL: rcv.srv.URL, Secret: secret}}})
+	before.Dispatch(context.Background(), sendEvent(), leakDecision("d1"))
+	if n := deliverDue(t, before); n != 1 {
+		t.Fatalf("attempted %d before the rotation, want 1", n)
+	}
+
+	d, clk := newTestDispatcher(t, db, Config{Hooks: []Hook{
+		{Name: "revoke_key", URL: rcv.srv.URL, Secret: next, PreviousSecrets: []string{secret, older}},
+	}})
+	clk.Advance(time.Hour)
+	if n := deliverDue(t, d); n != 1 {
+		t.Fatalf("attempted %d after the rotation, want the retry", n)
+	}
+	if del := deliveries(t, db, "d1")["revoke_key"]; del.Status != audit.DeliveryDelivered {
+		t.Fatalf("delivery %+v, want it delivered", del)
+	}
+	reqs := rcv.got()
+	if len(reqs) != 2 {
+		t.Fatalf("receiver got %d requests, want 2", len(reqs))
+	}
+	if err := signature.Verify(secret, reqs[0].header.Get(signature.Header), reqs[0].body, time.Hour); err != nil {
+		t.Errorf("the attempt before the rotation: %v", err)
+	}
+	req := reqs[1]
+	header := req.header.Get(signature.Header)
+	if want := signature.SignAll([]string{next, secret, older}, clk.Now(), req.body); header != want {
+		t.Errorf("signature header = %q, want %q", header, want)
+	}
+	for _, s := range []string{next, secret, older} {
+		if err := signature.Verify(s, header, req.body, time.Hour); err != nil {
+			t.Errorf("a receiver with %s refuses the request: %v", s, err)
+		}
+	}
+}
+
 func TestNewValidates(t *testing.T) {
 	db := openOutbox(t)
 	ok := Hook{Name: "revoke_key", URL: "https://hooks.example/revoke", Secret: secret}
@@ -847,6 +890,7 @@ func TestNewValidates(t *testing.T) {
 		"negative attempts":    {{Name: "a", URL: ok.URL, Secret: secret, MaxAttempts: -1}},
 		"negative max age":     {{Name: "a", URL: ok.URL, Secret: secret, MaxAge: -time.Hour}},
 		"above the workers":    {{Name: "a", URL: ok.URL, Secret: secret, Concurrency: DefaultWorkers + 1}},
+		"empty previous":       {{Name: "a", URL: ok.URL, Secret: secret, PreviousSecrets: []string{"old-secret-0123456789", ""}}},
 	}
 	for name, hooks := range tests {
 		if _, err := New(db, Config{Hooks: hooks}); err == nil {
