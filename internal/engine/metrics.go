@@ -1,10 +1,12 @@
 package engine
 
 import (
+	"context"
 	"errors"
 	"time"
 
 	"github.com/prometheus/client_golang/prometheus"
+	"go.opentelemetry.io/otel/trace"
 
 	"github.com/guilhermebsantiago/catraca/internal/decision"
 	"github.com/guilhermebsantiago/catraca/internal/event"
@@ -25,7 +27,35 @@ type metrics struct {
 	dropped     prometheus.Counter
 	outOfBounds *prometheus.CounterVec
 	duplicates  *prometheus.CounterVec
+	storeCalls  *prometheus.HistogramVec
+	// storeCall holds the series of storeCalls for each call and result, so
+	// a decision does not look its labels up.
+	storeCall [len(storeOps)][len(storeResults)]prometheus.Observer
 }
+
+// storeOp is a store call a decision makes. storeOps are the values of the
+// call label of catraca_store_call_duration_seconds.
+type storeOp uint8
+
+const (
+	opObserve storeOp = iota
+	opMarkLeaked
+)
+
+var storeOps = [...]string{opObserve: "observe", opMarkLeaked: "mark_leaked"}
+
+// storeResult is how a store call ended. storeResults are the values of the
+// result label of catraca_store_call_duration_seconds.
+type storeResult uint8
+
+const (
+	resultOK storeResult = iota
+	resultError
+	// resultTimeout is a call that missed the deadline.
+	resultTimeout
+)
+
+var storeResults = [...]string{resultOK: "ok", resultError: "error", resultTimeout: "timeout"}
 
 // Values of the bound label of catraca_event_times_out_of_bounds_total.
 const (
@@ -49,7 +79,7 @@ func newMetrics(reg prometheus.Registerer) (*metrics, error) {
 		}, []string{"rule"}),
 		degraded: prometheus.NewCounter(prometheus.CounterOpts{
 			Name: "catraca_degraded_decisions_total",
-			Help: "Decisions made without some signals because the catalog failed or timed out.",
+			Help: "Decisions made without some signals: the store failed or missed the deadline, or was skipped because its breaker was open or admission control shed the decision.",
 		}),
 		latency: prometheus.NewHistogram(prometheus.HistogramOpts{
 			Name:    "catraca_decision_duration_seconds",
@@ -68,6 +98,13 @@ func newMetrics(reg prometheus.Registerer) (*metrics, error) {
 			Name: "catraca_duplicate_events_total",
 			Help: "Events that had counted already under the same id, such as retries, and did not count again, by event type.",
 		}, []string{"type"}),
+		// A store call is bounded by the deadline, so it shares the
+		// decision's buckets.
+		storeCalls: prometheus.NewHistogramVec(prometheus.HistogramOpts{
+			Name:    "catraca_store_call_duration_seconds",
+			Help:    "Time the store took over a call of a decision, by call (observe, mark_leaked) and result (ok, error, or timeout when it missed the deadline). Calls the breaker skipped, and calls whose caller went away first, are not counted.",
+			Buckets: latencyBuckets,
+		}, []string{"call", "result"}),
 	}
 	// Every action starts at zero so dashboards and alerts see the series
 	// before the first block happens.
@@ -79,10 +116,15 @@ func newMetrics(reg prometheus.Registerer) (*metrics, error) {
 	for _, t := range []event.Type{event.Send, event.Feedback, event.Account, event.KeyLeak} {
 		m.duplicates.WithLabelValues(string(t))
 	}
+	for op, call := range storeOps {
+		for res, result := range storeResults {
+			m.storeCall[op][res] = m.storeCalls.WithLabelValues(call, result)
+		}
+	}
 	if reg == nil {
 		return m, nil
 	}
-	for _, c := range []prometheus.Collector{m.decisions, m.matches, m.errors, m.degraded, m.latency, m.dropped, m.outOfBounds, m.duplicates} {
+	for _, c := range []prometheus.Collector{m.decisions, m.matches, m.errors, m.degraded, m.latency, m.dropped, m.outOfBounds, m.duplicates, m.storeCalls} {
 		if err := reg.Register(c); err != nil {
 			var already prometheus.AlreadyRegisteredError
 			if errors.As(err, &already) {
@@ -94,7 +136,9 @@ func newMetrics(reg prometheus.Registerer) (*metrics, error) {
 	return m, nil
 }
 
-func (m *metrics) observe(d decision.Decision, elapsed time.Duration) {
+// observe counts a decision. With tracing on, traced is set, and the span in
+// ctx, when sampled, becomes the exemplar of the decision's latency.
+func (m *metrics) observe(ctx context.Context, traced bool, d decision.Decision, elapsed time.Duration) {
 	m.decisions.WithLabelValues(string(d.Action)).Inc()
 	for _, match := range d.Matches {
 		m.matches.WithLabelValues(match.RuleID, string(match.Mode)).Inc()
@@ -108,5 +152,21 @@ func (m *metrics) observe(d decision.Decision, elapsed time.Duration) {
 	if d.Degraded {
 		m.degraded.Inc()
 	}
+	if traced {
+		observeTraced(m.latency, elapsed.Seconds(), trace.SpanContextFromContext(ctx))
+		return
+	}
 	m.latency.Observe(elapsed.Seconds())
+}
+
+// observeTraced observes v with the trace of sc as its exemplar when sc was
+// sampled, so a slow bucket links to a trace that was kept. Prometheus reads
+// exemplars only in the OpenMetrics format, which the server offers while
+// tracing is on.
+func observeTraced(o prometheus.Observer, v float64, sc trace.SpanContext) {
+	if eo, ok := o.(prometheus.ExemplarObserver); ok && sc.IsSampled() {
+		eo.ObserveWithExemplar(v, prometheus.Labels{"trace_id": sc.TraceID().String()})
+		return
+	}
+	o.Observe(v)
 }

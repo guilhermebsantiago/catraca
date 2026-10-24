@@ -4,6 +4,8 @@ import (
 	"context"
 	"testing"
 
+	sdktrace "go.opentelemetry.io/otel/sdk/trace"
+
 	"github.com/guilhermebsantiago/catraca/internal/event"
 	"github.com/guilhermebsantiago/catraca/internal/rules"
 	"github.com/guilhermebsantiago/catraca/internal/signal"
@@ -71,16 +73,35 @@ func BenchmarkDecideParallel(b *testing.B) {
 	})
 }
 
-func benchEngine(b *testing.B) (*Engine, event.Event) {
+// BenchmarkDecideTraced is BenchmarkDecide with tracing on and every trace
+// sampled, the most tracing can cost, but with no exporter: the cost of the
+// spans themselves, not of sending them.
+func BenchmarkDecideTraced(b *testing.B) {
+	tp := sdktrace.NewTracerProvider(sdktrace.WithSampler(sdktrace.AlwaysSample()))
+	eng, ev := benchEngine(b, func(o *Options) { o.TracerProvider = tp })
+	ctx := context.Background()
+	b.ReportAllocs()
+	for b.Loop() {
+		if _, err := eng.Decide(ctx, ev); err != nil {
+			b.Fatal(err)
+		}
+	}
+}
+
+func benchEngine(b *testing.B, mod ...func(*Options)) (*Engine, event.Event) {
 	b.Helper()
 	rs, err := rules.LoadFile("../../rules/default.yaml")
 	if err != nil {
 		b.Fatal(err)
 	}
-	eng, err := New(Options{
+	opts := Options{
 		Catalog: &fakeCatalog{set: benchSignals()},
 		Rules:   rules.NewHolder(rs),
-	})
+	}
+	for _, m := range mod {
+		m(&opts)
+	}
+	eng, err := New(opts)
 	if err != nil {
 		b.Fatal(err)
 	}

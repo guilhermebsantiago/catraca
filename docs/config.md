@@ -593,6 +593,24 @@ stored encrypted until it resolves. See
 
 Logs go to stderr. Tokens, secrets and message content are never logged.
 
+### tracing
+
+OpenTelemetry tracing, off by default; see [tracing](tracing.md). A field
+left out is read from the standard `OTEL_*` variable named below, and takes
+its default when that is unset too.
+
+| field | default | |
+|---|---|---|
+| `enabled` | `false` | trace requests, decisions, store calls, audit writes, webhooks and leaked-key reports. `OTEL_SDK_DISABLED=true` turns it off again |
+| `endpoint` | `OTEL_EXPORTER_OTLP_TRACES_ENDPOINT`, `OTEL_EXPORTER_OTLP_ENDPOINT`, or `http://localhost:4318` | the OTLP/HTTP collector spans are sent to, an `http` or `https` URL; one without a path gets `/v1/traces` |
+| `sample_ratio` | `OTEL_TRACES_SAMPLER`, or `0.1` | the share of traces kept among those that start at Catraca, from 0 to 1. A request whose `traceparent` says its caller kept the trace is always traced |
+| `service_name` | `OTEL_SERVICE_NAME`, or `catraca` | the `service.name` of the spans |
+
+Headers (such as a backend's API key), TLS, compression and the export
+timeout come from the `OTEL_EXPORTER_OTLP_*` variables
+([list](tracing.md#environment-variables)). With tracing on, the access log
+names each request's trace and `/metrics` serves exemplars.
+
 ## Environment variables the CLI reads
 
 | variable | used by | |
@@ -602,4 +620,5 @@ Logs go to stderr. Tokens, secrets and message content are never logged.
 | `CATRACA_TOKEN` | `label` | the API token, when `--token` is not given |
 | `CATRACA_SERVER` | `label` | default for `--server` (`http://localhost:8080`) |
 
-Any other variable is read only where catraca.yaml references it.
+Any other variable is read only where catraca.yaml references it, except
+the `OTEL_*` variables [tracing](tracing.md#environment-variables) reads.

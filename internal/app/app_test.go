@@ -125,6 +125,8 @@ type options struct {
 	// configure, when set, changes the configuration once it is parsed,
 	// for settings the YAML here leaves at their defaults.
 	configure func(*config.Config)
+	// extra is appended to the configuration: sections of its own.
+	extra string
 }
 
 func newHarness(t *testing.T, opts options) *harness {
@@ -205,6 +207,7 @@ logging:
 		// Tests pass their own listener; the address only turns it on.
 		yaml = strings.Replace(yaml, "server:\n", "server:\n  admin_addr: 127.0.0.1:0\n", 1)
 	}
+	yaml += opts.extra
 	if opts.edit != nil {
 		yaml = opts.edit(yaml)
 	}

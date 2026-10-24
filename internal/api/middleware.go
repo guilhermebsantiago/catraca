@@ -12,6 +12,8 @@ import (
 	"strconv"
 	"strings"
 	"time"
+
+	"go.opentelemetry.io/otel/trace"
 )
 
 // RequestIDHeader carries the request id. A valid id sent by the client is
@@ -29,6 +31,8 @@ type reqInfo struct {
 	client string
 	// attrs are added to the access log line, for example a decision id.
 	attrs []slog.Attr
+	// span is the request's span, nil with tracing off.
+	span trace.Span
 }
 
 type infoKey struct{}
@@ -38,10 +42,17 @@ func infoFrom(ctx context.Context) *reqInfo {
 	return ri
 }
 
-// annotate adds attributes to the request's access log line.
+// annotate adds attributes to the request's access log line, and to its
+// span with tracing on, so they must say what happened, never about whom:
+// an id Catraca made, an action, a verdict, not an account or an address.
 func annotate(r *http.Request, attrs ...slog.Attr) {
 	if ri := infoFrom(r.Context()); ri != nil {
 		ri.attrs = append(ri.attrs, attrs...)
+		if ri.span != nil {
+			for _, a := range attrs {
+				ri.span.SetAttributes(spanAttribute(a))
+			}
+		}
 	}
 }
 
@@ -57,7 +68,11 @@ func (s *Server) serve(w http.ResponseWriter, r *http.Request, mux *http.ServeMu
 	ri := &reqInfo{id: requestID(r.Header.Get(RequestIDHeader)), route: "unmatched"}
 	rw := &responseWriter{ResponseWriter: w}
 	rw.Header().Set(RequestIDHeader, ri.id)
-	r = r.WithContext(context.WithValue(r.Context(), infoKey{}, ri))
+	ctx := r.Context()
+	if s.tracer != nil && !untraced[r.URL.Path] {
+		ctx = s.startSpan(ctx, r, ri)
+	}
+	r = r.WithContext(context.WithValue(ctx, infoKey{}, ri))
 
 	defer func() {
 		v := recover()
@@ -82,7 +97,13 @@ var quietRoutes = map[string]bool{"GET /healthz": true, "GET /readyz": true, "GE
 
 func (s *Server) finish(r *http.Request, rw *responseWriter, ri *reqInfo, elapsed time.Duration) {
 	status := rw.statusCode()
-	s.duration.WithLabelValues(ri.route, strconv.Itoa(status)).Observe(elapsed.Seconds())
+	duration := s.duration.WithLabelValues(ri.route, strconv.Itoa(status))
+	if ri.span != nil {
+		defer endSpan(ri, status)
+		observeTraced(duration, elapsed.Seconds(), ri.span.SpanContext())
+	} else {
+		duration.Observe(elapsed.Seconds())
+	}
 
 	level := slog.LevelInfo
 	if quietRoutes[ri.route] {
@@ -103,6 +124,13 @@ func (s *Server) finish(r *http.Request, rw *responseWriter, ri *reqInfo, elapse
 	}, ri.attrs...)
 	if ri.client != "" {
 		attrs = append(attrs, slog.String("client", ri.client))
+	}
+	if ri.span != nil {
+		// The trace of this line, sampled or not: the platform may have
+		// kept the trace its traceparent named even when Catraca did not.
+		if sc := ri.span.SpanContext(); sc.IsValid() {
+			attrs = append(attrs, slog.String("trace_id", sc.TraceID().String()), slog.String("span_id", sc.SpanID().String()))
+		}
 	}
 	s.log.LogAttrs(r.Context(), level, "request", attrs...)
 }

@@ -39,6 +39,7 @@ import (
 	"github.com/guilhermebsantiago/catraca/internal/secretscan"
 	"github.com/guilhermebsantiago/catraca/internal/signal"
 	"github.com/guilhermebsantiago/catraca/internal/store"
+	"github.com/guilhermebsantiago/catraca/internal/tracing"
 )
 
 // HTTP server timeouts. WriteTimeout leaves room for the secret scanning
@@ -81,6 +82,10 @@ type App struct {
 	scan      *secretscan.Handler
 	api       *api.Server
 	deps      *dependencyMonitor
+	// tracing is nil with tracing off; obs holds the metrics reported
+	// through callbacks.
+	tracing *tracing.Provider
+	obs     *observers
 	// draining is set when Serve's context ends, so /readyz reports not
 	// ready while the server still serves.
 	draining atomic.Bool
@@ -123,6 +128,10 @@ func New(ctx context.Context, cfg *config.Config, opts Options) (_ *App, err err
 		collectors.NewGoCollector(),
 		collectors.NewProcessCollector(collectors.ProcessCollectorOpts{}),
 	)
+	if err := a.startTracing(ctx); err != nil {
+		return nil, err
+	}
+	a.obs = newObservers(cfg, a.registry, a.tracing != nil)
 
 	if a.store, err = openStore(cfg.Store); err != nil {
 		return nil, err
@@ -136,6 +145,8 @@ func New(ctx context.Context, cfg *config.Config, opts Options) (_ *App, err err
 	alog := log.With("component", "audit")
 	auditOpts := cfg.Audit.Options()
 	auditOpts.Logger = alog
+	auditOpts.OnBatchWrite = a.obs.batchWrite
+	auditOpts.TracerProvider = a.tracerProvider()
 	a.audit, err = openAuditLog(ctx, cfg.Audit.DSN.Value(), auditOpts, alog)
 	if err != nil {
 		return nil, fmt.Errorf("open the audit database: %w", err)
@@ -169,6 +180,7 @@ func New(ctx context.Context, cfg *config.Config, opts Options) (_ *App, err err
 		MaxEventAge:     cfg.Engine.MaxEventAge,
 		Registerer:      a.registry,
 		Logger:          log.With("component", "engine"),
+		TracerProvider:  a.tracerProvider(),
 	}
 	if a.hooks != nil {
 		eopts.Dispatcher = a.hooks
@@ -201,6 +213,7 @@ func New(ctx context.Context, cfg *config.Config, opts Options) (_ *App, err err
 			Static:      cfg.Server.InflightLimit == config.InflightStatic,
 			Deadline:    cfg.Engine.Deadline,
 		},
+		TracerProvider: a.tracerProvider(),
 	}
 	for _, t := range cfg.Auth.Tokens {
 		aopts.Tokens = append(aopts.Tokens, api.Token{Name: t.Name, Value: t.Token.Value()})
@@ -248,7 +261,8 @@ func (a *App) startHooks() error {
 	for _, h := range a.cfg.Hooks {
 		hs = append(hs, h.Options())
 	}
-	d, err := hooks.New(a.audit, hooks.Config{Hooks: hs, Workers: a.cfg.Outbox.Workers, Logger: a.log.With("component", "hooks")})
+	d, err := hooks.New(a.audit, hooks.Config{Hooks: hs, Workers: a.cfg.Outbox.Workers, Logger: a.log.With("component", "hooks"),
+		OnAttempt: a.obs.hookAttempt, TracerProvider: a.tracerProvider()})
 	if err != nil {
 		return err
 	}
@@ -352,6 +366,9 @@ func (a *App) secretScanning(opts *api.Options) error {
 		GitHubToken: gh.GitHubToken.Value(),
 		Logger:      a.log.With("component", "secretscan"),
 		OnOutcome:   func(o secretscan.Outcome) { outcomes.WithLabelValues(string(o)).Inc() },
+		OnAttempt:   a.obs.scanAttempt,
+
+		TracerProvider: a.tracerProvider(),
 	}
 	if gh.Resolver.SendRawToken {
 		// The resolver needs the raw token, so it waits in the queue,
@@ -639,6 +656,10 @@ func (a *App) Close(ctx context.Context) error {
 			if err := a.store.Close(); err != nil {
 				errs = append(errs, fmt.Errorf("close the store: %w", err))
 			}
+		}
+		// Last, once nothing makes spans: the spans still batched.
+		if err := a.tracing.Shutdown(ctx); err != nil {
+			errs = append(errs, err)
 		}
 		a.closeErr = errors.Join(errs...)
 	})

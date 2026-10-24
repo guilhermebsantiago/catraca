@@ -199,3 +199,14 @@ logging:
   level: info
   # json or text.
   format: json
+
+# OpenTelemetry tracing over OTLP/HTTP (docs/tracing.md). Off, it costs
+# nothing. Fields left out read the standard OTEL_* variables, such as
+# OTEL_EXPORTER_OTLP_ENDPOINT and OTEL_EXPORTER_OTLP_HEADERS.
+tracing:
+  enabled: false
+  # endpoint: http://otel-collector:4318
+  # The share of traces kept among those that start here; a request whose
+  # traceparent says its caller kept the trace is always traced.
+  # sample_ratio: 0.1
+  # service_name: catraca

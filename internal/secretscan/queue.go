@@ -9,6 +9,7 @@ import (
 	"github.com/guilhermebsantiago/catraca/internal/audit"
 	"github.com/guilhermebsantiago/catraca/internal/decision"
 	"github.com/guilhermebsantiago/catraca/internal/event"
+	"github.com/guilhermebsantiago/catraca/internal/monotime"
 )
 
 // settleTimeout bounds writing the outcome of an attempt.
@@ -70,26 +71,38 @@ func (h *Handler) release() {
 	}
 }
 
-// attempt processes one claimed report: it resolves the token, unless an
-// earlier attempt already did, and decides the key_leak event of a key. A
-// failure is retried with backoff until the report's bounds run out. An
-// attempt that Shutdown aborts records nothing: its report is claimed again
-// when the lease ends, by this process after a restart or by another one.
+// attempt processes one claimed report, measures the attempt and, with
+// tracing on, traces it.
 func (h *Handler) attempt(rep audit.LeakReport) {
+	ctx, span := h.startAttempt(rep)
+	start := monotime.Now()
+	outcome := h.process(ctx, rep)
+	h.attempted(ctx, span, rep, outcome, monotime.Since(start))
+}
+
+// process processes one claimed report: it resolves the token, unless an
+// earlier attempt already did, and decides the key_leak event of a key. A
+// failure is retried with backoff until the report's bounds run out. It
+// returns the attempt's outcome, or "" for an attempt that Shutdown
+// aborted, which records nothing: its report is claimed again when the
+// lease ends, by this process after a restart or by another one. ctx, a
+// child of the handler's base context, carries the attempt's span.
+func (h *Handler) process(ctx context.Context, rep audit.LeakReport) Outcome {
 	key := Key{APIKeyID: rep.APIKeyID, AccountID: rep.AccountID}
 	if key.APIKeyID == "" {
 		t, err := h.token(rep)
 		if err != nil {
 			// Retrying cannot bring the raw token back.
-			h.fail(rep, Key{}, OutcomeResolveFailed, err, true)
-			return
+			return h.fail(rep, Key{}, OutcomeResolveFailed, err, true)
 		}
-		err = h.call(func(ctx context.Context) error {
+		err = h.call(ctx, func(ctx context.Context) error {
+			ctx, end := h.traceResolve(ctx)
 			var err error
 			key, err = h.resolver.Resolve(ctx, t)
 			if err == nil && key.APIKeyID == "" {
-				return errors.New("secretscan: resolver returned a key without an id")
+				err = errors.New("secretscan: resolver returned a key without an id")
 			}
+			end(err)
 			return err
 		})
 		switch {
@@ -100,19 +113,18 @@ func (h *Handler) attempt(rep audit.LeakReport) {
 					At: h.now(), Attempt: rep.Attempts, Outcome: string(OutcomeNotFound)})
 			})
 			h.onOutcome(OutcomeNotFound)
-			return
+			return OutcomeNotFound
 		case err != nil && h.base.Err() != nil:
-			return // aborted by Shutdown
+			return "" // aborted by Shutdown
 		case err != nil:
-			h.fail(rep, Key{}, OutcomeResolveFailed, err, false)
-			return
+			return h.fail(rep, Key{}, OutcomeResolveFailed, err, false)
 		}
 	}
 	// The token is a real key whether or not the decision goes through.
 	h.publish(rep.Key, labelTruePositive)
 
 	var d decision.Decision
-	err := h.call(func(ctx context.Context) error {
+	err := h.call(ctx, func(ctx context.Context) error {
 		var err error
 		d, err = h.decider.Decide(ctx, leakEvent(rep, key))
 		return err
@@ -127,12 +139,13 @@ func (h *Handler) attempt(rep audit.LeakReport) {
 		h.onOutcome(OutcomeLeaked)
 		h.log.Info("secretscan: leaked key reported", "report_id", rep.ID, "api_key_id", key.APIKeyID,
 			"account_id", key.AccountID, "decision_id", d.ID, "type", rep.Type, "source", rep.Source, "url", rep.URL)
+		return OutcomeLeaked
 	case h.base.Err() != nil:
-		return // aborted by Shutdown
+		return "" // aborted by Shutdown
 	default:
 		// An event the engine refuses as invalid, say a key id with
 		// control characters from the resolver, is refused again.
-		h.fail(rep, key, OutcomeDecideFailed, err, errors.Is(err, event.ErrInvalid))
+		return h.fail(rep, key, OutcomeDecideFailed, err, errors.Is(err, event.ErrInvalid))
 	}
 }
 
@@ -154,10 +167,10 @@ func (h *Handler) token(rep audit.LeakReport) (Token, error) {
 	return t, nil
 }
 
-// call runs f under ResolveTimeout. Shutdown cancels it when it gives up
-// waiting.
-func (h *Handler) call(f func(ctx context.Context) error) error {
-	ctx, cancel := context.WithTimeout(h.base, h.resolveTimeout)
+// call runs f under ResolveTimeout. ctx is the attempt's, a child of the
+// handler's base context, so Shutdown cancels it when it gives up waiting.
+func (h *Handler) call(ctx context.Context, f func(ctx context.Context) error) error {
+	ctx, cancel := context.WithTimeout(ctx, h.resolveTimeout)
 	defer cancel()
 	return f(ctx)
 }
@@ -165,8 +178,9 @@ func (h *Handler) call(f func(ctx context.Context) error) error {
 // fail records a failed attempt. The report is retried after a backoff,
 // unless it has used up its attempts or its age, or final says retrying
 // cannot help; then it is dead, with outcome. key is what is known of the
-// token's key, kept so the next attempt does not resolve it again.
-func (h *Handler) fail(rep audit.LeakReport, key Key, outcome Outcome, cause error, final bool) {
+// token's key, kept so the next attempt does not resolve it again. It
+// returns the outcome it recorded: outcome, or OutcomeRetry.
+func (h *Handler) fail(rep audit.LeakReport, key Key, outcome Outcome, cause error, final bool) Outcome {
 	now := h.now()
 	a := audit.LeakAttempt{At: now, Attempt: rep.Attempts, APIKeyID: key.APIKeyID, AccountID: key.AccountID, Error: cause.Error()}
 	log := h.log.With("report_id", rep.ID, "attempt", rep.Attempts, "type", rep.Type, "source", rep.Source, "url", rep.URL,
@@ -179,12 +193,13 @@ func (h *Handler) fail(rep audit.LeakReport, key Key, outcome Outcome, cause err
 		h.onOutcome(outcome)
 		log.Error("secretscan: a leaked-key report is dead and its key may not have been acted on; fix the cause, then requeue it with catraca secretscan retry",
 			"outcome", outcome)
-		return
+		return outcome
 	}
 	next := now.Add(h.backoff(rep.Attempts))
 	h.settle(rep, func(ctx context.Context) error { return h.reports.RetryLeakReport(ctx, rep.ID, a, next) })
 	h.onOutcome(OutcomeRetry)
 	log.Warn("secretscan: a leaked-key report failed, will retry", "next_attempt", next)
+	return OutcomeRetry
 }
 
 // settle records an attempt's outcome. It is not canceled by Shutdown: the

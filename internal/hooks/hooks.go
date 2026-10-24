@@ -29,6 +29,9 @@ import (
 	"sync/atomic"
 	"time"
 
+	"go.opentelemetry.io/otel/propagation"
+	"go.opentelemetry.io/otel/trace"
+
 	"github.com/guilhermebsantiago/catraca/internal/audit"
 	"github.com/guilhermebsantiago/catraca/internal/decision"
 	"github.com/guilhermebsantiago/catraca/internal/event"
@@ -127,6 +130,13 @@ type Config struct {
 	Client *http.Client
 	// Logger receives delivery failures. Default slog.Default().
 	Logger *slog.Logger
+	// OnAttempt, when set, is told about every attempt, for metrics. It
+	// must be safe for concurrent use and return quickly.
+	OnAttempt func(ctx context.Context, a AttemptResult)
+	// TracerProvider, when set, traces each attempt, whose request then
+	// carries its W3C traceparent, and each outbox write as part of the
+	// decision's trace. Nil turns tracing off.
+	TracerProvider trace.TracerProvider
 }
 
 func (c Config) withDefaults() Config {
@@ -168,6 +178,9 @@ func (c Config) withDefaults() Config {
 	}
 	if c.Logger == nil {
 		c.Logger = slog.Default()
+	}
+	if c.OnAttempt == nil {
+		c.OnAttempt = func(context.Context, AttemptResult) {}
 	}
 	return c
 }
@@ -243,6 +256,8 @@ type Dispatcher struct {
 
 	// backlog is what the last refresh found waiting in the outbox.
 	backlog atomic.Pointer[[]audit.Backlog]
+	// tracer is nil with tracing off.
+	tracer trace.Tracer
 
 	enqueued      atomic.Uint64
 	enqueueErrors atomic.Uint64
@@ -270,6 +285,9 @@ func New(outbox audit.Outbox, cfg Config) (*Dispatcher, error) {
 		claimTimeout: claimTimeout,
 		wake:         make(chan struct{}, 1),
 		writes:       make(chan struct{}, cfg.MaxWrites),
+	}
+	if cfg.TracerProvider != nil {
+		d.tracer = cfg.TracerProvider.Tracer(tracerName)
 	}
 	for _, h := range cfg.Hooks {
 		if err := validateHook(h); err != nil {
@@ -401,7 +419,9 @@ func (d *Dispatcher) Dispatch(ctx context.Context, ev event.Event, dec decision.
 func (d *Dispatcher) write(ctx context.Context, ev event.Event, dec decision.Decision, ds []audit.Delivery) {
 	ctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), d.cfg.EnqueueTimeout)
 	defer cancel()
+	ctx, end := d.traceEnqueue(ctx, ds)
 	n, err := d.outbox.Enqueue(ctx, ds)
+	end(err)
 	if err != nil {
 		d.enqueueErrors.Add(uint64(len(ds)))
 		// The log line is the only trace of these effects, so it names
@@ -492,6 +512,9 @@ func (d *Dispatcher) send(ctx context.Context, h Hook, del audit.Delivery) (int,
 	req.Header.Set(signature.Header, signature.SignAll(h.secrets(), d.now(), del.Payload))
 	req.Header.Set(IdempotencyKeyHeader, del.DecisionID+":"+del.Effect)
 	req.Header.Set(AttemptHeader, strconv.Itoa(del.Attempts))
+	// With tracing on, the attempt's trace, so the receiver's own spans
+	// join it; it replaces a traceparent among the hook's headers.
+	traceContext.Inject(ctx, propagation.HeaderCarrier(req.Header))
 
 	resp, err := d.cfg.Client.Do(req)
 	if err != nil {

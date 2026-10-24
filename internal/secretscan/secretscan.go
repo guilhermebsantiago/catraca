@@ -34,6 +34,8 @@ import (
 	"time"
 	"unicode/utf8"
 
+	"go.opentelemetry.io/otel/trace"
+
 	"github.com/guilhermebsantiago/catraca/internal/audit"
 	"github.com/guilhermebsantiago/catraca/internal/decision"
 	"github.com/guilhermebsantiago/catraca/internal/event"
@@ -220,6 +222,13 @@ type Config struct {
 	// OnOutcome, when set, is called once per batch outcome and once per
 	// report outcome, for metrics. It must be safe for concurrent use.
 	OnOutcome func(Outcome)
+	// OnAttempt, when set, is told about every attempt at a report, for
+	// metrics. It must be safe for concurrent use and return quickly.
+	OnAttempt func(ctx context.Context, a AttemptResult)
+	// TracerProvider, when set, traces every attempt at a report: the
+	// resolver's request, which carries its W3C traceparent, and the
+	// decision. Nil turns tracing off.
+	TracerProvider trace.TracerProvider
 
 	// now is the clock, for tests.
 	now func() time.Time
@@ -270,8 +279,11 @@ type Handler struct {
 	maxBody         int64
 	log             *slog.Logger
 	onOutcome       func(Outcome)
+	onAttempt       func(context.Context, AttemptResult)
 	keys            *keyring
 	now             func() time.Time
+	// tracer is nil with tracing off.
+	tracer trace.Tracer
 
 	labels labelHub
 	// wake tells the workers that reports were stored; freed, that a worker
@@ -315,6 +327,10 @@ func New(cfg Config) (*Handler, error) {
 	if onOutcome == nil {
 		onOutcome = func(Outcome) {}
 	}
+	onAttempt := cfg.OnAttempt
+	if onAttempt == nil {
+		onAttempt = func(context.Context, AttemptResult) {}
+	}
 	client := cfg.HTTPClient
 	if client == nil {
 		client = &http.Client{Timeout: 10 * time.Second}
@@ -344,6 +360,7 @@ func New(cfg Config) (*Handler, error) {
 		maxBody:         orDefault(cfg.MaxBodyBytes, defaultMaxBodyBytes),
 		log:             log,
 		onOutcome:       onOutcome,
+		onAttempt:       onAttempt,
 		now:             now,
 		labels:          labelHub{waiting: map[string][]chan labeled{}},
 		wake:            make(chan struct{}, 1),
@@ -351,6 +368,9 @@ func New(cfg Config) (*Handler, error) {
 		stopped:         make(chan struct{}),
 	}
 	h.maxBackoff = max(h.maxBackoff, h.minBackoff)
+	if cfg.TracerProvider != nil {
+		h.tracer = cfg.TracerProvider.Tracer(tracerName)
+	}
 	// The lease outlasts the slowest attempt, a Resolve and a Decide at
 	// their timeout and the write of the outcome, so a report is not
 	// claimed again while its attempt is still running.

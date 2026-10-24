@@ -114,7 +114,11 @@ then counted as failed.
 `RecorderStats` reports decisions recorded, dropped, failed (queued but not
 written: the database was down, the shutdown ran out of time, or the
 database refused them), rejected (the refused ones, also counted as failed)
-and queued; export them as metrics and alert on drops and failures.
+and queued; export them as metrics and alert on drops and failures. The
+server does ([metrics](api.md#get-metrics)), times each attempt at a batch
+(`catraca_audit_write_duration_seconds{result}`: `ok`, `refused` or
+`error`), and holds the log to an [objective](slo.md#audit-completeness):
+99.9% of decisions written.
 
 A decision can be read and labeled as soon as Record returns: when `Get` or
 `Label` does not find a decision and the buffer is not empty, it flushes the

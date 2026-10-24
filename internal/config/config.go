@@ -82,6 +82,7 @@ type Config struct {
 	Feedback       Feedback       `yaml:"feedback"`
 	SecretScanning SecretScanning `yaml:"secret_scanning"`
 	Logging        Logging        `yaml:"logging"`
+	Tracing        Tracing        `yaml:"tracing"`
 
 	// File is the path the configuration was read from, or "" for Parse
 	// without a file name.

@@ -12,6 +12,8 @@ import (
 	"slices"
 	"time"
 
+	"go.opentelemetry.io/otel/propagation"
+
 	"github.com/guilhermebsantiago/catraca/signature"
 )
 
@@ -110,6 +112,8 @@ func (r *HTTPResolver) Resolve(ctx context.Context, t Token) (Key, error) {
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("User-Agent", "catraca-secretscan")
 	req.Header.Set(signature.Header, signature.SignAll(r.secrets, r.now(), body))
+	// The attempt's trace, with tracing on, so the platform's spans join it.
+	traceContext.Inject(ctx, propagation.HeaderCarrier(req.Header))
 
 	resp, err := r.client.Do(req)
 	if err != nil {

@@ -16,6 +16,7 @@ import (
 	"time"
 
 	"github.com/prometheus/client_golang/prometheus"
+	"go.opentelemetry.io/otel/trace"
 
 	"github.com/guilhermebsantiago/catraca/internal/decision"
 	"github.com/guilhermebsantiago/catraca/internal/event"
@@ -128,6 +129,9 @@ type Options struct {
 	// Logger receives store failures, dropped records and event times ahead
 	// of the clock, at most once per second each. Nil discards them.
 	Logger *slog.Logger
+	// TracerProvider, when set, traces each decision and its store calls.
+	// Nil turns tracing off, at no cost to a decision.
+	TracerProvider trace.TracerProvider
 }
 
 // Engine decides events. It is safe for concurrent use.
@@ -150,6 +154,8 @@ type Engine struct {
 	breaker   *breaker
 	records   *recordQueue
 	ids       idSource
+	// tracer is nil with tracing off.
+	tracer trace.Tracer
 
 	observeLog, dropLog, futureLog limiter
 }
@@ -190,6 +196,9 @@ func New(opts Options) (*Engine, error) {
 	if e.log == nil {
 		e.log = slog.New(slog.DiscardHandler)
 	}
+	if opts.TracerProvider != nil {
+		e.tracer = opts.TracerProvider.Tracer(tracerName)
+	}
 	if e.breaker, err = newBreaker(opts.Breaker, e.now, e.log, opts.Registerer); err != nil {
 		return nil, err
 	}
@@ -224,7 +233,7 @@ func New(opts Options) (*Engine, error) {
 // BreakerOptions): while it is open they are skipped, as DecideWithoutStore
 // skips them.
 func (e *Engine) Decide(ctx context.Context, ev event.Event) (decision.Decision, error) {
-	return e.decide(ctx, ev, false)
+	return e.decideInSpan(ctx, ev, false)
 }
 
 // DecideWithoutStore decides ev as Decide does when the store misses the
@@ -234,7 +243,7 @@ func (e *Engine) Decide(ctx context.Context, ev event.Event) (decision.Decision,
 // key in memory. It costs no round trip, so the HTTP API answers with it
 // the decisions it sheds when too many are in flight.
 func (e *Engine) DecideWithoutStore(ctx context.Context, ev event.Event) (decision.Decision, error) {
-	return e.decide(ctx, ev, true)
+	return e.decideInSpan(ctx, ev, true)
 }
 
 func (e *Engine) decide(ctx context.Context, ev event.Event, withoutStore bool) (decision.Decision, error) {
@@ -260,7 +269,7 @@ func (e *Engine) decide(ctx context.Context, ev event.Event, withoutStore bool) 
 	// remembers the key either way, and the error tells the caller to send
 	// the event again.
 	if ev.Type == event.KeyLeak {
-		mctx, call, cancel := e.storeContext(ctx, withoutStore)
+		mctx, call, cancel := e.storeContext(ctx, withoutStore, opMarkLeaked)
 		err := e.catalog.MarkLeaked(mctx, ev.APIKeyID)
 		cancel()
 		e.storeDone(ctx, call, err)
@@ -272,7 +281,7 @@ func (e *Engine) decide(ctx context.Context, ev event.Event, withoutStore bool) 
 		}
 	}
 
-	octx, call, cancel := e.storeContext(ctx, withoutStore)
+	octx, call, cancel := e.storeContext(ctx, withoutStore, opObserve)
 	set, err := e.catalog.Observe(octx, ev)
 	cancel()
 	e.storeDone(ctx, call, err)
@@ -310,7 +319,7 @@ func (e *Engine) decide(ctx context.Context, ev event.Event, withoutStore bool) 
 		elapsed = e.now().Sub(start)
 	}
 	d.LatencyMicros = elapsed.Microseconds()
-	e.metrics.observe(d, elapsed)
+	e.metrics.observe(ctx, e.tracer != nil, d, elapsed)
 	if d.Duplicate {
 		e.metrics.duplicates.WithLabelValues(string(ev.Type)).Inc()
 	}

@@ -36,6 +36,14 @@ go run golang.org/x/vuln/cmd/govulncheck@v1.9.0 ./...
 - Keep one store round trip per decision; the latency budget is part of the
   design. Numbers for performance changes go in
   [docs/benchmark.md](docs/benchmark.md).
+- A new metric goes in the metrics table of [docs/api.md](docs/api.md#get-metrics):
+  a test fails until the table and the registered metrics agree. A change to
+  [`deploy/prometheus/rules.yaml`](deploy/prometheus/rules.yaml) comes with
+  its tests in `rules.test.yaml`
+  (`promtool test rules deploy/prometheus/rules.test.yaml`), and
+  [docs/slo.md](docs/slo.md) says why.
+- A span never carries an account, a key, an address, a token or content:
+  see [docs/tracing.md](docs/tracing.md#no-personal-data).
 - Commits explain why, in the imperative.
 
 ## Fuzzing
@@ -74,6 +82,7 @@ the run.
 - [ci.yml](.github/workflows/ci.yml) runs on every pull request, on `main`
   and weekly: gofmt, `go mod tidy`, vet and staticcheck; govulncheck, after
   checking that CI and the Dockerfile build with the `go.mod` toolchain;
+  `promtool check rules` and `promtool test rules` on the Prometheus rules;
   tests on Linux against real Redis and Postgres, and on Windows and macOS;
   the fault-injection scenarios against Redis and Postgres; every fuzz
   target, one job per package, for 20 seconds each on pull requests and
@@ -96,6 +105,9 @@ the run.
   `go mod edit -toolchain=go1.26.N` with the same version in that pull
   request (CI fails until they match). A new Go minor release moves the
   `go` directive, the toolchain line and the image together, by hand.
+- Nor does it move the Prometheus release whose `promtool` CI runs
+  (`PROMETHEUS_VERSION` in ci.yml): bump it by hand, with the SHA-256 of
+  the `linux-amd64` archive from the release's `sha256sums.txt`.
 
 ## Releasing
 

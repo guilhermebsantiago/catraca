@@ -10,6 +10,7 @@ import (
 
 	"github.com/guilhermebsantiago/catraca/internal/decision"
 	"github.com/guilhermebsantiago/catraca/internal/event"
+	"github.com/guilhermebsantiago/catraca/internal/monotime"
 )
 
 const (
@@ -255,20 +256,25 @@ func (db *DB) writeBatch(rows []row) error {
 	if db.closing.Load() {
 		attempts = 1
 	}
+	bctx, end := db.traceBatch(n)
 	var err error
+	defer func() { end(err) }()
 	for attempt := range attempts {
 		if attempt > 0 && !db.sleep(time.Duration(attempt*attempt)*100*time.Millisecond) {
 			break
 		}
-		ctx, cancel := context.WithTimeout(db.writeCtx, writeTimeout)
+		ctx, cancel := context.WithTimeout(bctx, writeTimeout)
+		start := monotime.Now()
 		err = db.insertRows(ctx, rows)
 		cancel()
+		db.observeWrite(bctx, n, monotime.Since(start), err)
 		if err == nil {
 			db.recorded.Add(uint64(n))
 			return nil
 		}
 		if db.dialect.refused(err) {
-			return db.writeEach(rows)
+			err = db.writeEach(rows)
+			return err
 		}
 	}
 	db.failed.Add(uint64(n))

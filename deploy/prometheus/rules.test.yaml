@@ -1,0 +1,424 @@
+# Unit tests for rules.yaml:
+#
+#   promtool test rules deploy/prometheus/rules.test.yaml
+#
+# Series are per minute: "0+95x120" is a counter that grows by 95 a minute
+# for two hours. Every SLO has a test that burns its budget, and the
+# availability one shows each window doing its part: the fast page stops
+# five minutes after the errors do, while the slow page and the ticket go
+# on. Ratios are checked in thousandths, round(ratio * 1000), so float
+# rounding does not fail a test.
+
+rule_files: [rules.yaml]
+evaluation_interval: 1m
+# The recording rules first, so the alerts read this minute's ratios, as the
+# tests compute them; Prometheus itself runs the groups concurrently, and
+# an alert may read the ratio of the evaluation before.
+group_eval_order:
+  - catraca-slo-errors
+  - catraca-slo-budget
+  - catraca-latency
+  - catraca-slo-alerts
+  - catraca-cause-alerts
+
+tests:
+  # 5% of decisions fail for an hour, then none do.
+  - name: availability burns fast, then slowly
+    interval: 1m
+    input_series:
+      - series: 'catraca_http_request_duration_seconds_count{job="catraca", instance="a", route="POST /v1/decide", status="200"}'
+        values: '0+95x120'
+      - series: 'catraca_http_request_duration_seconds_count{job="catraca", instance="a", route="POST /v1/decide", status="503"}'
+        values: '0+5x60 300+0x60'
+      # Other routes do not count.
+      - series: 'catraca_http_request_duration_seconds_count{job="catraca", instance="a", route="GET /v1/decisions/{id}", status="500"}'
+        values: '0+50x120'
+    promql_expr_test:
+      - expr: round(catraca:slo_errors:ratio_rate1h{slo="decide-availability"} * 1000)
+        eval_time: 60m
+        exp_samples:
+          - labels: '{job="catraca", slo="decide-availability"}'
+            value: 50
+    alert_rule_test:
+      - eval_time: 60m
+        alertname: CatracaErrorBudgetBurn
+        exp_alerts:
+          - exp_labels: {job: catraca, slo: decide-availability, severity: page, long_window: 1h}
+            exp_annotations: &availability
+              summary: "Catraca is failing decisions: more than 5% of POST /v1/decide and /v1/events answered 5xx"
+              description: "The decide-availability error budget (99.9% over 30 days) is burning. Look for 503 no_ruleset (a ruleset that does not load), unavailable (key_leak events the store did not take) and panics in the log."
+              runbook_url: https://github.com/guilhermebsantiago/catraca/blob/main/docs/slo.md#decide-availability
+          - exp_labels: {job: catraca, slo: decide-availability, severity: page, long_window: 6h}
+            exp_annotations: *availability
+          - exp_labels: {job: catraca, slo: decide-availability, severity: ticket, long_window: 3d}
+            exp_annotations: *availability
+      # Twenty minutes after the errors stopped, the last five minutes are
+      # clean, so the fast page is over; the last 30 minutes still burn
+      # faster than 6x.
+      - eval_time: 80m
+        alertname: CatracaErrorBudgetBurn
+        exp_alerts:
+          - exp_labels: {job: catraca, slo: decide-availability, severity: page, long_window: 6h}
+            exp_annotations: &availability_later
+              summary: "Catraca is failing decisions: more than 3.797% of POST /v1/decide and /v1/events answered 5xx"
+              description: "The decide-availability error budget (99.9% over 30 days) is burning. Look for 503 no_ruleset (a ruleset that does not load), unavailable (key_leak events the store did not take) and panics in the log."
+              runbook_url: https://github.com/guilhermebsantiago/catraca/blob/main/docs/slo.md#decide-availability
+          - exp_labels: {job: catraca, slo: decide-availability, severity: ticket, long_window: 3d}
+            exp_annotations: *availability_later
+
+  - name: healthy decisions burn nothing
+    interval: 1m
+    input_series:
+      - series: 'catraca_http_request_duration_seconds_count{job="catraca", instance="a", route="POST /v1/decide", status="200"}'
+        values: '0+100x60'
+      - series: 'catraca_http_request_duration_seconds_bucket{job="catraca", instance="a", route="POST /v1/decide", status="200", le="0.025"}'
+        values: '0+100x60'
+      - series: 'catraca_decisions_total{job="catraca", instance="a", action="allow"}'
+        values: '0+100x60'
+      - series: 'catraca_degraded_decisions_total{job="catraca", instance="a"}'
+        values: '0x60'
+    promql_expr_test:
+      # No 5xx series at all is a ratio of 0, not a missing one.
+      - expr: catraca:slo_errors:ratio_rate5m
+        eval_time: 60m
+        exp_samples:
+          - labels: 'catraca:slo_errors:ratio_rate5m{job="catraca", slo="decide-availability"}'
+            value: 0
+          - labels: 'catraca:slo_errors:ratio_rate5m{job="catraca", slo="decide-latency"}'
+            value: 0
+          - labels: 'catraca:slo_errors:ratio_rate5m{job="catraca", slo="decide-completeness"}'
+            value: 0
+    alert_rule_test:
+      - eval_time: 60m
+        alertname: CatracaErrorBudgetBurn
+        exp_alerts: []
+
+  # Two instances: the ratio is the job's. A 99% objective pages fast past
+  # 14.4% of slow requests.
+  - name: latency burns fast
+    interval: 1m
+    input_series:
+      - series: 'catraca_http_request_duration_seconds_count{job="catraca", instance="a", route="POST /v1/decide", status="200"}'
+        values: '0+100x60'
+      - series: 'catraca_http_request_duration_seconds_bucket{job="catraca", instance="a", route="POST /v1/decide", status="200", le="0.025"}'
+        values: '0+60x60'
+      - series: 'catraca_http_request_duration_seconds_count{job="catraca", instance="b", route="POST /v1/decide", status="200"}'
+        values: '0+100x60'
+      - series: 'catraca_http_request_duration_seconds_bucket{job="catraca", instance="b", route="POST /v1/decide", status="200", le="0.025"}'
+        values: '0+100x60'
+    alert_rule_test:
+      - eval_time: 60m
+        alertname: CatracaErrorBudgetBurn
+        exp_alerts:
+          - exp_labels: {job: catraca, slo: decide-latency, severity: page, long_window: 1h}
+            exp_annotations: &latency
+              summary: "Catraca is slow to decide: 20% of POST /v1/decide took more than 25 ms"
+              description: "The decide-latency error budget (99% within 25 ms over 30 days) is burning. The store is bounded by engine.deadline, so look at CPU, GC and the outbox (engine.dispatch_timeout): job_call:catraca_store_call_duration_seconds:p99_rate5m and job:catraca_decision_duration_seconds:p99_rate5m."
+              runbook_url: https://github.com/guilhermebsantiago/catraca/blob/main/docs/slo.md#decide-latency
+          - exp_labels: {job: catraca, slo: decide-latency, severity: page, long_window: 6h}
+            exp_annotations: *latency
+          - exp_labels: {job: catraca, slo: decide-latency, severity: ticket, long_window: 3d}
+            exp_annotations: *latency
+
+  # 4% degraded: past 6x the 0.5% budget but not 14.4x, so the slow page
+  # and the ticket fire, not the fast page.
+  - name: completeness burns slowly
+    interval: 1m
+    input_series:
+      - series: 'catraca_decisions_total{job="catraca", instance="a", action="allow"}'
+        values: '0+90x60'
+      - series: 'catraca_decisions_total{job="catraca", instance="a", action="block"}'
+        values: '0+10x60'
+      - series: 'catraca_degraded_decisions_total{job="catraca", instance="a"}'
+        values: '0+4x60'
+    alert_rule_test:
+      - eval_time: 60m
+        alertname: CatracaErrorBudgetBurn
+        exp_alerts:
+          - exp_labels: {job: catraca, slo: decide-completeness, severity: page, long_window: 6h}
+            exp_annotations: &completeness
+              summary: "Catraca is deciding without its signals: 4% of decisions are degraded"
+              description: "The decide-completeness error budget (99.5% over 30 days) is burning: detection is down while sends go on. Redis is down (CatracaDependencyDown, CatracaStoreBreakerOpen), slower than engine.deadline, or past its capacity (catraca_admission_shed_total)."
+              runbook_url: https://github.com/guilhermebsantiago/catraca/blob/main/docs/slo.md#decide-completeness
+          - exp_labels: {job: catraca, slo: decide-completeness, severity: ticket, long_window: 3d}
+            exp_annotations: *completeness
+
+  # Uncounted events and shed requests both cost the budget; a bad
+  # signature does not.
+  - name: feedback burns fast
+    interval: 1m
+    input_series:
+      - series: 'catraca_feedback_outcomes_total{job="catraca", instance="a", provider="ses", outcome="decided"}'
+        values: '0+90x60'
+      - series: 'catraca_feedback_outcomes_total{job="catraca", instance="a", provider="ses", outcome="uncounted"}'
+        values: '0+6x60'
+      - series: 'catraca_feedback_outcomes_total{job="catraca", instance="a", provider="ses", outcome="invalid_signature"}'
+        values: '0+500x60'
+      - series: 'catraca_admission_shed_total{job="catraca", instance="a", route="POST /v1/feedback/ses"}'
+        values: '0+4x60'
+      - series: 'catraca_admission_shed_total{job="catraca", instance="a", route="POST /v1/decide"}'
+        values: '0+500x60'
+    alert_rule_test:
+      - eval_time: 60m
+        alertname: CatracaErrorBudgetBurn
+        exp_alerts:
+          - exp_labels: {job: catraca, slo: feedback-acceptance, severity: page, long_window: 1h}
+            exp_annotations: &feedback
+              summary: "Catraca is turning feedback away: 10% of feedback events were not counted"
+              description: "The feedback-acceptance error budget (99.5% over 30 days) is burning. Providers retry, but not forever: bounces and complaints that never count hide abuse. Look at catraca_feedback_outcomes_total (uncounted means the store failed) and catraca_admission_shed_total on the feedback routes."
+              runbook_url: https://github.com/guilhermebsantiago/catraca/blob/main/docs/slo.md#feedback-acceptance
+          - exp_labels: {job: catraca, slo: feedback-acceptance, severity: page, long_window: 6h}
+            exp_annotations: *feedback
+          - exp_labels: {job: catraca, slo: feedback-acceptance, severity: ticket, long_window: 3d}
+            exp_annotations: *feedback
+
+  # A delivery in ten is late or dead for six hours. Prometheus 3 stores the
+  # bucket's le as 60.0.
+  - name: webhooks burn their budget
+    interval: 1m
+    input_series:
+      - series: 'catraca_hooks_delivery_latency_seconds_bucket{job="catraca", instance="a", hook="revoke_key", le="60.0"}'
+        values: '0+8x360'
+      - series: 'catraca_hooks_delivery_latency_seconds_count{job="catraca", instance="a", hook="revoke_key"}'
+        values: '0+9x360'
+      - series: 'catraca_hooks_dead_total{job="catraca", instance="a"}'
+        values: '0+1x360'
+    promql_expr_test:
+      - expr: round(catraca:slo_errors:ratio_rate6h{slo="webhook-freshness"} * 1000)
+        eval_time: 360m
+        exp_samples:
+          - labels: '{job="catraca", slo="webhook-freshness"}'
+            value: 200
+    alert_rule_test:
+      - eval_time: 360m
+        alertname: CatracaErrorBudgetBurn
+        exp_alerts:
+          - exp_labels: {job: catraca, slo: webhook-freshness, severity: ticket, long_window: 3d}
+            exp_annotations:
+              summary: "Catraca's effects are late: 20% of webhook deliveries took more than a minute or were given up"
+              description: "The webhook-freshness error budget (99% within 60 s over 30 days) is burning. Look at catraca_hooks_attempts_total by hook and outcome, and at the receivers' status codes in the log."
+              runbook_url: https://github.com/guilhermebsantiago/catraca/blob/main/docs/slo.md#webhook-freshness
+      # The dead deliveries open a ticket of their own.
+      - eval_time: 360m
+        alertname: CatracaHooksDeadDeliveries
+        exp_alerts:
+          - exp_labels: {job: catraca, severity: ticket}
+            exp_annotations:
+              summary: "Effect webhook deliveries were given up"
+              description: "Their effects were not carried out. Fix the receiver, then requeue them with catraca outbox retry."
+              runbook_url: https://github.com/guilhermebsantiago/catraca/blob/main/docs/slo.md#cause-alerts
+
+  - name: audit records are lost
+    interval: 1m
+    input_series:
+      - series: 'catraca_audit_recorded_total{job="catraca", instance="a"}'
+        values: '0+96x60'
+      - series: 'catraca_audit_dropped_total{job="catraca", instance="a"}'
+        values: '0+2x60'
+      - series: 'catraca_audit_failed_total{job="catraca", instance="a"}'
+        values: '0+1x60'
+      - series: 'catraca_records_dropped_total{job="catraca", instance="a"}'
+        values: '0+1x60'
+    alert_rule_test:
+      - eval_time: 60m
+        alertname: CatracaErrorBudgetBurn
+        exp_alerts:
+          - exp_labels: {job: catraca, slo: audit-completeness, severity: page, long_window: 1h}
+            exp_annotations: &audit
+              summary: "Catraca is losing audit records: 4% of decisions were not written"
+              description: "The audit-completeness error budget (99.9% over 30 days) is burning. Decisions go on, but they cannot be read, labeled or counted by the precision gate. Look at catraca_dependency_up{dependency=\"audit\"}, catraca_audit_write_duration_seconds and catraca_audit_queued."
+              runbook_url: https://github.com/guilhermebsantiago/catraca/blob/main/docs/slo.md#audit-completeness
+          - exp_labels: {job: catraca, slo: audit-completeness, severity: page, long_window: 6h}
+            exp_annotations: *audit
+          - exp_labels: {job: catraca, slo: audit-completeness, severity: ticket, long_window: 3d}
+            exp_annotations: *audit
+      - eval_time: 60m
+        alertname: CatracaAuditDecisionsLost
+        exp_alerts:
+          - exp_labels: {job: catraca, severity: ticket}
+            exp_annotations:
+              summary: "Decisions were left out of the audit log"
+              description: "Dropped (the queue or the buffer was full) or failed (the database was down or refused them). The log says which, with the count."
+              runbook_url: https://github.com/guilhermebsantiago/catraca/blob/main/docs/slo.md#audit-completeness
+
+  # 1 error in 2,000 is half the 99.9% budget.
+  - name: error budget left
+    interval: 1m
+    input_series:
+      - series: 'catraca_http_request_duration_seconds_count{job="catraca", instance="a", route="POST /v1/events", status="202"}'
+        values: '0+1999x60'
+      - series: 'catraca_http_request_duration_seconds_count{job="catraca", instance="a", route="POST /v1/events", status="503"}'
+        values: '0+1x60'
+    promql_expr_test:
+      - expr: round(catraca:slo_error_budget_remaining:ratio30d{slo="decide-availability"} * 1000)
+        eval_time: 60m
+        exp_samples:
+          - labels: '{job="catraca", slo="decide-availability"}'
+            value: 500
+      - expr: catraca:slo_objective:ratio{slo="decide-availability"}
+        eval_time: 60m
+        exp_samples:
+          - labels: 'catraca:slo_objective:ratio{slo="decide-availability"}'
+            value: 0.999
+
+  - name: leaked keys wait
+    interval: 1m
+    input_series:
+      - series: 'catraca_secret_scanning_reports{job="catraca", instance="a", status="dead"}'
+        values: '0 0 0 1x20'
+      - series: 'catraca_secret_scanning_reports{job="catraca", instance="b", status="dead"}'
+        values: '0 0 0 1x20'
+      - series: 'catraca_secret_scanning_oldest_pending_seconds{job="catraca", instance="a"}'
+        values: '0+60x20'
+      - series: 'catraca_secret_scanning_report_latency_seconds_bucket{job="catraca", instance="a", outcome="leaked", le="300"}'
+        values: '0 1x20'
+      - series: 'catraca_secret_scanning_report_latency_seconds_count{job="catraca", instance="a", outcome="leaked"}'
+        values: '0 2x20'
+      - series: 'catraca_secret_scanning_report_latency_seconds_count{job="catraca", instance="a", outcome="resolve_failed"}'
+        values: '0 0 0 1x20'
+    promql_expr_test:
+      # Of three reports, one was done in time.
+      - expr: round(catraca:slo_errors:ratio_rate30d{slo="leak-processing"} * 1000)
+        eval_time: 15m
+        exp_samples:
+          - labels: '{job="catraca", slo="leak-processing"}'
+            value: 667
+    alert_rule_test:
+      - eval_time: 5m
+        alertname: CatracaLeakReportsDead
+        exp_alerts:
+          - exp_labels: {job: catraca, severity: page}
+            exp_annotations:
+              summary: "1 leaked-key reports were given up: their keys may still work"
+              description: "Fix the resolver or the store, then requeue them with catraca secretscan retry --dead."
+              runbook_url: https://github.com/guilhermebsantiago/catraca/blob/main/docs/slo.md#leak-processing
+      # Past 600s from minute 11, for 2 minutes.
+      - eval_time: 12m
+        alertname: CatracaLeakReportsStale
+        exp_alerts: []
+      - eval_time: 15m
+        alertname: CatracaLeakReportsStale
+        exp_alerts:
+          - exp_labels: {job: catraca, severity: page}
+            exp_annotations:
+              summary: "A leaked-key report has waited 15m 0s"
+              description: "Leaked keys are not being revoked. The resolver or the store keeps failing: see the retry outcome of catraca_secret_scanning_outcomes_total and the log."
+              runbook_url: https://github.com/guilhermebsantiago/catraca/blob/main/docs/slo.md#leak-processing
+
+  - name: causes
+    interval: 1m
+    input_series:
+      # The breaker opens at minute 2 and cycles through half-open: closed
+      # stays 0.
+      - series: 'catraca_store_breaker_state{job="catraca", instance="a", state="closed"}'
+        values: '1 1 0x10'
+      # One instance of two cannot reach Redis.
+      - series: 'catraca_dependency_up{job="catraca", instance="a", dependency="store"}'
+        values: '1 0x10'
+      - series: 'catraca_dependency_up{job="catraca", instance="b", dependency="store"}'
+        values: '1x11'
+      - series: 'catraca_dependency_up{job="catraca", instance="a", dependency="audit"}'
+        values: '1x11'
+      # Every instance reports the same backlog.
+      - series: 'catraca_hooks_oldest_pending_age_seconds{job="catraca", instance="a", hook="revoke_key"}'
+        values: '0+60x20'
+      - series: 'catraca_hooks_oldest_pending_age_seconds{job="catraca", instance="b", hook="revoke_key"}'
+        values: '0+60x20'
+      - series: 'catraca_hooks_oldest_pending_age_seconds{job="catraca", instance="a", hook="notify"}'
+        values: '0x20'
+      - series: 'catraca_hooks_enqueue_errors_total{job="catraca", instance="a"}'
+        values: '0 0 0 2x10'
+      - series: 'catraca_ruleset_loads_total{job="catraca", instance="a", result="error"}'
+        values: '0 0 0 1x10'
+      - series: 'catraca_ruleset_loads_total{job="catraca", instance="a", result="ok"}'
+        values: '1x12'
+      - series: 'catraca_audit_retention_errors_total{job="catraca", instance="a"}'
+        values: '0 0 0 1x10'
+      - series: 'catraca_build_info{job="catraca", instance="a", version="v0.1.0", goversion="go1.26.10"}'
+        values: '1x20'
+      - series: 'catraca_build_info{job="catraca", instance="b", version="v0.1.0", goversion="go1.26.10"}'
+        values: '1x20'
+      - series: 'catraca_ruleset_info{job="catraca", instance="b", version="3f2967e0"}'
+        values: '1x20'
+      - series: 'catraca_ruleset_gate_failures{job="catraca", instance="a", status="insufficient_labels"}'
+        values: '0 0 2x18'
+      - series: 'catraca_ruleset_gate_failures{job="catraca", instance="a", status="below_precision"}'
+        values: '0x20'
+      - series: 'catraca_ruleset_gate_failures{job="catraca", instance="b", status="insufficient_labels"}'
+        values: '0x20'
+    alert_rule_test:
+      - eval_time: 2m
+        alertname: CatracaStoreBreakerOpen
+        exp_alerts: []
+      - eval_time: 4m
+        alertname: CatracaStoreBreakerOpen
+        exp_alerts:
+          - exp_labels: {job: catraca, instance: a, state: closed, severity: ticket}
+            exp_annotations:
+              summary: "The store breaker of a has been open for a minute: it decides without Redis"
+              description: "Store calls kept failing or missing engine.deadline, so decisions skip the store and are degraded (rules follow on_error; known leaked keys stay blocked). It closes by itself once probes succeed."
+              runbook_url: https://github.com/guilhermebsantiago/catraca/blob/main/docs/slo.md#cause-alerts
+      - eval_time: 5m
+        alertname: CatracaDependencyDown
+        exp_alerts:
+          - exp_labels: {job: catraca, dependency: store, severity: ticket}
+            exp_annotations:
+              summary: "Catraca cannot reach its store for 2 minutes"
+              description: "store is Redis: decisions are degraded. audit is the audit database: decisions are not written, reads and labels fail. The log says why, once when it went down."
+              runbook_url: https://github.com/guilhermebsantiago/catraca/blob/main/docs/slo.md#cause-alerts
+      # Past 600s from minute 11, for 5 minutes.
+      - eval_time: 15m
+        alertname: CatracaHooksBacklogStale
+        exp_alerts: []
+      - eval_time: 17m
+        alertname: CatracaHooksBacklogStale
+        exp_alerts:
+          - exp_labels: {job: catraca, hook: revoke_key, severity: page}
+            exp_annotations:
+              summary: "The oldest revoke_key delivery has waited 17m 0s"
+              description: "An effect such as revoking a key is late. The receiver is failing (catraca_hooks_attempts_total{outcome=\"retry\"}) or the workers cannot keep up (catraca_hooks_pending_due). catraca outbox list shows the deliveries."
+              runbook_url: https://github.com/guilhermebsantiago/catraca/blob/main/docs/slo.md#cause-alerts
+      - eval_time: 5m
+        alertname: CatracaHooksEffectsLost
+        exp_alerts:
+          - exp_labels: {job: catraca, severity: page}
+            exp_annotations:
+              summary: "Effects could not be written to the outbox and are lost"
+              description: "Nothing will retry them. The log names each one (effects lost); carry them out by hand. The audit database is failing or too slow."
+              runbook_url: https://github.com/guilhermebsantiago/catraca/blob/main/docs/slo.md#cause-alerts
+      - eval_time: 5m
+        alertname: CatracaRulesetLoadFailed
+        exp_alerts:
+          - exp_labels: {job: catraca, instance: a, severity: ticket}
+            exp_annotations:
+              summary: "A ruleset failed to load on a; it still decides with the previous one"
+              runbook_url: https://github.com/guilhermebsantiago/catraca/blob/main/docs/rules.md
+      - eval_time: 5m
+        alertname: CatracaAuditRetentionFailing
+        exp_alerts:
+          - exp_labels: {job: catraca, severity: ticket}
+            exp_annotations:
+              summary: "Audit retention runs are failing; the audit database keeps growing"
+              runbook_url: https://github.com/guilhermebsantiago/catraca/blob/main/docs/audit.md#retention
+      - eval_time: 4m
+        alertname: CatracaNoRuleset
+        exp_alerts: []
+      - eval_time: 6m
+        alertname: CatracaNoRuleset
+        exp_alerts:
+          - exp_labels: {job: catraca, instance: a, version: v0.1.0, goversion: go1.26.10, severity: ticket}
+            exp_annotations:
+              summary: "a has had no ruleset for 5 minutes"
+              description: "Fix the ruleset file, then POST /v1/rules/reload or send SIGHUP."
+              runbook_url: https://github.com/guilhermebsantiago/catraca/blob/main/docs/slo.md#cause-alerts
+      - eval_time: 11m
+        alertname: CatracaRulesHeldByGate
+        exp_alerts: []
+      - eval_time: 13m
+        alertname: CatracaRulesHeldByGate
+        exp_alerts:
+          - exp_labels: {job: catraca, instance: a, severity: ticket}
+            exp_annotations:
+              summary: "Rules newly enforced on a have not passed the precision gate"
+              description: "/readyz?verbose lists them and why. Label their matches until they pass, or give them an override, then reload."
+              runbook_url: https://github.com/guilhermebsantiago/catraca/blob/main/docs/config.md#gate

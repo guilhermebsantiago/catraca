@@ -37,6 +37,7 @@ internal/feedback    SES (via SNS, signature verified), useSend, generic
 internal/secretscan  GitHub secret scanning partner endpoint and its report workers
 internal/api         HTTP server, auth, metrics
 internal/config      catraca.yaml
+internal/tracing     OpenTelemetry setup: sampler, OTLP/HTTP exporter (optional)
 internal/app         Wiring: build everything from a config, serve, shut down in order
 signature            Catraca-Signature: sign and verify (public, for receivers)
 ```
@@ -48,7 +49,9 @@ Dependency direction: `event` and `decision` import nothing internal.
 `secretscan` produce events and call a `Decider` interface they define
 (`Decide(ctx, event.Event) (decision.Decision, error)`). `hooks` and
 `secretscan` keep their work in durable queues that `audit` defines and
-implements (`Outbox`, `LeakReports`). `app` wires
+implements (`Outbox`, `LeakReports`). The packages that make spans take an
+OpenTelemetry `TracerProvider`, and only `tracing`, which `config` and
+`app` import, needs the SDK. `app` wires
 everything together behind `api`, and `cmd` runs `app` and the offline
 tools. Only `app` and `cmd` import `api`, only `cmd` imports `app`, and
 nothing imports `cmd`. `signature` is the one public
@@ -220,7 +223,10 @@ and the expected matches, so a rule change comes with a test like code does.
    deadline by default). A slow outbox delays the effects, whose write
    goes on in the background, not the decision.
 7. Metrics: decisions by action, matches by rule and mode, errors by rule,
-   degraded decisions, latency histogram, the breaker's state.
+   degraded decisions, latency histogram, the store calls' latency by
+   result, the breaker's state. With [tracing](tracing.md) on, the
+   decision and its store calls are spans, carrying what was decided,
+   never about whom.
 
 `DecideWithoutStore` makes the decision of step 2 without calling the
 store at all, for the HTTP layer to shed load with.
