@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/prometheus/client_golang/prometheus"
+	sdktrace "go.opentelemetry.io/otel/sdk/trace"
 
 	"github.com/guilhermebsantiago/catraca/internal/decision"
 	"github.com/guilhermebsantiago/catraca/internal/event"
@@ -30,6 +31,19 @@ func BenchmarkServeDecide(b *testing.B) {
 	b.ReportAllocs()
 	for b.Loop() {
 		benchServe(b, s)
+	}
+}
+
+// BenchmarkServeDecideTraced is BenchmarkServeDecide with tracing on, for a
+// request whose traceparent says the platform sampled it, without an
+// exporter: what the server span, the trace in the access log and the
+// exemplar cost.
+func BenchmarkServeDecideTraced(b *testing.B) {
+	tp := sdktrace.NewTracerProvider()
+	s := benchServer(b, func(o *Options) { o.TracerProvider = tp })
+	b.ReportAllocs()
+	for b.Loop() {
+		benchServe(b, s, "traceparent", "00-4bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7-01")
 	}
 }
 
@@ -72,10 +86,14 @@ func benchServer(b *testing.B, mod ...func(*Options)) *Server {
 	return s
 }
 
-func benchServe(b *testing.B, s http.Handler) {
+// benchServe posts benchBody to s, with headers, a list of names and values.
+func benchServe(b *testing.B, s http.Handler, headers ...string) {
 	req := httptest.NewRequest(http.MethodPost, "/v1/decide", strings.NewReader(benchBody))
 	req.Header.Set("Authorization", "Bearer "+testToken)
 	req.Header.Set("Content-Type", "application/json")
+	for i := 0; i+1 < len(headers); i += 2 {
+		req.Header.Set(headers[i], headers[i+1])
+	}
 	rec := httptest.NewRecorder()
 	s.ServeHTTP(rec, req)
 	if rec.Code != http.StatusOK {
