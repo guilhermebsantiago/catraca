@@ -123,6 +123,10 @@ type Token struct {
 	// logged.
 	Name  string `yaml:"name"`
 	Token Secret `yaml:"token"`
+	// PreviousTokens are tokens of the same client being rotated out. They
+	// are accepted like Token, under the same name, so the client can move
+	// to Token whenever it is ready.
+	PreviousTokens []Secret `yaml:"previous_tokens"`
 }
 
 // Rules configures the ruleset.
@@ -265,6 +269,9 @@ type Hook struct {
 	URL string `yaml:"url"`
 	// Secret keys the Catraca-Signature header.
 	Secret Secret `yaml:"secret"`
+	// PreviousSecrets are secrets being rotated out: each request is also
+	// signed with them, so the receiver accepts it before it switches.
+	PreviousSecrets []Secret `yaml:"previous_secrets"`
 	// Timeout bounds one attempt. Default 10s.
 	Timeout time.Duration `yaml:"timeout"`
 	// Headers are added to every request, for example Authorization.
@@ -287,14 +294,15 @@ func (h Hook) Options() hooks.Hook {
 		headers[k] = v.Value()
 	}
 	return hooks.Hook{
-		Name:        h.Name,
-		URL:         h.URL,
-		Secret:      h.Secret.Value(),
-		Timeout:     h.Timeout,
-		Headers:     headers,
-		Concurrency: h.Concurrency,
-		MaxAttempts: h.MaxAttempts,
-		MaxAge:      h.MaxAge,
+		Name:            h.Name,
+		URL:             h.URL,
+		Secret:          h.Secret.Value(),
+		PreviousSecrets: Values(h.PreviousSecrets),
+		Timeout:         h.Timeout,
+		Headers:         headers,
+		Concurrency:     h.Concurrency,
+		MaxAttempts:     h.MaxAttempts,
+		MaxAge:          h.MaxAge,
 	}
 }
 
@@ -328,6 +336,9 @@ type SES struct {
 type UseSend struct {
 	// Secret is the webhook signing secret shown by useSend. Required.
 	Secret Secret `yaml:"secret"`
+	// PreviousSecrets are secrets the webhook had before; calls signed with
+	// them are still accepted while its secret changes.
+	PreviousSecrets []Secret `yaml:"previous_secrets"`
 	// AccountMetadataKey reads the account id from the email's metadata
 	// instead of the useSend team id.
 	AccountMetadataKey string `yaml:"account_metadata_key"`
@@ -337,6 +348,9 @@ type UseSend struct {
 type Generic struct {
 	// Secret is the shared secret requests are signed with. Required.
 	Secret Secret `yaml:"secret"`
+	// PreviousSecrets are secrets being rotated out; requests signed with
+	// them are still accepted.
+	PreviousSecrets []Secret `yaml:"previous_secrets"`
 }
 
 // SecretScanning configures leaked key reports.
@@ -371,6 +385,9 @@ type GitHub struct {
 type Resolver struct {
 	URL    string `yaml:"url"`
 	Secret Secret `yaml:"secret"`
+	// PreviousSecrets are secrets being rotated out: requests are also
+	// signed with them, and raw tokens sealed with them still open.
+	PreviousSecrets []Secret `yaml:"previous_secrets"`
 	// SendRawToken adds the raw token to resolver requests, for platforms
 	// that cannot look keys up by hash. It requires an https URL.
 	SendRawToken bool `yaml:"send_raw_token"`

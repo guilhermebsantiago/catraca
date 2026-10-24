@@ -117,6 +117,8 @@ type options struct {
 	admin bool
 	// resolverURL replaces the fake resolver of secret scanning.
 	resolverURL string
+	// edit, when set, changes the configuration before it is parsed.
+	edit func(yaml string) string
 }
 
 func newHarness(t *testing.T, opts options) *harness {
@@ -191,6 +193,9 @@ logging:
 	if opts.admin {
 		// Tests pass their own listener; the address only turns it on.
 		yaml = strings.Replace(yaml, "server:\n", "server:\n  admin_addr: 127.0.0.1:0\n", 1)
+	}
+	if opts.edit != nil {
+		yaml = opts.edit(yaml)
 	}
 	cfg, err := config.Parse([]byte(yaml), "", func(string) (string, bool) { return "", false })
 	if err != nil {

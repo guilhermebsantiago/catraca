@@ -305,6 +305,71 @@ logging:
 	}
 }
 
+// TestPreviousSecrets checks the secrets being rotated out: read next to
+// each secret and handed to the packages after it.
+func TestPreviousSecrets(t *testing.T) {
+	const old, older = "old_0123456789abcdef0123456789abcdef", "older_0123456789abcdef0123456789abcd"
+	cfg := mustParse(t, `
+auth:
+  tokens:
+    - name: platform
+      token: `+testToken+`
+      previous_tokens: ["${OLD_TOKEN}"]
+hooks:
+  - name: revoke_key
+    url: https://platform.example/hooks/revoke
+    secret: `+testSecret+`
+    previous_secrets: [`+old+`, `+older+`]
+feedback:
+  usesend:
+    secret: whsec_new
+    previous_secrets: [whsec_old]
+  generic:
+    secret: `+testSecret+`
+    previous_secrets: [`+old+`]
+secret_scanning:
+  github:
+    enabled: true
+    resolver:
+      url: https://platform.example/resolve
+      secret: `+testSecret+`
+      previous_secrets: [`+old+`]
+`, map[string]string{"OLD_TOKEN": testToken + "-old"})
+	if got := Values(cfg.Auth.Tokens[0].PreviousTokens); !reflect.DeepEqual(got, []string{testToken + "-old"}) {
+		t.Errorf("previous_tokens = %q", got)
+	}
+	if h := cfg.Hooks[0].Options(); h.Secret != testSecret || !reflect.DeepEqual(h.PreviousSecrets, []string{old, older}) {
+		t.Errorf("hooks[0].Options() = %#v, want the secret, then the previous ones in order", h)
+	}
+	if got := Values(cfg.Feedback.UseSend.PreviousSecrets); !reflect.DeepEqual(got, []string{"whsec_old"}) {
+		t.Errorf("usesend previous_secrets = %q", got)
+	}
+	if got := Values(cfg.Feedback.Generic.PreviousSecrets); !reflect.DeepEqual(got, []string{old}) {
+		t.Errorf("generic previous_secrets = %q", got)
+	}
+	if got := Values(cfg.SecretScanning.GitHub.Resolver.PreviousSecrets); !reflect.DeepEqual(got, []string{old}) {
+		t.Errorf("resolver previous_secrets = %q", got)
+	}
+	// Left out, nothing is being rotated.
+	if h := mustParse(t, minimal+"hooks: [{name: a, url: 'https://x', secret: "+testSecret+"}]\n", nil).Hooks[0].Options(); h.PreviousSecrets != nil {
+		t.Errorf("previous secrets without any configured: %q", h.PreviousSecrets)
+	}
+
+	var logged bytes.Buffer
+	slog.New(slog.NewJSONHandler(&logged, nil)).Info("config", "config", cfg)
+	js, err := json.Marshal(cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, out := range []string{fmt.Sprintf("%v %+v %#v", cfg, cfg, cfg), string(js), logged.String()} {
+		for _, secret := range []string{old, older, "whsec_old", testToken + "-old"} {
+			if strings.Contains(out, secret) {
+				t.Errorf("a previous secret is printed: %s", out)
+			}
+		}
+	}
+}
+
 func TestEmptyFileNeedsTokens(t *testing.T) {
 	msgs := parseErrors(t, "", nil)
 	if len(msgs) != 1 {
@@ -570,6 +635,14 @@ func TestValidation(t *testing.T) {
 		{"github max age", "secret_scanning: {github: {max_age: 0s}}", "secret_scanning.github.max_age: must be a positive duration"},
 		{"log level", "logging: {level: loud}", `logging.level: want debug, info, warn or error, got "loud"`},
 		{"log format", "logging: {format: xml}", `logging.format: want json or text, got "xml"`},
+		{"hook previous empty", "hooks: [{name: a, url: 'https://x', secret: " + testSecret + ", previous_secrets: ['']}]", "hooks[0].previous_secrets[0]: is empty; remove it from the list once the rotation is over"},
+		{"hook previous short", "hooks: [{name: a, url: 'https://x', secret: " + testSecret + ", previous_secrets: [short]}]", "hooks[0].previous_secrets[0]: is 5 characters; use at least 16"},
+		{"hook previous current", "hooks: [{name: a, url: 'https://x', secret: " + testSecret + ", previous_secrets: [" + testSecret + "]}]", "hooks[0].previous_secrets[0]: is the current secret; list only the secrets being rotated out"},
+		{"hook previous twice", "hooks: [{name: a, url: 'https://x', secret: " + testSecret + ", previous_secrets: [" + testToken + ", " + testToken + "]}]", "hooks[0].previous_secrets[1]: is listed twice"},
+		{"generic previous", "feedback: {generic: {secret: " + testSecret + ", previous_secrets: ['']}}", "feedback.generic.previous_secrets[0]: is empty"},
+		{"usesend previous", "feedback: {usesend: {secret: whsec_a, previous_secrets: [whsec_a]}}", "feedback.usesend.previous_secrets[0]: is the current secret"},
+		{"usesend previous space", "feedback: {usesend: {secret: whsec_a, previous_secrets: [' whsec_b']}}", "feedback.usesend.previous_secrets[0]: has leading or trailing whitespace"},
+		{"resolver previous", "secret_scanning: {github: {enabled: true, resolver: {url: 'https://r', secret: " + testSecret + ", previous_secrets: [x]}}}", "secret_scanning.github.resolver.previous_secrets[0]: is 1 characters"},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -638,6 +711,27 @@ func TestTokenValidation(t *testing.T) {
 		"catraca.yaml:8: auth.tokens[2].token: the same token is configured twice",
 		"auth.tokens[3].name: is required",
 		"catraca.yaml:9: auth.tokens[3].token: has leading or trailing whitespace",
+	} {
+		requireError(t, msgs, want)
+	}
+
+	// A previous token names its client like the current one, so it may
+	// not be any other token of the list.
+	msgs = parseErrors(t, `auth:
+  tokens:
+    - name: platform
+      token: `+testToken+`
+      previous_tokens: ["", short, `+testToken+`, `+testSecret+`]
+    - name: ops
+      token: `+testSecret+`
+      previous_tokens: [`+testToken+`-old, `+testToken+`-old]
+`, nil)
+	for _, want := range []string{
+		"auth.tokens[0].previous_tokens[0]: is empty; remove it from the list once the client uses the new token",
+		"auth.tokens[0].previous_tokens[1]: is 5 characters",
+		"auth.tokens[0].previous_tokens[2]: is the current token",
+		"auth.tokens[1].token: the same token is configured twice",
+		"auth.tokens[1].previous_tokens[1]: the same token is configured twice",
 	} {
 		requireError(t, msgs, want)
 	}

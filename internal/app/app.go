@@ -206,6 +206,11 @@ func New(ctx context.Context, cfg *config.Config, opts Options) (_ *App, err err
 	}
 	for _, t := range cfg.Auth.Tokens {
 		aopts.Tokens = append(aopts.Tokens, api.Token{Name: t.Name, Value: t.Token.Value()})
+		// A token being rotated out is accepted under the client's name, so
+		// access logs follow the client across the rotation.
+		for _, p := range t.PreviousTokens {
+			aopts.Tokens = append(aopts.Tokens, api.Token{Name: t.Name, Value: p.Value()})
+		}
 	}
 	if err := a.feedback(&aopts); err != nil {
 		return nil, err
@@ -291,6 +296,7 @@ func (a *App) feedback(opts *api.Options) error {
 		opts.UseSendFeedback, err = feedback.NewUseSendHandler(feedback.UseSendConfig{
 			Decider:            a.engine,
 			Secret:             c.Secret.Value(),
+			PreviousSecrets:    config.Values(c.PreviousSecrets),
 			AccountMetadataKey: c.AccountMetadataKey,
 			Logger:             log,
 			OnOutcome:          count("usesend"),
@@ -301,10 +307,11 @@ func (a *App) feedback(opts *api.Options) error {
 	}
 	if c := fb.Generic; c != nil {
 		opts.GenericFeedback, err = feedback.NewGenericHandler(feedback.GenericConfig{
-			Decider:   a.engine,
-			Secret:    c.Secret.Value(),
-			Logger:    log,
-			OnOutcome: count("generic"),
+			Decider:         a.engine,
+			Secret:          c.Secret.Value(),
+			PreviousSecrets: config.Values(c.PreviousSecrets),
+			Logger:          log,
+			OnOutcome:       count("generic"),
 		})
 		if err != nil {
 			return err
@@ -328,9 +335,10 @@ func (a *App) secretScanning(opts *api.Options) error {
 		outcomes.WithLabelValues(string(o))
 	}
 	resolver, err := secretscan.NewHTTPResolver(secretscan.HTTPResolverConfig{
-		URL:          gh.Resolver.URL,
-		Secret:       gh.Resolver.Secret.Value(),
-		SendRawToken: gh.Resolver.SendRawToken,
+		URL:             gh.Resolver.URL,
+		Secret:          gh.Resolver.Secret.Value(),
+		PreviousSecrets: config.Values(gh.Resolver.PreviousSecrets),
+		SendRawToken:    gh.Resolver.SendRawToken,
 	})
 	if err != nil {
 		return err
@@ -351,6 +359,7 @@ func (a *App) secretScanning(opts *api.Options) error {
 		// The resolver needs the raw token, so it waits in the queue,
 		// sealed with a key only this secret's holders can derive.
 		cfg.RawTokenSecret = gh.Resolver.Secret.Value()
+		cfg.RawTokenPreviousSecrets = config.Values(gh.Resolver.PreviousSecrets)
 	}
 	if a.scan, err = secretscan.New(cfg); err != nil {
 		return err

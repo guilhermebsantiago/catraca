@@ -223,13 +223,59 @@ func (v *validator) auth(a Auth) {
 			v.add(path+".name", "%q is used by another token", t.Name)
 		}
 		names[t.Name] = true
+		// A token, current or previous, names one client, so it may appear
+		// once in the whole list.
 		if v.secret(path+".token", t.Token) {
 			if values[t.Token] {
 				v.add(path+".token", "the same token is configured twice")
 			}
 			values[t.Token] = true
 		}
+		for j, p := range t.PreviousTokens {
+			pp := fmt.Sprintf("%s.previous_tokens[%d]", path, j)
+			switch {
+			case p == "":
+				v.add(pp, "is empty; remove it from the list once the client uses the new token")
+			case !v.secret(pp, p):
+			case p == t.Token:
+				v.add(pp, "is the current token; list only the tokens being rotated out")
+			case values[p]:
+				v.add(pp, "the same token is configured twice")
+			}
+			values[p] = true
+		}
 	}
+}
+
+// previous checks the secrets being rotated out next to current: each must
+// be acceptable to check, and none may repeat current or another one, which
+// would mean nothing is being rotated. An empty one is a mistake rather
+// than a way to turn the list off: an HMAC keyed with it can be forged.
+func (v *validator) previous(path string, current Secret, previous []Secret, check func(path string, s Secret) bool) {
+	seen := map[Secret]bool{}
+	for i, s := range previous {
+		p := fmt.Sprintf("%s[%d]", path, i)
+		switch {
+		case s == "":
+			v.add(p, "is empty; remove it from the list once the rotation is over")
+		case !check(p, s):
+		case s == current:
+			v.add(p, "is the current secret; list only the secrets being rotated out")
+		case seen[s]:
+			v.add(p, "is listed twice")
+		}
+		seen[s] = true
+	}
+}
+
+// trimmed checks that a secret has no leading or trailing whitespace, a
+// sign of a copy and paste that went wrong.
+func (v *validator) trimmed(path string, s Secret) bool {
+	if strings.TrimSpace(s.Value()) != s.Value() {
+		v.add(path, "has leading or trailing whitespace")
+		return false
+	}
+	return true
 }
 
 // secret checks a shared secret and reports whether it is acceptable.
@@ -327,6 +373,7 @@ func (v *validator) hooks(hooks []Hook, o Outbox) {
 		seen[h.Name] = true
 		v.httpURL(path+".url", h.URL, true)
 		v.secret(path+".secret", h.Secret)
+		v.previous(path+".previous_secrets", h.Secret, h.PreviousSecrets, v.secret)
 		if o.Workers >= 1 && h.Concurrency > o.Workers {
 			v.add(path+".concurrency", "must be at most outbox.workers (%d), got %d: deliveries of every hook share those workers",
 				o.Workers, h.Concurrency)
@@ -377,11 +424,16 @@ func (v *validator) feedback(f Feedback) {
 			v.add("feedback.ses", "set account_tag, account_header or both: the account id of each notification is read from them")
 		}
 	}
-	if u := f.UseSend; u != nil && u.Secret == "" {
-		v.add("feedback.usesend.secret", "is required: the webhook signing secret shown by useSend")
+	if u := f.UseSend; u != nil {
+		if u.Secret == "" {
+			v.add("feedback.usesend.secret", "is required: the webhook signing secret shown by useSend")
+		}
+		// useSend makes its secrets, so their length is not checked here.
+		v.previous("feedback.usesend.previous_secrets", u.Secret, u.PreviousSecrets, v.trimmed)
 	}
 	if g := f.Generic; g != nil {
 		v.secret("feedback.generic.secret", g.Secret)
+		v.previous("feedback.generic.previous_secrets", g.Secret, g.PreviousSecrets, v.secret)
 	}
 }
 
@@ -396,6 +448,7 @@ func (v *validator) github(g GitHub) {
 		}
 	}
 	v.secret(p+".resolver.secret", g.Resolver.Secret)
+	v.previous(p+".resolver.previous_secrets", g.Resolver.Secret, g.Resolver.PreviousSecrets, v.secret)
 	v.httpURL(p+".keys_url", g.KeysURL, false)
 }
 
