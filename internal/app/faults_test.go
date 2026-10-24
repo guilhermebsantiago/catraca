@@ -994,6 +994,11 @@ func postgresBehindProxy(t *testing.T) (string, *faultproxy.Proxy) {
 	proxy := faultproxy.New(t, target)
 	q := u.Query()
 	q.Set("search_path", schema)
+	// As docs/config.md advises: without it, a connection opened into a
+	// partition waits for the operating system to give up on it, and
+	// database/sql opens some in the background, with no deadline of
+	// their own.
+	q.Set("connect_timeout", "5")
 	u.RawQuery = q.Encode()
 	u.Host = proxy.Addr()
 	return u.String(), proxy

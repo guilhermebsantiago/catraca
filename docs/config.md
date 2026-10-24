@@ -300,7 +300,8 @@ database that does not exist, a schema newer than this build) still stops
 the server, right after it starts. A host name that does not resolve counts
 as unreachable, since DNS is often what comes up last. Against a host that
 drops packets, each attempt waits for the operating system to give up on
-the connection; add `connect_timeout=5` to the DSN to bound it.
+the connection; add `connect_timeout=5` to the DSN to bound it, and every
+connection opened later, such as during a network partition.
 
 [Retention](audit.md#retention) is off by default. Durations have no day
 unit, so 90 days is `2160h`. Labeled decisions are kept forever unless
