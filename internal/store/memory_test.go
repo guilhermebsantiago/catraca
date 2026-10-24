@@ -62,6 +62,32 @@ func TestMemoryForgetsDedupeIDs(t *testing.T) {
 	}
 }
 
+// TestMemoryKeepsLateFirstSeenForItsTTL writes a first-seen record late, an
+// hour behind the newest event time stored, with the wall clock moving with
+// event time as it does in production. The record lasts its time to live on
+// the wall clock, as in Redis, instead of being forgotten by event time at
+// the next sweep; FuzzStoresAgree found the difference.
+func TestMemoryKeepsLateFirstSeenForItsTTL(t *testing.T) {
+	m, clock := newTestMemory(t, t0.Add(2*time.Hour))
+	run(t, m, func(b *Batch) { b.Incr("newest", time.Hour, t0.Add(2*time.Hour), 1) })
+	firstSeenAt(t, m, "f", t0.Add(time.Hour), 30*time.Minute)
+	m.sweepAll()
+	clock.Advance(29 * time.Minute)
+	run(t, m, func(b *Batch) { b.Incr("newest", time.Hour, t0.Add(2*time.Hour+29*time.Minute), 1) })
+	m.sweepAll()
+	if got := firstSeenAt(t, m, "f", t0.Add(2*time.Hour+29*time.Minute), 30*time.Minute); !got.Equal(t0.Add(time.Hour)) {
+		t.Errorf("FirstSeen = %v, want the late write's %v: its ttl has not run out", got.Sub(t0), time.Hour)
+	}
+	// Event time still forgets it once the newest event time is the ttl
+	// past the last write's: here before the wall clock does.
+	clock.Advance(29 * time.Minute)
+	run(t, m, func(b *Batch) { b.Incr("newest", time.Hour, t0.Add(3*time.Hour), 1) })
+	m.sweepAll()
+	if got := m.entries(); got != 1 {
+		t.Errorf("entries = %d, want only the counter once event time is the ttl past the record", got)
+	}
+}
+
 func (m *Memory) sweepAll() {
 	now := m.now().UnixNano()
 	for i := range m.shards {

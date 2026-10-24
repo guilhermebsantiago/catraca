@@ -167,7 +167,12 @@ func (b *Batch) Incr(key string, w time.Duration, at time.Time, n int64) {
 // time, setting a value), so a batch sent again changes nothing, and its
 // reads see the counters with the first batch counted once. at is the
 // batch's event time: the memory store also forgets an id once the newest
-// event time it has stored is ttl past it, as it forgets counters.
+// event time it has stored is ttl past at, or past the newest event time it
+// had stored when the id came if that is later, as it forgets counters. So
+// the memory store remembers the id of an event that is behind the wall
+// clock and ahead of every event it holds, such as a late first event after
+// a start or a quiet spell, for less than ttl by the wall clock: less by as
+// much as the event was late.
 //
 // The id is remembered for ttl from the first batch that carried it, at the
 // cost of one entry per batch with increments: one Redis key, or on a

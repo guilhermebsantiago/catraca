@@ -33,8 +33,12 @@ const (
 // forgets entries that have fallen out of every window relative to the newest
 // event time it has stored (never more than a minute ahead of the wall
 // clock), so a replay of months of events holds about a week of counters, not
-// months. The price is that an event arriving later than its window, after
-// newer events, may see less than Redis would show.
+// months. The price is that an event arriving after newer events may read
+// other counts than Redis would: lower, where Memory forgot buckets that
+// Redis keeps, or higher, where it forgot a counter whose newer buckets make
+// Redis ignore the event's write as too old. Events that arrive in order,
+// with the wall clock keeping up with event time, read the same as with
+// Redis.
 type Memory struct {
 	now    func() time.Time
 	seed   maphash.Seed
@@ -105,11 +109,12 @@ func (m *Memory) Do(ctx context.Context, b *Batch) error {
 		return ErrClosed
 	}
 	now := m.now().UnixNano()
+	horizon := m.horizon.Load()
 	repeated := false
 	if b.once != nil && b.incrs {
 		s := &m.shards[maphash.String(m.seed, b.once.id)%shardCount]
 		s.mu.Lock()
-		repeated = s.markOnce(b.once, now, m.horizon.Load())
+		repeated = s.markOnce(b.once, now, horizon)
 		s.mu.Unlock()
 		b.once.repeated.val = repeated
 	}
@@ -121,7 +126,7 @@ func (m *Memory) Do(ctx context.Context, b *Batch) error {
 		}
 		s := &m.shards[maphash.String(m.seed, o.key)%shardCount]
 		s.mu.Lock()
-		s.apply(o, now)
+		s.apply(o, now, horizon)
 		s.mu.Unlock()
 		if o.recordsTime() && o.at > newest {
 			newest = o.at
@@ -182,7 +187,9 @@ func (m *Memory) sweepNext(now int64) {
 	s.mu.Unlock()
 }
 
-func (s *memShard) apply(o *op, now int64) {
+// apply runs o. now is the wall clock and horizon the newest event time
+// stored before the batch, both Unix ns.
+func (s *memShard) apply(o *op, now, horizon int64) {
 	switch o.kind {
 	case opIncr:
 		c := s.counters[series{o.key, o.span}]
@@ -251,7 +258,12 @@ func (s *memShard) apply(o *op, now int64) {
 		}
 		e.ms = min(e.ms, ms)
 		e.expires = deadline(now, o.span)
-		e.until = max(e.until, deadline(o.at, o.span))
+		// A write renews the record from the newest event time, or from
+		// its own when that is newer, as for Dedupe ids: renewed from its
+		// own, a late write would leave the record to be forgotten by event
+		// time before its time to live has run on the wall clock, sooner
+		// than Redis forgets it.
+		e.until = max(e.until, deadline(max(o.at, horizon), o.span))
 		o.times.ms = e.ms
 
 	case opSet:
@@ -458,8 +470,9 @@ func (e *seenSet) prune(cutoff int64) {
 type firstSeen struct {
 	ms      int64
 	expires int64
-	// until is when the record expires by event time: its newest write plus
-	// its TTL, Unix ns.
+	// until is when the record expires by event time: its TTL after its
+	// newest write, or after the newest event time stored when that write
+	// was late, Unix ns.
 	until int64
 }
 
