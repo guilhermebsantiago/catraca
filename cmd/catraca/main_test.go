@@ -486,7 +486,24 @@ func TestConfigCheck(t *testing.T) {
 	r := runCLI(t, env, "config", "check", "-config", path)
 	expect(t, r, exitOK, path+" is valid", "(1 warning(s))", "effect revoke_key has no hook",
 		"api tokens  platform", "9 rules: 1 enforced, 8 shadow", "postgres://catraca:xxxxx@db.internal:5432/catraca",
-		"at most 5s ahead of the clock (later is clamped), 168h0m0s behind (older is rejected)")
+		"at most 5s ahead of the clock (later is clamped), 168h0m0s behind (older is rejected)",
+		"when the file changes (read every 5s), on SIGHUP", "no enforced rule without an override to check now")
+	// With the watch off, and a rule enforced without an override that the
+	// gate will check.
+	dir := filepath.Dir(path)
+	writeFile(t, dir, "unproven.yaml", warnRules)
+	unwatched := writeFile(t, dir, "unwatched.yaml", `auth:
+  tokens:
+    - name: platform
+      token: ${TOKEN}
+rules:
+  path: unproven.yaml
+  watch_interval: 0s
+gate:
+  on_load: warn
+`)
+	expect(t, runCLI(t, env, "config", "check", "-config", unwatched), exitOK,
+		"on SIGHUP and on POST /v1/rules/reload", "1 enforced rule(s) without an override are logged if their labels do not pass")
 	for _, secret := range []string{testToken, "hunter2"} {
 		if strings.Contains(r.stdout+r.stderr, secret) {
 			t.Errorf("config check printed a secret:\n%s", r)

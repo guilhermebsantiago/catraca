@@ -147,6 +147,11 @@ audit:
 # skips the rules it cannot evaluate. The demo records none.
 engine:
   deadline: 250ms
+# The demo ruleset enforces three rules that have no labels yet, so that each
+# action shows; a server would hold them in shadow mode until they pass the
+# precision gate.
+gate:
+  on_load: off
 hooks:
   - name: revoke_key
     url: %s

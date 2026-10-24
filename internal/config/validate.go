@@ -108,6 +108,11 @@ func (v *validator) explicit(c *Config) {
 	if v.isSet("engine.breaker.probes") && c.Engine.Breaker.Probes < 1 {
 		v.add("engine.breaker.probes", "must be at least 1, got %d", c.Engine.Breaker.Probes)
 	}
+	if d := c.Rules.WatchInterval; d < 0 || (d > 0 && d < time.Second) {
+		// 0s is allowed: it turns the watch off. Below a second, reading
+		// the file costs more than it is worth.
+		v.add("rules.watch_interval", "must be at least 1s, or 0s to turn the watch off, got %s", d)
+	}
 	if v.isSet("gate.min_labeled") && c.Gate.MinLabeled < 1 {
 		v.add("gate.min_labeled", "must be at least 1, got %d", c.Gate.MinLabeled)
 	}
@@ -168,6 +173,11 @@ func (v *validator) config(c *Config) {
 	v.auth(c.Auth)
 	if strings.TrimSpace(c.Rules.Path) == "" {
 		v.add("rules.path", "is required")
+	}
+	switch c.Gate.OnLoad {
+	case GateOff, GateWarn, GateEnforce:
+	default:
+		v.add("gate.on_load", "want off, warn or enforce, got %q", c.Gate.OnLoad)
 	}
 	v.store(c.Store)
 	v.audit(c.Audit)

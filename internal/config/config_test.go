@@ -135,6 +135,8 @@ func TestDefaults(t *testing.T) {
 		{"server.drain_delay", cfg.Server.DrainDelay, 5 * time.Second},
 		{"server.admin_addr", cfg.Server.AdminAddr, ""},
 		{"rules.path", cfg.Rules.Path, "rules/default.yaml"},
+		{"rules.watch_interval", cfg.Rules.WatchInterval, 5 * time.Second},
+		{"gate.on_load", cfg.Gate.OnLoad, "enforce"},
 		{"store.backend", cfg.Store.Backend, "memory"},
 		{"audit.dsn", cfg.Audit.DSN.Value(), "sqlite:catraca.db"},
 		{"audit.event_detail", cfg.Audit.EventDetail, "minimal"},
@@ -183,6 +185,7 @@ auth:
     - {name: ops.cli, token: "${OPS_TOKEN}"}
 rules:
   path: /etc/catraca/rules.yaml
+  watch_interval: 30s
 store:
   backend: redis
   redis:
@@ -205,6 +208,7 @@ engine:
 gate:
   min_labeled: 50
   min_precision: 0.95
+  on_load: warn
 hooks:
   - name: revoke_key
     url: https://platform.example/hooks/revoke
@@ -271,8 +275,11 @@ logging:
 	}
 	if cfg.Engine.Deadline != 25*time.Millisecond || cfg.Engine.DispatchTimeout != 50*time.Millisecond ||
 		cfg.Engine.MaxFutureSkew != 30*time.Second || cfg.Engine.MaxEventAge != 72*time.Hour ||
-		cfg.Engine.DedupeTTL != time.Hour || cfg.Gate.MinLabeled != 50 || cfg.Gate.MinPrecision != 0.95 {
+		cfg.Engine.DedupeTTL != time.Hour || cfg.Gate.MinLabeled != 50 || cfg.Gate.MinPrecision != 0.95 || cfg.Gate.OnLoad != GateWarn {
 		t.Errorf("engine/gate = %#v %#v", cfg.Engine, cfg.Gate)
+	}
+	if cfg.Rules.WatchInterval != 30*time.Second {
+		t.Errorf("rules = %#v", cfg.Rules)
 	}
 	if cfg.Outbox.Workers != 32 {
 		t.Errorf("outbox = %#v", cfg.Outbox)
@@ -367,6 +374,14 @@ secret_scanning:
 				t.Errorf("a previous secret is printed: %s", out)
 			}
 		}
+	}
+}
+
+// TestWatchIntervalZero checks that 0s turns the watch off rather than
+// asking for the default.
+func TestWatchIntervalZero(t *testing.T) {
+	if cfg := mustParse(t, minimal+"rules: {watch_interval: 0s}\n", nil); cfg.Rules.WatchInterval != 0 {
+		t.Errorf("watch_interval = %v, want 0", cfg.Rules.WatchInterval)
 	}
 }
 
@@ -635,6 +650,9 @@ func TestValidation(t *testing.T) {
 		{"github max age", "secret_scanning: {github: {max_age: 0s}}", "secret_scanning.github.max_age: must be a positive duration"},
 		{"log level", "logging: {level: loud}", `logging.level: want debug, info, warn or error, got "loud"`},
 		{"log format", "logging: {format: xml}", `logging.format: want json or text, got "xml"`},
+		{"watch interval", "rules: {watch_interval: -1s}", "rules.watch_interval: must be at least 1s, or 0s to turn the watch off, got -1s"},
+		{"short watch interval", "rules: {watch_interval: 100ms}", "rules.watch_interval: must be at least 1s, or 0s to turn the watch off, got 100ms"},
+		{"gate on load", "gate: {on_load: block}", `gate.on_load: want off, warn or enforce, got "block"`},
 		{"hook previous empty", "hooks: [{name: a, url: 'https://x', secret: " + testSecret + ", previous_secrets: ['']}]", "hooks[0].previous_secrets[0]: is empty; remove it from the list once the rotation is over"},
 		{"hook previous short", "hooks: [{name: a, url: 'https://x', secret: " + testSecret + ", previous_secrets: [short]}]", "hooks[0].previous_secrets[0]: is 5 characters; use at least 16"},
 		{"hook previous current", "hooks: [{name: a, url: 'https://x', secret: " + testSecret + ", previous_secrets: [" + testSecret + "]}]", "hooks[0].previous_secrets[0]: is the current secret; list only the secrets being rotated out"},

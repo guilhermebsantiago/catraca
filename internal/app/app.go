@@ -68,8 +68,7 @@ type App struct {
 
 	registry *prometheus.Registry
 	holder   *rules.Holder
-	loads    *prometheus.CounterVec
-	reloadMu sync.Mutex
+	rulesets *rulesetLoader
 
 	store   store.Store
 	catalog signal.Catalog
@@ -125,16 +124,6 @@ func New(ctx context.Context, cfg *config.Config, opts Options) (_ *App, err err
 		collectors.NewProcessCollector(collectors.ProcessCollectorOpts{}),
 	)
 
-	a.loads = prometheus.NewCounterVec(prometheus.CounterOpts{
-		Name: "catraca_ruleset_loads_total",
-		Help: "Ruleset loads at start and on reload, by result (ok or error).",
-	}, []string{"result"})
-	a.registry.MustRegister(a.loads)
-	if _, err := a.Reload(); err != nil {
-		log.Error("serving without a ruleset until it loads: fix the file, then POST /v1/rules/reload or send SIGHUP",
-			"path", cfg.Rules.Path)
-	}
-
 	if a.store, err = openStore(cfg.Store); err != nil {
 		return nil, err
 	}
@@ -150,6 +139,14 @@ func New(ctx context.Context, cfg *config.Config, opts Options) (_ *App, err err
 	a.audit, err = openAuditLog(ctx, cfg.Audit.DSN.Value(), auditOpts, alog)
 	if err != nil {
 		return nil, fmt.Errorf("open the audit database: %w", err)
+	}
+
+	// The ruleset loads once the audit database is open, when it opens at
+	// once, since the precision gate reads its labels.
+	a.rulesets = newRulesetLoader(cfg, a.holder, a.audit, a.registry, log)
+	if _, err := a.rulesets.reload(ctx, sourceStart); err != nil {
+		log.Error("serving without a ruleset until it loads: fix the file; it loads when it changes, on SIGHUP and on POST /v1/rules/reload",
+			"path", cfg.Rules.Path)
 	}
 
 	if len(cfg.Hooks) > 0 {
@@ -188,6 +185,7 @@ func New(ctx context.Context, cfg *config.Config, opts Options) (_ *App, err err
 		Decider:       a.engine,
 		Rules:         a.holder,
 		Reload:        a.Reload,
+		Ruleset:       a.rulesets.Status,
 		Audit:         a.audit,
 		Gate:          cfg.Gate.Precision(),
 		Checks:        a.checks(),
@@ -381,43 +379,11 @@ func (a *App) AdminHandler() http.Handler { return a.api.Admin() }
 // loaded.
 func (a *App) Ruleset() *rules.Ruleset { return a.holder.Current() }
 
-// Reload loads the ruleset file again and makes it current. On error the
-// current ruleset keeps serving.
+// Reload loads the ruleset file again and makes it current, with the rules
+// the precision gate holds back in shadow mode (see gate.on_load). On error
+// the current ruleset keeps serving.
 func (a *App) Reload() (*rules.Ruleset, error) {
-	a.reloadMu.Lock()
-	defer a.reloadMu.Unlock()
-	prev := a.holder.Current()
-	// Load rather than Reload: Reload needs an earlier successful Load, and
-	// the first load may have failed.
-	rs, err := a.holder.Load(a.cfg.Rules.Path)
-	if err != nil {
-		a.loads.WithLabelValues("error").Inc()
-		attrs := []any{"path", a.cfg.Rules.Path, "error", err}
-		if prev != nil {
-			attrs = append(attrs, "serving_version", prev.Version())
-		}
-		a.log.Error("ruleset did not load", attrs...)
-		return nil, err
-	}
-	a.loads.WithLabelValues("ok").Inc()
-	enforced := 0
-	for _, r := range rs.Rules() {
-		if r.Mode == decision.Enforce {
-			enforced++
-		}
-	}
-	attrs := []any{"path", a.cfg.Rules.Path, "version", rs.Version(), "rules", len(rs.Rules()), "enforced", enforced}
-	if prev != nil {
-		attrs = append(attrs, "previous_version", prev.Version())
-	}
-	a.log.Info("ruleset loaded", attrs...)
-	for _, w := range rs.Lint() {
-		a.log.Warn("ruleset warning", "warning", w.String())
-	}
-	for _, m := range MissingHooks(rs, a.cfg.Hooks) {
-		a.log.Warn("ruleset warning", "warning", m)
-	}
-	return rs, nil
+	return a.rulesets.reload(context.Background(), sourceAPI)
 }
 
 // MissingHooks lists the effects enforced rules of rs call that no hook
@@ -519,6 +485,8 @@ func (a *App) Serve(ctx context.Context, ln, admin net.Listener) error {
 	}
 	stopReloads := a.reloadOnSignal()
 	defer stopReloads()
+	stopWatch := a.watchRules()
+	defer stopWatch()
 	a.log.Info("catraca is listening", append(attrs, "version", a.version)...)
 
 	var serveErr error
@@ -603,7 +571,7 @@ func (a *App) reloadOnSignal() (stop func()) {
 			select {
 			case <-ch:
 				a.log.Info("SIGHUP received: reloading the ruleset")
-				_, _ = a.Reload()
+				_, _ = a.rulesets.reload(context.Background(), sourceSignal)
 			case <-done:
 				return
 			}

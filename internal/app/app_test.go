@@ -117,6 +117,9 @@ type options struct {
 	admin bool
 	// resolverURL replaces the fake resolver of secret scanning.
 	resolverURL string
+	// gate is gate.on_load; empty means off, since the test rulesets
+	// enforce rules that have no labels.
+	gate string
 	// edit, when set, changes the configuration before it is parsed.
 	edit func(yaml string) string
 }
@@ -137,6 +140,9 @@ func newHarness(t *testing.T, opts options) *harness {
 	}
 	if opts.auditDSN == "" {
 		opts.auditDSN = "sqlite:" + filepath.ToSlash(h.dbPath)
+	}
+	if opts.gate == "" {
+		opts.gate = "off"
 	}
 	h.writeRules(opts.rules)
 
@@ -168,6 +174,8 @@ audit:
 # degraded decision skips the rules that read account signals.
 engine:
   deadline: 2s
+gate:
+  on_load: %s
 hooks:
   - name: revoke_key
     url: %s
@@ -186,7 +194,7 @@ secret_scanning:
       secret: %s
 logging:
   level: debug
-`, opts.maxBodyBytes, opts.drainDelay, token, filepath.ToSlash(h.rulesPath), opts.auditDSN, h.hook.URL, secret, secret, secret, keys.URL, opts.resolverURL, secret)
+`, opts.maxBodyBytes, opts.drainDelay, token, filepath.ToSlash(h.rulesPath), opts.auditDSN, opts.gate, h.hook.URL, secret, secret, secret, keys.URL, opts.resolverURL, secret)
 	if opts.redisURL != "" {
 		yaml += fmt.Sprintf("store:\n  backend: redis\n  redis:\n    url: '%s'\n", opts.redisURL)
 	}
