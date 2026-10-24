@@ -12,6 +12,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"fmt"
 	"os"
 	"time"
 
@@ -93,6 +94,51 @@ func LoadFile(path string) (*Ruleset, error) {
 		return nil, err
 	}
 	return parse(data, path)
+}
+
+// ParseFile parses a ruleset read from the file at path, as LoadFile does,
+// for a caller that has read the file itself, such as one that hashes what
+// it read to tell whether the file changed.
+func ParseFile(data []byte, path string) (*Ruleset, error) {
+	return parse(data, path)
+}
+
+// WithShadow returns a copy of rs in which the rules with the given ids are
+// in shadow mode, for a server that holds back rules the file enforces. The
+// copy has a version of its own, computed the same way from its content,
+// so a decision made with it says which rules could act. Ids not in rs are
+// ignored, and without ids rs itself is returned. rs is not changed.
+func (rs *Ruleset) WithShadow(ids ...string) (*Ruleset, error) {
+	if len(ids) == 0 {
+		return rs, nil
+	}
+	shadow := make(map[string]bool, len(ids))
+	for _, id := range ids {
+		shadow[id] = true
+	}
+	out := &Ruleset{
+		defaults:  rs.defaults,
+		lists:     rs.lists,
+		rules:     make([]*Rule, len(rs.rules)),
+		byID:      make(map[string]*Rule, len(rs.byID)),
+		listLines: rs.listLines,
+	}
+	for i, r := range rs.rules {
+		if shadow[r.ID] && r.Mode != decision.Shadow {
+			// The copy shares the compiled program, which holds no state.
+			c := *r
+			c.Mode = decision.Shadow
+			r = &c
+		}
+		out.rules[i] = r
+		out.byID[r.ID] = r
+	}
+	v, err := out.computeVersion()
+	if err != nil {
+		return nil, fmt.Errorf("rules: hash ruleset: %w", err)
+	}
+	out.version = v
+	return out, nil
 }
 
 // Version is a short hash of the ruleset's canonical content: the rules with
