@@ -7,6 +7,7 @@ import (
 	"net"
 	"strings"
 	"sync/atomic"
+	"syscall"
 	"testing"
 	"time"
 )
@@ -67,6 +68,23 @@ func dial(t *testing.T, p *Proxy) *client {
 	}
 	t.Cleanup(func() { nc.Close() })
 	return &client{t: t, nc: nc, r: bufio.NewReader(nc)}
+}
+
+// dialReset dials p where it resets new connections, and reports whether
+// the dial got through: the proxy resets a connection as soon as it accepts
+// it, and on Linux the reset can arrive before the dial returns, which is
+// the reset the caller wants to see.
+func dialReset(t *testing.T, p *Proxy) (*client, bool) {
+	t.Helper()
+	nc, err := net.DialTimeout("tcp", p.Addr(), 5*time.Second)
+	if err != nil {
+		if !errors.Is(err, syscall.ECONNRESET) {
+			t.Fatalf("dial the proxy: %v; want it to connect, or to be reset", err)
+		}
+		return nil, false
+	}
+	t.Cleanup(func() { nc.Close() })
+	return &client{t: t, nc: nc, r: bufio.NewReader(nc)}, true
 }
 
 // call sends line and returns the answer, or the error that came instead
@@ -243,8 +261,10 @@ func TestReset(t *testing.T) {
 	if got, err := open.call("x", 5*time.Second); err == nil || isTimeout(err) {
 		t.Errorf("open connection after SetReset: %q, %v; want it reset", got, err)
 	}
-	if got, err := dial(t, p).call("x", 5*time.Second); err == nil || isTimeout(err) {
-		t.Errorf("new connection while resetting: %q, %v; want it reset", got, err)
+	if c, ok := dialReset(t, p); ok {
+		if got, err := c.call("x", 5*time.Second); err == nil || isTimeout(err) {
+			t.Errorf("new connection while resetting: %q, %v; want it reset", got, err)
+		}
 	}
 	p.SetReset(false)
 	dial(t, p).mustCall("after")
@@ -297,7 +317,11 @@ func TestTargetDown(t *testing.T) {
 	}
 	ln.Close()
 	p := New(t, ln.Addr().String())
-	if got, err := dial(t, p).call("x", 10*time.Second); err == nil || isTimeout(err) {
+	c, ok := dialReset(t, p)
+	if !ok {
+		return
+	}
+	if got, err := c.call("x", 10*time.Second); err == nil || isTimeout(err) {
 		t.Errorf("call with the target down: %q, %v; want the connection reset", got, err)
 	}
 }

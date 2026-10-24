@@ -176,6 +176,14 @@ func FuzzSeal(f *testing.F) {
 	f.Add("s", "", "", "k", "s\x00", uint16(300), "v1:%%%")
 	f.Add("s", strings.Repeat("x", 4096), "k", "", "t", uint16(65535), "v2:"+strings.Repeat("A", 40))
 	f.Fuzz(func(t *testing.T, secret, raw, key, otherKey, otherSecret string, bit uint16, junk string) {
+		if secret == "" || otherSecret == "" {
+			// Anyone can derive a key from an empty secret, so a sealer
+			// refuses one, current or previous.
+			if _, err := newSealer(secret, otherSecret); err == nil {
+				t.Fatalf("newSealer(%q, %q) accepted an empty secret", secret, otherSecret)
+			}
+			return
+		}
 		s, err := newSealer(secret)
 		if err != nil {
 			t.Fatal(err)
@@ -196,6 +204,15 @@ func FuzzSeal(f *testing.F) {
 			}
 			if _, err := other.open(sealed, key); !errors.Is(err, errUnseal) {
 				t.Errorf("opened with another secret: %v", err)
+			}
+			// After a rotation the old secret is a previous one, and what
+			// it sealed still opens.
+			rotated, err := newSealer(otherSecret, secret)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if got, err := rotated.open(sealed, key); err != nil || got != raw {
+				t.Errorf("open after a rotation = %q, %v; want %q", got, err, raw)
 			}
 		}
 		b, err := base64.RawStdEncoding.DecodeString(strings.TrimPrefix(sealed, sealVersion))
