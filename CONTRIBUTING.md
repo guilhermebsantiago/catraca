@@ -38,14 +38,49 @@ go run golang.org/x/vuln/cmd/govulncheck@v1.9.0 ./...
   [docs/benchmark.md](docs/benchmark.md).
 - Commits explain why, in the imperative.
 
+## Fuzzing
+
+Every parser of untrusted input has a native Go fuzz target (`func
+FuzzX(f *testing.F)`): events, rulesets, fixtures and rule evaluation,
+the configuration, the `signature` package, the SES (SNS), useSend and
+generic feedback endpoints, and GitHub secret scanning with its sealed
+tokens. `FuzzStoresAgree` and `FuzzSignalsAgree` in `internal/store` run
+generated sequences of batches and of events on the memory store and on
+the Redis store, and compare every read and every signal; they include a
+real Redis and Cluster when `CATRACA_TEST_REDIS_URL` and
+`CATRACA_TEST_REDIS_CLUSTER` are set. `go test ./...` runs each target's
+seeds and its `testdata/fuzz` corpus as ordinary tests. To fuzz one
+target, in its package, for a while:
+
+```sh
+go test ./internal/event -run '^$' -fuzz '^FuzzEvent$' -fuzztime 5m
+go test -list '^Fuzz' ./...   # every target, by package
+```
+
+`-fuzz` takes one target of one package at a time. Inputs that find new
+code paths are cached under `$(go env GOCACHE)/fuzz`, not in the
+repository. An input that fails is written to
+`<package>/testdata/fuzz/<target>/<hash>`, and `go test -run
+'FuzzEvent/<hash>'` runs it again. Fix the bug and commit that file,
+renamed to say what it found, as the regression test; when a property
+fails only through a sweep or a clock, add a unit test that pins it down
+as well. The targets that sign or replay through miniredis run tens to
+hundreds of inputs a second, so give them minutes, and pass
+`-fuzzminimizetime 10x` so minimizing a large input does not take most of
+the run.
+
 ## CI and dependencies
 
 - [ci.yml](.github/workflows/ci.yml) runs on every pull request, on `main`
   and weekly: gofmt, `go mod tidy`, vet and staticcheck; govulncheck, after
   checking that CI and the Dockerfile build with the `go.mod` toolchain;
   tests on Linux against real Redis and Postgres, and on Windows and macOS;
-  the fault-injection scenarios against Redis and Postgres;
-  the cross-compile; the Docker compose stack; a GoReleaser snapshot of the
+  the fault-injection scenarios against Redis and Postgres; every fuzz
+  target, one job per package, for 20 seconds each on pull requests and
+  `main` and for 5 minutes on the weekly run and when run by hand, with the
+  package's `testdata/fuzz`, failing input included, uploaded as an
+  artifact when it fails; the cross-compile; the Docker compose stack; a
+  GoReleaser snapshot of the
   release, whose image must start and answer a decision; and the TypeScript
   examples.
 - [codeql.yml](.github/workflows/codeql.yml) runs CodeQL on the Go code, the

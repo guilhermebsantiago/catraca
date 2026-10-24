@@ -1,0 +1,3 @@
+go test fuzz v1
+string("t=,t=1700000000,v1=5333384c6b43e0763a47a540c38f9aba18eda5e7541553c4bdd9956c8c56b492")
+[]byte("{\"effect\":\"revoke_key\"}")

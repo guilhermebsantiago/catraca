@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"strings"
 	"testing"
+	"time"
 )
 
 // fullSend is a valid send event with every field a send carries.
@@ -131,6 +132,37 @@ func TestValidateLimits(t *testing.T) {
 				t.Fatalf("Validate = %v, want %q wrapping ErrInvalid", err, "event: "+tt.want+"...")
 			}
 		})
+	}
+}
+
+// TestNormalizeKeepsLimits normalizes addresses at the limit whose
+// lowercase takes more bytes: a valid event must stay valid. JSON cannot
+// carry invalid UTF-8, which FuzzEvent decodes from, but an event built in
+// Go can.
+func TestNormalizeKeepsLimits(t *testing.T) {
+	now := time.Date(2026, 10, 15, 12, 0, 0, 0, time.UTC)
+	for _, s := range []string{
+		strings.Repeat("Ⱥ", MaxTextBytes/2),
+		strings.Repeat("\xff", MaxTextBytes),
+		" " + strings.Repeat("Ⱦ", MaxTextBytes/2-2) + "A ",
+	} {
+		ev := Event{Type: Feedback, AccountID: "a", From: s, To: []string{s}, Feedback: &FeedbackInfo{Kind: Bounce, Recipient: s}}
+		if err := ev.Validate(); err != nil {
+			t.Fatal(err)
+		}
+		ev.Normalize(now)
+		if err := ev.Validate(); err != nil {
+			t.Errorf("normalized: %v", err)
+		}
+		if want := strings.TrimSpace(s); ev.From != want || ev.To[0] != want || ev.Feedback.Recipient != want {
+			t.Errorf("an address whose lowercase is too long changed to %.20q..., want it only trimmed", ev.From)
+		}
+	}
+	// Below the limit, the same letters are lowercased.
+	ev := Event{From: " ȺȾ@X.EXAMPLE "}
+	ev.Normalize(now)
+	if ev.From != "ⱥⱦ@x.example" {
+		t.Errorf("From = %q, want it lowercased", ev.From)
 	}
 }
 

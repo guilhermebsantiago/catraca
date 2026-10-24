@@ -39,7 +39,10 @@ type Catalog interface {
 	// sent again after a timeout, does not inflate the counters. Its signals
 	// are read as usual and include the first observation, which also
 	// recorded what is seen and first-seen, so new_ip and the like may now be
-	// false. An event without an id counts every time.
+	// false. An event without an id counts every time. On a Redis Cluster
+	// each hash slot remembers the id on its own (see store.Batch.Dedupe),
+	// so a retry that names another IP, API key or sender domain than the
+	// event did is a duplicate whose increments still count for those.
 	//
 	// When the store fails or ctx expires, Observe still returns the
 	// signals that need no store (Set.Event at least) together with the

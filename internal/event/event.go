@@ -270,19 +270,33 @@ func quote(s string) string {
 }
 
 // Normalize fills Time when it is zero and lowercases addresses, so counters
-// key on the same value however the platform spelled it.
+// key on the same value however the platform spelled it. A valid event stays
+// valid once normalized.
 func (e *Event) Normalize(now time.Time) {
 	if e.Time.IsZero() {
 		e.Time = now
 	}
 	e.Time = e.Time.UTC()
-	e.From = strings.ToLower(strings.TrimSpace(e.From))
+	e.From = lowerAddress(e.From)
 	for i, to := range e.To {
-		e.To[i] = strings.ToLower(strings.TrimSpace(to))
+		e.To[i] = lowerAddress(to)
 	}
 	if e.Feedback != nil {
-		e.Feedback.Recipient = strings.ToLower(strings.TrimSpace(e.Feedback.Recipient))
+		e.Feedback.Recipient = lowerAddress(e.Feedback.Recipient)
 	}
+}
+
+// lowerAddress trims and lowercases an address. The lowercase of U+023A and
+// U+023E takes a byte more than they do, and invalid UTF-8 turns into U+FFFD,
+// three bytes for each bad one, so an address whose lowercase would outgrow
+// MaxTextBytes is only trimmed: lowercased, it would take the event past the
+// limit Validate checked, and the work and storage it bounds with it.
+func lowerAddress(s string) string {
+	s = strings.TrimSpace(s)
+	if l := strings.ToLower(s); len(l) <= MaxTextBytes || len(l) <= len(s) {
+		return l
+	}
+	return s
 }
 
 // DomainOf returns the domain of an email address, or "" when it has none.

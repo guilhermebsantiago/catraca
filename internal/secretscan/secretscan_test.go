@@ -420,9 +420,11 @@ func TestLargeBatchIsStoredBeforeTheAnswer(t *testing.T) {
 	if res.maxAlive > workers {
 		t.Errorf("%d resolves ran at once, want at most %d", res.maxAlive, workers)
 	}
-	if out.count(OutcomeLeaked)+out.count(OutcomeNotFound) != n {
-		t.Errorf("outcomes %v", &out)
-	}
+	// A worker reports a report's outcome after it records it, so the last
+	// outcomes may come just after the queue settles.
+	eventually(t, "an outcome for every report", func() bool {
+		return out.count(OutcomeLeaked)+out.count(OutcomeNotFound) == n
+	})
 }
 
 // failingReports is a queue that cannot store anything, like an audit

@@ -127,7 +127,7 @@ const (
 )
 
 // sign sets SigningCertURL, SignatureVersion and Signature on m.
-func (s *signer) sign(t *testing.T, m *snsMessage, version string) {
+func (s *signer) sign(t testing.TB, m *snsMessage, version string) {
 	t.Helper()
 	if m.SigningCertURL == "" {
 		m.SigningCertURL = testCertURL
@@ -167,7 +167,7 @@ func (f *fetcher) fetch(_ context.Context, certURL string) ([]byte, error) {
 }
 
 // notification wraps an SES notification in a signed SNS Notification.
-func notification(t *testing.T, ses string) *snsMessage {
+func notification(t testing.TB, ses string) *snsMessage {
 	t.Helper()
 	m := &snsMessage{
 		Type:      snsNotification,

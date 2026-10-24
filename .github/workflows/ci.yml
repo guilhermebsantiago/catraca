@@ -201,6 +201,62 @@ jobs:
       - name: go test
         run: go test ./...
 
+  fuzz:
+    name: Fuzz (${{ matrix.package }})
+    strategy:
+      fail-fast: false
+      matrix:
+        package:
+          - internal/config
+          - internal/event
+          - internal/feedback
+          - internal/rules
+          - internal/secretscan
+          - internal/store
+          - signature
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    env:
+      PACKAGE: ${{ matrix.package }}
+      # How long each fuzz target runs: briefly on pull requests and main,
+      # longer on the weekly run and on demand. The test job already runs
+      # every target's seeds and testdata/fuzz corpus as ordinary tests,
+      # against real Redis too.
+      FUZZTIME: ${{ (github.event_name == 'schedule' || github.event_name == 'workflow_dispatch') && '5m' || '20s' }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: go.mod
+      # go test -fuzz takes one target of one package at a time. A failing
+      # input is written to the package's testdata/fuzz/<target>/; commit it
+      # with the fix, as a regression seed.
+      - name: Fuzz each target
+        run: |
+          targets="$(go test -list '^Fuzz' "./$PACKAGE" | grep '^Fuzz' || true)"
+          if [ -z "$targets" ]; then
+            echo "::error::no fuzz targets in $PACKAGE"
+            exit 1
+          fi
+          for target in $targets; do
+            echo "::group::$target ($FUZZTIME)"
+            go test "./$PACKAGE" -run '^$' -fuzz "^$target\$" -fuzztime "$FUZZTIME" -fuzzminimizetime 30s
+            echo "::endgroup::"
+          done
+      - name: Name the artifact
+        if: failure()
+        id: artifact
+        run: echo "name=fuzz-${PACKAGE//\//-}" >> "$GITHUB_OUTPUT"
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        if: failure()
+        with:
+          name: ${{ steps.artifact.outputs.name }}
+          path: ${{ matrix.package }}/testdata/fuzz
+          retention-days: 14
+          if-no-files-found: ignore
+
   build:
     name: Build
     runs-on: ubuntu-latest
