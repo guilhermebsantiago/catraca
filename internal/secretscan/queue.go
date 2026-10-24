@@ -14,6 +14,11 @@ import (
 // settleTimeout bounds writing the outcome of an attempt.
 const settleTimeout = 10 * time.Second
 
+// claimTimeout bounds a claim of reports. A query on a connection the
+// network dropped without a reset waits until TCP gives up on it, a quarter
+// of an hour on Linux, and every worker waits for the claim.
+const claimTimeout = 10 * time.Second
+
 // run claims due reports while workers are free, until Shutdown. It looks
 // again when a batch is stored, when a worker frees up, and every
 // PollInterval, which picks up reports stored by another process, requeued
@@ -24,7 +29,9 @@ func (h *Handler) run() {
 	defer timer.Stop()
 	for {
 		if free := h.workers - int(h.busy.Load()); free > 0 {
-			reports, err := h.reports.ClaimLeakReports(h.claiming, h.now(), free, h.lease)
+			ctx, cancel := context.WithTimeout(h.claiming, h.claimTimeout)
+			reports, err := h.reports.ClaimLeakReports(ctx, h.now(), free, h.lease)
+			cancel()
 			// Reports claimed just as Shutdown started are still attempted:
 			// Shutdown waits for them, and they need not wait out a lease.
 			for _, rep := range reports {

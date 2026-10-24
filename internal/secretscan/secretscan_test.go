@@ -610,6 +610,42 @@ func TestDuplicateDeliveries(t *testing.T) {
 	}
 }
 
+// hangingReports is a report queue whose first claim hangs until its
+// context ends, as a query does on a connection the network dropped
+// without a reset.
+type hangingReports struct {
+	audit.LeakReports
+	hung atomic.Bool
+}
+
+func (r *hangingReports) ClaimLeakReports(ctx context.Context, now time.Time, limit int, lease time.Duration) ([]audit.LeakReport, error) {
+	if r.hung.CompareAndSwap(false, true) {
+		<-ctx.Done()
+		return nil, ctx.Err()
+	}
+	return r.LeakReports.ClaimLeakReports(ctx, now, limit, lease)
+}
+
+// TestHungClaimIsGivenUp processes a batch on a queue whose first claim
+// hangs: the claim is given up at its timeout and the reports go through.
+// A claim that waited for TCP to give up on its connection would stop the
+// workers for as long.
+func TestHungClaimIsGivenUp(t *testing.T) {
+	key := newTestKey(t, "k1")
+	keys := newKeysServer(t, key)
+	db := openReports(t)
+	dec := &recorder{}
+	h, _ := newTestHandler(t, Config{Decider: dec, Resolver: &resolver{keys: map[string]Key{"real": {APIKeyID: "key_1"}}},
+		Reports: &hangingReports{LeakReports: db}, KeysURL: keys.URL, claimTimeout: 100 * time.Millisecond})
+	if rec := send(t, h, key, batch(t, match{Token: "real", Type: "acme_api_key", Source: "commit"})); rec.Code != http.StatusAccepted {
+		t.Fatalf("status %d: %s", rec.Code, rec.Body)
+	}
+	settled(t, db)
+	if evs := dec.got(); len(evs) != 1 || evs[0].APIKeyID != "key_1" {
+		t.Errorf("events %+v, want the one leak", evs)
+	}
+}
+
 func TestRetriesTransientResolverErrors(t *testing.T) {
 	key := newTestKey(t, "k1")
 	keys := newKeysServer(t, key)

@@ -14,6 +14,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -1115,5 +1116,66 @@ func TestRunWaitsForWrites(t *testing.T) {
 	}
 	if s := d.Stats(); s.Enqueued != 1 {
 		t.Errorf("Stats when Run returned = %+v, want the write done", s)
+	}
+}
+
+// hangingOutbox is an outbox whose first claim and first count of the
+// backlog hang until their context ends, as a query does on a connection
+// the network dropped without a reset.
+type hangingOutbox struct {
+	audit.Outbox
+	claimHung, backlogHung atomic.Bool
+}
+
+func (o *hangingOutbox) Claim(ctx context.Context, r audit.ClaimRequest) ([]audit.Delivery, error) {
+	if o.claimHung.CompareAndSwap(false, true) {
+		<-ctx.Done()
+		return nil, ctx.Err()
+	}
+	return o.Outbox.Claim(ctx, r)
+}
+
+func (o *hangingOutbox) Backlog(ctx context.Context, now time.Time) ([]audit.Backlog, error) {
+	if o.backlogHung.CompareAndSwap(false, true) {
+		<-ctx.Done()
+		return nil, ctx.Err()
+	}
+	return o.Outbox.Backlog(ctx, now)
+}
+
+// TestHungOutboxQueriesAreGivenUp runs the dispatcher on an outbox whose
+// first claim and first count of the backlog hang: each is given up at the
+// claim timeout, and deliveries and counts go on. A claim that waited for
+// TCP to give up on its connection would stop every hook's deliveries for
+// as long.
+func TestHungOutboxQueriesAreGivenUp(t *testing.T) {
+	rc := newReceiver(t)
+	d, err := New(&hangingOutbox{Outbox: openOutbox(t)}, Config{
+		Hooks:           []Hook{{Name: "revoke_key", URL: rc.srv.URL, Secret: secret}},
+		PollInterval:    20 * time.Millisecond,
+		BacklogInterval: 20 * time.Millisecond,
+		Logger:          quiet,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	d.claimTimeout = 100 * time.Millisecond
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan error, 1)
+	go func() { done <- d.Run(ctx) }()
+	t.Cleanup(func() {
+		cancel()
+		select {
+		case <-done:
+		case <-time.After(20 * time.Second):
+			t.Error("Run did not stop")
+		}
+	})
+
+	d.Dispatch(context.Background(), sendEvent(), leakDecision("d1"))
+	eventually(t, 20*time.Second, "the delivery, past a hung claim", func() bool { return d.Stats().Delivered == 1 })
+	eventually(t, 20*time.Second, "a count of the backlog, past a hung one", func() bool { return d.Backlog() != nil })
+	if n := len(rc.got()); n != 1 {
+		t.Errorf("the receiver got %d requests, want 1", n)
 	}
 }
