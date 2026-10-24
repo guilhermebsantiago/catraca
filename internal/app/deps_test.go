@@ -135,7 +135,6 @@ func TestDependencyMonitor(t *testing.T) {
 	if up := m.statuses()["flaky"]; up.Since.Before(down) || up.CheckedAt.Before(up.Since) {
 		t.Errorf("since and checked_at after recovery: %+v (down since %v)", up, down)
 	}
-	if !strings.Contains(logs.String(), "available again") {
-		t.Errorf("no recovery log:\n%s", logs)
-	}
+	// The status changes before the line is logged, so wait for it too.
+	waitFor(t, "the recovery log", func() bool { return strings.Contains(logs.String(), "available again") })
 }
