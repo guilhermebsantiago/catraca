@@ -11,6 +11,15 @@
 
 rule_files: [rules.yaml]
 evaluation_interval: 1m
+# The recording rules first, so the alerts read this minute's ratios, as the
+# tests compute them; Prometheus itself runs the groups concurrently, and
+# an alert may read the ratio of the evaluation before.
+group_eval_order:
+  - catraca-slo-errors
+  - catraca-slo-budget
+  - catraca-latency
+  - catraca-slo-alerts
+  - catraca-cause-alerts
 
 tests:
   # 5% of decisions fail for an hour, then none do.
