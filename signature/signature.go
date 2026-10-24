@@ -81,6 +81,7 @@ func verify(secret, header string, body []byte, tolerance time.Duration, now tim
 	}
 	var ts string
 	var sigs [][]byte
+	seenT := false
 	for part := range strings.SplitSeq(header, ",") {
 		k, v, ok := strings.Cut(strings.TrimSpace(part), "=")
 		if !ok {
@@ -88,10 +89,11 @@ func verify(secret, header string, body []byte, tolerance time.Duration, now tim
 		}
 		switch k {
 		case "t":
-			if ts != "" {
+			// Two t values are malformed even when the first is empty.
+			if seenT {
 				return ErrMalformed
 			}
-			ts = v
+			ts, seenT = v, true
 		case "v1":
 			sig, err := hex.DecodeString(v)
 			if err != nil {
