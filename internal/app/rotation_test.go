@@ -45,17 +45,26 @@ func TestRotationOverlap(t *testing.T) {
 		return out
 	}})
 
-	// Both tokens authenticate the same client.
-	for _, tok := range []string{token, newToken} {
+	// Both tokens authenticate the same client, and the access log says
+	// which requests still use the old one.
+	for tok, previous := range map[string]bool{token: true, newToken: false} {
 		r := h.do("GET", "/v1/rules", tok, nil)
 		if r.status != http.StatusOK {
 			t.Fatalf("token %s...: %d %s", tok[:12], r.status, r.body)
 		}
 		id := r.header.Get(api.RequestIDHeader)
+		found := false
 		for _, l := range strings.Split(h.logs.String(), "\n") {
-			if strings.Contains(l, `"request_id":"`+id+`"`) && !strings.Contains(l, `"client":"test"`) {
-				t.Errorf("token %s... is not logged as client test: %s", tok[:12], l)
+			if !strings.Contains(l, `"request_id":"`+id+`"`) {
+				continue
 			}
+			found = true
+			if !strings.Contains(l, `"client":"test"`) || strings.Contains(l, `"previous_token":true`) != previous {
+				t.Errorf("token %s...: access log %s, want client test and previous_token %t", tok[:12], l, previous)
+			}
+		}
+		if !found {
+			t.Errorf("token %s...: no access log line", tok[:12])
 		}
 	}
 	if r := h.do("GET", "/v1/rules", "test-token-never-0123456789abcdef", nil); r.status != http.StatusUnauthorized {

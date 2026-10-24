@@ -69,6 +69,10 @@ type Token struct {
 	Name string
 	// Value is the bearer token.
 	Value string
+	// Previous marks a token being rotated out. Requests with it are
+	// accepted, and their access log lines say previous_token, so the
+	// operator can tell when the client has moved to its new token.
+	Previous bool
 }
 
 // Check is one readiness check. It answers from the server's own state,
@@ -210,8 +214,9 @@ type Server struct {
 }
 
 type tokenHash struct {
-	name string
-	sum  [sha256.Size]byte
+	name     string
+	sum      [sha256.Size]byte
+	previous bool
 }
 
 // New returns a Server with every route registered.
@@ -245,7 +250,7 @@ func New(opts Options) (*Server, error) {
 		if t.Value == "" {
 			return nil, fmt.Errorf("api: token %q is empty", t.Name)
 		}
-		s.tokens = append(s.tokens, tokenHash{name: t.Name, sum: sha256.Sum256([]byte(t.Value))})
+		s.tokens = append(s.tokens, tokenHash{name: t.Name, sum: sha256.Sum256([]byte(t.Value)), previous: t.Previous})
 	}
 	if s.log == nil {
 		s.log = slog.New(slog.DiscardHandler)

@@ -121,32 +121,37 @@ func requestID(sent string) string {
 // authed requires a valid bearer token.
 func (s *Server) authed(h http.HandlerFunc) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		name, problem := s.authenticate(r.Header.Get("Authorization"))
+		tok, problem := s.authenticate(r.Header.Get("Authorization"))
 		if problem != "" {
 			w.Header().Set("WWW-Authenticate", `Bearer realm="catraca"`)
 			writeError(w, http.StatusUnauthorized, "unauthorized", problem)
 			return
 		}
 		if ri := infoFrom(r.Context()); ri != nil {
-			ri.client = name
+			ri.client = tok.name
+		}
+		if tok.previous {
+			// Until no request says this, the client has not moved to its
+			// new token, and the old one cannot be removed.
+			annotate(r, slog.Bool("previous_token", true))
 		}
 		h(w, r)
 	})
 }
 
-// authenticate returns the name of the token in an Authorization header, or
-// why the header is not acceptable. Tokens are compared as SHA-256 sums in
-// constant time, and every configured token is compared, so neither the
-// time taken nor an early exit tells a caller how close a guess was or which
-// token it matched.
-func (s *Server) authenticate(header string) (name, problem string) {
+// authenticate returns the token in an Authorization header, or why the
+// header is not acceptable. Tokens are compared as SHA-256 sums in constant
+// time, and every configured token is compared, so neither the time taken
+// nor an early exit tells a caller how close a guess was or which token it
+// matched.
+func (s *Server) authenticate(header string) (tok tokenHash, problem string) {
 	if header == "" {
-		return "", "missing bearer token: send Authorization: Bearer <token>"
+		return tok, "missing bearer token: send Authorization: Bearer <token>"
 	}
 	scheme, token, ok := strings.Cut(header, " ")
 	token = strings.TrimSpace(token)
 	if !ok || !strings.EqualFold(scheme, "Bearer") || token == "" {
-		return "", "the Authorization header must be Bearer <token>"
+		return tok, "the Authorization header must be Bearer <token>"
 	}
 	sum := sha256.Sum256([]byte(token))
 	match := -1
@@ -156,9 +161,9 @@ func (s *Server) authenticate(header string) (name, problem string) {
 		}
 	}
 	if match < 0 {
-		return "", "invalid bearer token"
+		return tok, "invalid bearer token"
 	}
-	return s.tokens[match].name, ""
+	return s.tokens[match], ""
 }
 
 // responseWriter records the status and size of a response.

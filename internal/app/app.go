@@ -207,7 +207,7 @@ func New(ctx context.Context, cfg *config.Config, opts Options) (_ *App, err err
 		// A token being rotated out is accepted under the client's name, so
 		// access logs follow the client across the rotation.
 		for _, p := range t.PreviousTokens {
-			aopts.Tokens = append(aopts.Tokens, api.Token{Name: t.Name, Value: p.Value()})
+			aopts.Tokens = append(aopts.Tokens, api.Token{Name: t.Name, Value: p.Value(), Previous: true})
 		}
 	}
 	if err := a.feedback(&aopts); err != nil {
