@@ -1,10 +1,8 @@
 package store
 
 import (
-	"bytes"
 	"context"
 	"errors"
-	"net"
 	"slices"
 	"strconv"
 	"strings"
@@ -16,6 +14,7 @@ import (
 	"github.com/alicebob/miniredis/v2/server"
 	"github.com/redis/go-redis/v9"
 
+	"github.com/guilhermebsantiago/catraca/internal/faultproxy"
 	"github.com/guilhermebsantiago/catraca/internal/store/storetest"
 )
 
@@ -414,8 +413,8 @@ func TestCheckRedisURL(t *testing.T) {
 // the event twice.
 func TestOpenRedisDoesNotResendScripts(t *testing.T) {
 	mr := storetest.Miniredis(t)
-	proxy := newReplyDropper(t, mr.Addr())
-	s, err := OpenRedis("redis://"+proxy.addr+"/0", RedisOptions{})
+	proxy := faultproxy.New(t, mr.Addr())
+	s, err := OpenRedis("redis://"+proxy.Addr()+"/0", RedisOptions{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -423,7 +422,7 @@ func TestOpenRedisDoesNotResendScripts(t *testing.T) {
 	// Loads the script, so the next batch is a single EVALSHA.
 	run(t, s, func(b *Batch) { b.Get("warm-up") })
 
-	proxy.drop.Store(true)
+	proxy.DropReply("evalsha")
 	var b Batch
 	b.Incr("k", time.Hour, t0, 1)
 	if err := s.Do(context.Background(), &b); err == nil {
@@ -433,75 +432,6 @@ func TestOpenRedisDoesNotResendScripts(t *testing.T) {
 	defer direct.client.Close()
 	if n := count(t, direct, "k", time.Hour, t0); n != 1 {
 		t.Errorf("count = %d after one increment, want 1: the script ran again", n)
-	}
-}
-
-// replyDropper forwards connections to a Redis server. While drop is set, it
-// forwards the next script call and then closes the client's connection
-// instead of passing back the reply: Redis ran the script, the client sees
-// EOF.
-type replyDropper struct {
-	addr string
-	drop atomic.Bool
-}
-
-func newReplyDropper(t *testing.T, target string) *replyDropper {
-	t.Helper()
-	ln, err := net.Listen("tcp", "127.0.0.1:0")
-	if err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() { ln.Close() })
-	p := &replyDropper{addr: ln.Addr().String()}
-	go func() {
-		for {
-			client, err := ln.Accept()
-			if err != nil {
-				return
-			}
-			go p.forward(client, target)
-		}
-	}()
-	return p
-}
-
-func (p *replyDropper) forward(client net.Conn, target string) {
-	defer client.Close()
-	server, err := net.Dial("tcp", target)
-	if err != nil {
-		return
-	}
-	defer server.Close()
-	var dropping atomic.Bool
-	go func() {
-		buf := make([]byte, 64<<10)
-		for {
-			n, err := client.Read(buf)
-			if err != nil {
-				server.Close()
-				return
-			}
-			if p.drop.Load() && bytes.Contains(bytes.ToUpper(buf[:n]), []byte("EVALSHA")) {
-				p.drop.Store(false)
-				dropping.Store(true)
-			}
-			if _, err := server.Write(buf[:n]); err != nil {
-				return
-			}
-		}
-	}()
-	buf := make([]byte, 64<<10)
-	for {
-		n, err := server.Read(buf)
-		if err != nil {
-			return
-		}
-		if dropping.Load() {
-			return
-		}
-		if _, err := client.Write(buf[:n]); err != nil {
-			return
-		}
 	}
 }
 
@@ -711,15 +641,15 @@ func TestRedisClusterRetryAppliesTheRest(t *testing.T) {
 // failed would.
 func TestRedisRetryAfterALostReplyCountsOnce(t *testing.T) {
 	mr := storetest.Miniredis(t)
-	proxy := newReplyDropper(t, mr.Addr())
-	s, err := OpenRedis("redis://"+proxy.addr+"/0", RedisOptions{})
+	proxy := faultproxy.New(t, mr.Addr())
+	s, err := OpenRedis("redis://"+proxy.Addr()+"/0", RedisOptions{})
 	if err != nil {
 		t.Fatal(err)
 	}
 	defer s.Close()
 	run(t, s, func(b *Batch) { b.Get("warm-up") })
 
-	proxy.drop.Store(true)
+	proxy.DropReply("evalsha")
 	var b Batch
 	dedupeBatch(&b, "ev")
 	if err := s.Do(context.Background(), &b); err == nil {
