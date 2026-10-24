@@ -20,16 +20,26 @@ var (
 		}
 		return f
 	}()
+	// counter is QueryPerformanceCounter's address, looked up once. Now
+	// calls it with syscall.SyscallN, which keeps the reading on the stack;
+	// LazyProc.Call moves it and its arguments to the heap, two allocations
+	// per reading. Zero when the counter is unavailable.
+	counter = func() uintptr {
+		if frequency == 0 || qpc.Find() != nil {
+			return 0
+		}
+		return qpc.Addr()
+	}()
 	epoch = time.Now()
 )
 
 // Now returns a monotonic clock reading, meaningful only relative to
 // another reading in the same process.
 func Now() time.Duration {
-	if frequency == 0 {
+	if counter == 0 {
 		return time.Since(epoch)
 	}
 	var c int64
-	qpc.Call(uintptr(unsafe.Pointer(&c)))
+	syscall.SyscallN(counter, uintptr(unsafe.Pointer(&c)))
 	return time.Duration(c/frequency)*time.Second + time.Duration(c%frequency)*time.Second/time.Duration(frequency)
 }

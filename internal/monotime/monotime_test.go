@@ -23,3 +23,17 @@ func TestNowResolvesMicroseconds(t *testing.T) {
 	}
 	t.Fatal("the clock never advanced by less than 100 µs")
 }
+
+// A decision reads the clock a few times, so a reading must not allocate.
+func TestNowDoesNotAllocate(t *testing.T) {
+	if n := testing.AllocsPerRun(100, func() { _ = Now() }); n != 0 {
+		t.Fatalf("Now allocates %v times per reading", n)
+	}
+}
+
+func BenchmarkNow(b *testing.B) {
+	b.ReportAllocs()
+	for b.Loop() {
+		_ = Now()
+	}
+}
