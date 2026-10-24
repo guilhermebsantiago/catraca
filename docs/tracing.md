@@ -106,13 +106,24 @@ a setting out, and for the settings it does not have:
 
 ## OTLP over HTTP
 
-Spans go to the collector with OTLP over HTTP (protobuf), port 4318 by
+Spans go to the collector with OTLP over HTTP, as protobuf, port 4318 by
 convention, rather than gRPC: plain HTTPS works through the proxies, load
 balancers and TLS setups a platform already has, and an API key in a header
 is all most hosted backends need. The OpenTelemetry Collector, Jaeger,
-Tempo and most vendors accept it.
+Tempo and most vendors accept it. `OTEL_EXPORTER_OTLP_PROTOCOL` is not
+read: the protocol is always `http/protobuf`.
 
-Spans are batched and sent in the background. A collector that is down or
-slow costs dropped spans and a warning in the log, at most once a minute,
-never a decision. On shutdown, the server sends what is left, within
-`server.shutdown_timeout`.
+The exporter is Catraca's own, a few hundred lines in
+[`internal/tracing`](../internal/tracing), on the OpenTelemetry SDK and
+the OTLP protobuf messages. OpenTelemetry's Go exporter for OTLP/HTTP
+imports a package that also holds the gRPC service, which links gRPC, its
+gateway and an HTTP/2 stack into the server: 12.6 MB more for a 25.7 MB
+binary, against 0.9 MB this way, and their vulnerabilities to keep up with
+for a feature that is off by default.
+
+Spans are batched and sent in the background. A `429`, `502`, `503` or
+`504`, or no answer, is tried again twice with backoff within the export
+timeout (`OTEL_EXPORTER_OTLP_TIMEOUT`, 10 s); any other answer drops the
+batch. A collector that is down or slow costs dropped spans and a warning
+in the log, at most once a minute, never a decision. On shutdown, the
+server sends what is left, within `server.shutdown_timeout`.

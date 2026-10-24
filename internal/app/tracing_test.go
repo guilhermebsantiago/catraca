@@ -15,8 +15,8 @@ import (
 	"testing"
 	"time"
 
-	coltracepb "go.opentelemetry.io/proto/otlp/collector/trace/v1"
 	tracepb "go.opentelemetry.io/proto/otlp/trace/v1"
+	"google.golang.org/protobuf/encoding/protowire"
 	"google.golang.org/protobuf/proto"
 )
 
@@ -47,15 +47,15 @@ func newCollector(t *testing.T) *collector {
 			t.Error(err)
 			return
 		}
-		var req coltracepb.ExportTraceServiceRequest
-		if err := proto.Unmarshal(data, &req); err != nil {
+		rss, err := decodeExportRequest(data)
+		if err != nil {
 			t.Errorf("collector: %v", err)
 			w.WriteHeader(http.StatusBadRequest)
 			return
 		}
 		c.mu.Lock()
 		c.paths = append(c.paths, r.URL.Path)
-		for _, rs := range req.GetResourceSpans() {
+		for _, rs := range rss {
 			for _, kv := range rs.GetResource().GetAttributes() {
 				c.resource[kv.GetKey()] = kv.GetValue().GetStringValue()
 			}
@@ -69,6 +69,38 @@ func newCollector(t *testing.T) *collector {
 	}))
 	t.Cleanup(c.Close)
 	return c
+}
+
+// decodeExportRequest reads an OTLP ExportTraceServiceRequest, whose one
+// field, 1, holds each ResourceSpans.
+func decodeExportRequest(b []byte) ([]*tracepb.ResourceSpans, error) {
+	var out []*tracepb.ResourceSpans
+	for len(b) > 0 {
+		num, typ, n := protowire.ConsumeTag(b)
+		if n < 0 {
+			return nil, protowire.ParseError(n)
+		}
+		b = b[n:]
+		if num != 1 || typ != protowire.BytesType {
+			n = protowire.ConsumeFieldValue(num, typ, b)
+			if n < 0 {
+				return nil, protowire.ParseError(n)
+			}
+			b = b[n:]
+			continue
+		}
+		v, n := protowire.ConsumeBytes(b)
+		if n < 0 {
+			return nil, protowire.ParseError(n)
+		}
+		b = b[n:]
+		rs := &tracepb.ResourceSpans{}
+		if err := proto.Unmarshal(v, rs); err != nil {
+			return nil, err
+		}
+		out = append(out, rs)
+	}
+	return out, nil
 }
 
 // byName returns the spans the collector got, by name.

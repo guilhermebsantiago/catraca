@@ -1,6 +1,6 @@
 // Package tracing sets up OpenTelemetry tracing for the server: a tracer
 // provider that samples traces by ratio and exports their spans over
-// OTLP/HTTP.
+// OTLP/HTTP, with an exporter of its own (see otlp.go for why).
 //
 // It is the only package that needs the OpenTelemetry SDK. The packages that
 // make spans (api, engine, hooks, audit, secretscan) take a
@@ -11,9 +11,11 @@
 // leaves a setting out: OTEL_EXPORTER_OTLP_ENDPOINT and
 // OTEL_EXPORTER_OTLP_TRACES_ENDPOINT, OTEL_SERVICE_NAME, OTEL_TRACES_SAMPLER
 // and OTEL_TRACES_SAMPLER_ARG; the ones it has no setting for always do:
-// OTEL_EXPORTER_OTLP_HEADERS, _TIMEOUT, _COMPRESSION and _CERTIFICATE (and
-// their _TRACES_ forms), OTEL_RESOURCE_ATTRIBUTES and OTEL_BSP_*. And
-// OTEL_SDK_DISABLED=true turns tracing off whatever the configuration says.
+// OTEL_EXPORTER_OTLP_HEADERS, _TIMEOUT, _COMPRESSION, _CERTIFICATE,
+// _CLIENT_CERTIFICATE and _CLIENT_KEY (and their _TRACES_ forms),
+// OTEL_RESOURCE_ATTRIBUTES and OTEL_BSP_*. And OTEL_SDK_DISABLED=true turns
+// tracing off whatever the configuration says. The protocol is always
+// http/protobuf.
 package tracing
 
 import (
@@ -29,7 +31,6 @@ import (
 
 	"go.opentelemetry.io/otel"
 	"go.opentelemetry.io/otel/attribute"
-	"go.opentelemetry.io/otel/exporters/otlp/otlptrace/otlptracehttp"
 	"go.opentelemetry.io/otel/sdk/resource"
 	sdktrace "go.opentelemetry.io/otel/sdk/trace"
 	"go.opentelemetry.io/otel/trace"
@@ -92,17 +93,16 @@ func New(ctx context.Context, opts Options) (*Provider, error) {
 	if r := opts.SampleRatio; r != nil && (*r < 0 || *r > 1) {
 		return nil, fmt.Errorf("tracing: sample ratio %g is not between 0 and 1", *r)
 	}
-	var expOpts []otlptracehttp.Option
+	endpoint := ""
 	if opts.Endpoint != "" {
-		u, err := EndpointURL(opts.Endpoint)
-		if err != nil {
+		var err error
+		if endpoint, err = EndpointURL(opts.Endpoint); err != nil {
 			return nil, err
 		}
-		expOpts = append(expOpts, otlptracehttp.WithEndpointURL(u))
 	}
-	exp, err := otlptracehttp.New(ctx, expOpts...)
+	exp, err := newExporter(endpoint, opts.Version)
 	if err != nil {
-		return nil, fmt.Errorf("tracing: OTLP exporter: %w", err)
+		return nil, err
 	}
 	res, err := newResource(ctx, opts)
 	if err != nil {
