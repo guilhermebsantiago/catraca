@@ -225,6 +225,10 @@ and the expected matches, so a rule change comes with a test like code does.
 `DecideWithoutStore` makes the decision of step 2 without calling the
 store at all, for the HTTP layer to shed load with.
 
+[Faults](faults.md) lists what happens when Redis, Postgres, a webhook
+receiver or the secret scanning resolver is slow, unreachable, partitioned
+or restarted, and the fault-injection test that checks each case.
+
 ## Audit and labels
 
 Every decision is recorded with a minimal copy of the event by default

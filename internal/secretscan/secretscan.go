@@ -223,6 +223,8 @@ type Config struct {
 
 	// now is the clock, for tests.
 	now func() time.Time
+	// claimTimeout replaces claimTimeout, for tests.
+	claimTimeout time.Duration
 }
 
 // Defaults for the bounds on a report. With the default backoff the age
@@ -263,6 +265,7 @@ type Handler struct {
 	minBackoff      time.Duration
 	maxBackoff      time.Duration
 	pollInterval    time.Duration
+	claimTimeout    time.Duration
 	lease           time.Duration
 	maxBody         int64
 	log             *slog.Logger
@@ -337,6 +340,7 @@ func New(cfg Config) (*Handler, error) {
 		minBackoff:      orDefault(cfg.MinBackoff, defaultMinBackoff),
 		maxBackoff:      orDefault(cfg.MaxBackoff, defaultMaxBackoff),
 		pollInterval:    orDefault(cfg.PollInterval, defaultPollInterval),
+		claimTimeout:    orDefault(cfg.claimTimeout, claimTimeout),
 		maxBody:         orDefault(cfg.MaxBodyBytes, defaultMaxBodyBytes),
 		log:             log,
 		onOutcome:       onOutcome,

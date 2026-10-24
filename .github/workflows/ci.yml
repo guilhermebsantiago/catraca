@@ -136,6 +136,51 @@ jobs:
           retention-days: 14
           if-no-files-found: error
 
+  faults:
+    name: Fault injection (Linux, Redis, Postgres)
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    services:
+      redis:
+        image: redis:7-alpine
+        ports:
+          - 6379:6379
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 5s
+          --health-timeout 3s
+          --health-retries 10
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_USER: catraca
+          POSTGRES_PASSWORD: catraca
+          POSTGRES_DB: catraca_test
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U catraca -d catraca_test"
+          --health-interval 5s
+          --health-timeout 3s
+          --health-retries 10
+    env:
+      CATRACA_TEST_FAULTS: "1"
+      CATRACA_TEST_POSTGRES_URL: postgres://catraca:catraca@localhost:5432/catraca_test?sslmode=disable
+      CATRACA_TEST_REDIS_URL: redis://localhost:6379/0
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: go.mod
+      # The scenarios of docs/faults.md: the server with Redis and Postgres
+      # behind a proxy that breaks them mid-run. Plain go test skips them,
+      # since they take minutes; they run one at a time, since each counts
+      # the process's goroutines.
+      - name: Fault scenarios
+        run: go test -race -count=1 -timeout 20m -run '^TestFault' -v ./internal/app/
+
   test-os:
     name: Test (${{ matrix.os }})
     strategy:

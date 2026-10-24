@@ -1,7 +1,6 @@
 package app_test
 
 import (
-	"net"
 	"net/http"
 	"regexp"
 	"strconv"
@@ -10,29 +9,19 @@ import (
 	"time"
 
 	"github.com/guilhermebsantiago/catraca/internal/engine"
+	"github.com/guilhermebsantiago/catraca/internal/faultproxy"
+	"github.com/guilhermebsantiago/catraca/internal/store/storetest"
 )
 
-// TestStoreBreakerWithRedisDown points the server at a "Redis" that closes
-// every connection it accepts: after a run of failed decisions the breaker
-// opens, later decisions skip the store, a key leak answers 503 with
-// Retry-After at once, and the metrics and the log say so.
+// TestStoreBreakerWithRedisDown points the server at a Redis behind a proxy
+// that resets every connection it accepts: after a run of failed decisions
+// the breaker opens, later decisions skip the store, a key leak answers 503
+// with Retry-After at once, and the metrics and the log say so.
 func TestStoreBreakerWithRedisDown(t *testing.T) {
 	t.Parallel()
-	ln, err := net.Listen("tcp", "127.0.0.1:0")
-	if err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() { ln.Close() })
-	go func() {
-		for {
-			c, err := ln.Accept()
-			if err != nil {
-				return
-			}
-			c.Close()
-		}
-	}()
-	h := newHarness(t, options{redisURL: "redis://" + ln.Addr().String() + "/0"})
+	proxy := faultproxy.New(t, storetest.Miniredis(t).Addr())
+	proxy.SetReset(true)
+	h := newHarness(t, options{redisURL: "redis://" + proxy.Addr() + "/0"})
 
 	const open = `catraca_store_breaker_state{state="open"} 1`
 	decisions := 0

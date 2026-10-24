@@ -16,6 +16,12 @@ import (
 // stays reserved, so it is not claimed twice while its attempt still runs.
 const leaseMargin = 30 * time.Second
 
+// claimTimeout bounds a claim of deliveries and a refresh of the backlog.
+// A query on a connection the network dropped without a reset waits until
+// TCP gives up on it, a quarter of an hour on Linux, and a claim that waits
+// stops every hook's deliveries, since one goroutine claims for them all.
+const claimTimeout = 10 * time.Second
+
 // Run delivers due deliveries until ctx is done, then waits for the attempts
 // in flight (each bounded by its hook's timeout) and for the outbox writes
 // Dispatch left running (bounded by EnqueueTimeout), and returns nil. Run
@@ -141,6 +147,8 @@ func (s *scheduler) fill(ctx context.Context) {
 // claim leases up to n of h's due deliveries, leaving those past its max age
 // to refresh.
 func (d *Dispatcher) claim(ctx context.Context, h Hook, n int) ([]audit.Delivery, error) {
+	ctx, cancel := context.WithTimeout(ctx, d.claimTimeout)
+	defer cancel()
 	now := d.now()
 	return d.outbox.Claim(ctx, audit.ClaimRequest{
 		Effect:      h.Name,
@@ -219,8 +227,12 @@ func (d *Dispatcher) maintain(ctx context.Context) {
 // Config.MaxAge, then counts what waits for each hook. Claim skips expired
 // deliveries, so they wait here instead of taking workers.
 func (d *Dispatcher) refresh(ctx context.Context) {
+	// ctx ends when Run stops, which is not worth a log line; qctx also
+	// ends at the timeout, which is.
+	qctx, cancel := context.WithTimeout(ctx, d.claimTimeout)
+	defer cancel()
 	now := d.now()
-	backlog, err := d.outbox.Backlog(ctx, now)
+	backlog, err := d.outbox.Backlog(qctx, now)
 	if err != nil {
 		if ctx.Err() == nil {
 			d.log.Error("hooks: count the outbox backlog", "err", err)
@@ -241,7 +253,7 @@ func (d *Dispatcher) refresh(ctx context.Context) {
 		if !b.Oldest.Before(cutoff) {
 			continue
 		}
-		n, err := d.outbox.Expire(ctx, b.Effect, cutoff, audit.Attempt{At: now, Error: reason})
+		n, err := d.outbox.Expire(qctx, b.Effect, cutoff, audit.Attempt{At: now, Error: reason})
 		if n > 0 {
 			expired = true
 			d.expired.Add(uint64(n))
@@ -254,7 +266,7 @@ func (d *Dispatcher) refresh(ctx context.Context) {
 		}
 	}
 	if expired {
-		if backlog, err = d.outbox.Backlog(ctx, now); err != nil {
+		if backlog, err = d.outbox.Backlog(qctx, now); err != nil {
 			if ctx.Err() == nil {
 				d.log.Error("hooks: count the outbox backlog", "err", err)
 			}

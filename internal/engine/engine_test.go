@@ -4,7 +4,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"net"
 	"slices"
 	"strings"
 	"sync"
@@ -16,9 +15,11 @@ import (
 
 	"github.com/guilhermebsantiago/catraca/internal/decision"
 	"github.com/guilhermebsantiago/catraca/internal/event"
+	"github.com/guilhermebsantiago/catraca/internal/faultproxy"
 	"github.com/guilhermebsantiago/catraca/internal/rules"
 	"github.com/guilhermebsantiago/catraca/internal/signal"
 	"github.com/guilhermebsantiago/catraca/internal/store"
+	"github.com/guilhermebsantiago/catraca/internal/store/storetest"
 )
 
 // fakeCatalog returns fixed signals and records what it was asked.
@@ -682,38 +683,13 @@ func TestDecideKeyLeakMarkDeadline(t *testing.T) {
 }
 
 // TestDecideKeyLeakWithRedisUnreachable runs key_leak events against the
-// Redis store the server opens, pointed at a server that accepts connections
-// and never answers, as when packets are dropped. Decide must answer at the
-// deadline, not after the client's read timeout.
+// Redis store the server opens, pointed at a Redis behind a blackhole that
+// accepts connections and never answers, as when packets are dropped.
+// Decide must answer at the deadline, not after the client's read timeout.
 func TestDecideKeyLeakWithRedisUnreachable(t *testing.T) {
-	ln, err := net.Listen("tcp", "127.0.0.1:0")
-	if err != nil {
-		t.Fatal(err)
-	}
-	var (
-		mu    sync.Mutex
-		conns []net.Conn
-	)
-	t.Cleanup(func() {
-		ln.Close()
-		mu.Lock()
-		defer mu.Unlock()
-		for _, c := range conns {
-			c.Close()
-		}
-	})
-	go func() {
-		for {
-			c, err := ln.Accept()
-			if err != nil {
-				return
-			}
-			mu.Lock()
-			conns = append(conns, c)
-			mu.Unlock()
-		}
-	}()
-	s, err := store.OpenRedis("redis://"+ln.Addr().String()+"/0", store.RedisOptions{})
+	proxy := faultproxy.New(t, storetest.Miniredis(t).Addr())
+	proxy.SetBlackhole(true)
+	s, err := store.OpenRedis("redis://"+proxy.Addr()+"/0", store.RedisOptions{})
 	if err != nil {
 		t.Fatal(err)
 	}

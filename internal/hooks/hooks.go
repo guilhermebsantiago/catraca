@@ -226,8 +226,11 @@ type Dispatcher struct {
 	names []string
 	log   *slog.Logger
 	// now is the clock for scheduling and signing; tests replace it.
-	now  func() time.Time
-	wake chan struct{}
+	now func() time.Time
+	// claimTimeout bounds each claim and each refresh of the backlog;
+	// tests shorten it.
+	claimTimeout time.Duration
+	wake         chan struct{}
 
 	// writes holds a token for each outbox write in flight, and writing
 	// counts them, so Run can wait for the writes Dispatch left running.
@@ -259,13 +262,14 @@ func New(outbox audit.Outbox, cfg Config) (*Dispatcher, error) {
 	}
 	cfg = cfg.withDefaults()
 	d := &Dispatcher{
-		outbox: outbox,
-		cfg:    cfg,
-		hooks:  make(map[string]Hook, len(cfg.Hooks)),
-		log:    cfg.Logger,
-		now:    time.Now,
-		wake:   make(chan struct{}, 1),
-		writes: make(chan struct{}, cfg.MaxWrites),
+		outbox:       outbox,
+		cfg:          cfg,
+		hooks:        make(map[string]Hook, len(cfg.Hooks)),
+		log:          cfg.Logger,
+		now:          time.Now,
+		claimTimeout: claimTimeout,
+		wake:         make(chan struct{}, 1),
+		writes:       make(chan struct{}, cfg.MaxWrites),
 	}
 	for _, h := range cfg.Hooks {
 		if err := validateHook(h); err != nil {

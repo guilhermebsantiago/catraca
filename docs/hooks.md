@@ -98,6 +98,11 @@ With Postgres, several Catraca processes deliver from the same outbox, each
 with its own workers, and never claim the same delivery twice; each hook's
 concurrency then applies per process.
 
+A claim, and each count of the backlog, gives up after 10 seconds, and the
+next poll tries again. So a query on a connection the network dropped
+without a reset, which would otherwise wait until TCP gives up on it, holds
+up delivery for 10 seconds rather than a quarter of an hour.
+
 ## The request
 
 ```http

@@ -122,6 +122,9 @@ type options struct {
 	gate string
 	// edit, when set, changes the configuration before it is parsed.
 	edit func(yaml string) string
+	// configure, when set, changes the configuration once it is parsed,
+	// for settings the YAML here leaves at their defaults.
+	configure func(*config.Config)
 }
 
 func newHarness(t *testing.T, opts options) *harness {
@@ -208,6 +211,9 @@ logging:
 	cfg, err := config.Parse([]byte(yaml), "", func(string) (string, bool) { return "", false })
 	if err != nil {
 		t.Fatalf("config: %v", err)
+	}
+	if opts.configure != nil {
+		opts.configure(cfg)
 	}
 	log := slog.New(slog.NewJSONHandler(h.logs, &slog.HandlerOptions{Level: slog.LevelDebug}))
 	h.app, err = app.New(context.Background(), cfg, app.Options{Logger: log, Version: "test"})
