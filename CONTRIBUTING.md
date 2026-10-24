@@ -27,7 +27,8 @@ go run golang.org/x/vuln/cmd/govulncheck@v1.9.0 ./...
   default `GOTOOLCHAIN=auto`, an older Go downloads it.
 - Redis and Postgres tests run when `CATRACA_TEST_REDIS_URL`,
   `CATRACA_TEST_REDIS_CLUSTER` and `CATRACA_TEST_POSTGRES_URL` are set; CI
-  runs them.
+  runs them. The fault-injection scenarios of [docs/faults.md](docs/faults.md)
+  take minutes and also need `CATRACA_TEST_FAULTS=1`.
 - A rule change comes with fixtures in `rules/*.test.yaml`
   (`catraca rules test`), and a starter rule ships in shadow mode.
 - A new signal goes in `signal.Specs()`, [docs/signals.md](docs/signals.md)
@@ -43,6 +44,7 @@ go run golang.org/x/vuln/cmd/govulncheck@v1.9.0 ./...
   and weekly: gofmt, `go mod tidy`, vet and staticcheck; govulncheck, after
   checking that CI and the Dockerfile build with the `go.mod` toolchain;
   tests on Linux against real Redis and Postgres, and on Windows and macOS;
+  the fault-injection scenarios against Redis and Postgres;
   the cross-compile; the Docker compose stack; a GoReleaser snapshot of the
   release, whose image must start and answer a decision; and the TypeScript
   examples.
