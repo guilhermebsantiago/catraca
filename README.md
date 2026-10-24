@@ -148,6 +148,7 @@ caveats: [docs/benchmark.md](docs/benchmark.md).
 - [Signals](docs/signals.md) · [Writing rules](docs/rules.md)
 - [Audit log and the precision gate](docs/audit.md) · [Hooks](docs/hooks.md)
 - [Feedback: SES, useSend](docs/feedback.md) · [GitHub secret scanning](docs/secret-scanning.md)
+- [Objectives and alerts](docs/slo.md) · [Tracing](docs/tracing.md)
 - [Benchmarks](docs/benchmark.md) · [Brand](docs/brand.md)
 
 ## Examples

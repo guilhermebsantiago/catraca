@@ -79,6 +79,37 @@ jobs:
       - name: govulncheck
         run: go run golang.org/x/vuln/cmd/govulncheck@v1.9.0 ./...
 
+  prometheus-rules:
+    name: Prometheus rules (promtool)
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    env:
+      # Pinned, with the archive's SHA-256 from the release's
+      # sha256sums.txt. Dependabot does not update it; CONTRIBUTING.md says
+      # how.
+      PROMETHEUS_VERSION: "3.15.0"
+      PROMETHEUS_SHA256: 2a542df32eac02ee17b9d844fb2aa1de00dafa5476579ba8a3ba862e9d572ea0
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Install promtool
+        run: |
+          archive="prometheus-${PROMETHEUS_VERSION}.linux-amd64.tar.gz"
+          curl -fsSL --retry 3 -o "$archive" \
+            "https://github.com/prometheus/prometheus/releases/download/v${PROMETHEUS_VERSION}/${archive}"
+          echo "${PROMETHEUS_SHA256}  ${archive}" | sha256sum --check --strict
+          tar -xzf "$archive" --strip-components=1 "prometheus-${PROMETHEUS_VERSION}.linux-amd64/promtool"
+          ./promtool --version
+      # The recording and alerting rules of the SLOs (docs/slo.md): valid,
+      # and doing what their unit tests say.
+      - name: promtool check rules
+        run: ./promtool check rules deploy/prometheus/rules.yaml
+      - name: promtool test rules
+        run: ./promtool test rules deploy/prometheus/rules.test.yaml
+      - name: Grafana dashboard
+        run: jq empty deploy/grafana/*.json
+
   test:
     name: Test (Linux, Redis, Postgres)
     runs-on: ubuntu-latest

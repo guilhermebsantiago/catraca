@@ -228,6 +228,8 @@ Catraca-Signature: t=1760529600,v1=3c9b1e...7d
 
 Redirects are not followed. A key that was already deleted should be
 answered with 404 unless the platform wants a decision recorded for it.
+With [tracing](tracing.md) on, the request also carries the W3C
+`traceparent` of the attempt, so the platform's spans join its trace.
 
 `token_sha256` is the lowercase hex SHA-256 of the token's UTF-8 bytes. The
 raw token is added as `"token"` only when `SendRawToken` is set, for a
@@ -338,11 +340,20 @@ instance:
 | `catraca_secret_scanning_reports{status}` | reports `pending` and `dead` |
 | `catraca_secret_scanning_oldest_pending_seconds` | how long ago the oldest pending report arrived; 0 when none is |
 
+And from the workers of each instance, histograms by outcome:
+
+| metric | |
+|---|---|
+| `catraca_secret_scanning_attempt_duration_seconds{outcome}` | how long an attempt took, resolving the token and deciding its key_leak: `leaked`, `not_found`, `retry`, `resolve_failed` or `decide_failed` |
+| `catraca_secret_scanning_report_latency_seconds{outcome}` | from when a report was queued (it arrived, or was requeued) to when it was done or given up |
+
 Alert on `catraca_secret_scanning_reports{status="dead"}` above 0: each
 dead report is a leaked key that may not have been acted on. Alert on
 `catraca_secret_scanning_oldest_pending_seconds` above a few minutes,
 which means the resolver or the store is failing, and on `retry` and
-`unavailable` rising.
+`unavailable` rising. [`deploy/prometheus/rules.yaml`](../deploy/prometheus/rules.yaml)
+pages on the first two, and records the [objective](slo.md#leak-processing)
+of 99% of reports done within 5 minutes.
 
 ## Operating the queue
 

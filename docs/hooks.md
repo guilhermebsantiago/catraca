@@ -140,6 +140,7 @@ queued on your side). Anything else is a failed attempt.
 | `Catraca-Signature` | `t=<unix seconds>,v1=<hex HMAC-SHA256>`; see below |
 | `Catraca-Idempotency-Key` | `<decision id>:<effect>`, the same on every attempt |
 | `Catraca-Attempt` | the attempt number, from 1 |
+| `traceparent` | with [tracing](tracing.md) on, the W3C trace context of the attempt, so your spans join its trace; each attempt starts a trace of its own |
 
 ## Verifying the signature
 
@@ -337,6 +338,9 @@ key makes safe.
 | `catraca_hooks_retries_total` | failed attempts that will be retried |
 | `catraca_hooks_dead_total` | deliveries given up, for any reason |
 | `catraca_hooks_expired_total` | deliveries given up without another attempt, past `max_age` or with no hook; also counted as dead |
+| `catraca_hooks_attempts_total{hook,outcome}` | attempts of each hook, by what became of the delivery: `delivered`, `retry` or `dead` |
+| `catraca_hooks_attempt_duration_seconds{hook}` | histogram: how long each request took, until the answer or the error |
+| `catraca_hooks_delivery_latency_seconds{hook}` | histogram: from when a delivery was queued, with its decision, to its `2xx`, retries and backoff included |
 | `catraca_hooks_pending{hook}` | deliveries waiting: due, in flight, or waiting out a backoff |
 | `catraca_hooks_pending_due{hook}` | of those, the ones already due: waiting for a worker, not for a backoff |
 | `catraca_hooks_oldest_pending_age_seconds{hook}` | how long the oldest pending delivery has waited since it was queued |
@@ -344,14 +348,18 @@ key makes safe.
 The `{hook}` gauges have a series for every configured hook, and one for each
 effect with pending deliveries and no hook. They are counted every 15
 seconds from the outbox, which every process shares, so with several
-processes aggregate them with `max`, not `sum`. The counters are per process.
+processes aggregate them with `max`, not `sum`. The counters and histograms
+are per process, with a series for every configured hook from the start.
 
 Alert on `catraca_hooks_dead_total` and `catraca_hooks_enqueue_errors_total`
 rising, and on `catraca_hooks_oldest_pending_age_seconds` past what an
-effect may wait. A `catraca_hooks_pending_due` that stays high means the
-workers cannot keep up; a `catraca_hooks_pending` that grows while
-`pending_due` stays low means the receiver is failing and deliveries wait
-out their backoff. `catraca outbox stats` shows the same per hook, with the
+effect may wait; [`deploy/prometheus/rules.yaml`](../deploy/prometheus/rules.yaml)
+does, and holds effects to an [objective](slo.md#webhook-freshness): 99%
+delivered within a minute. A `catraca_hooks_pending_due` that stays high
+means the workers cannot keep up; a `catraca_hooks_pending` that grows
+while `pending_due` stays low means the receiver is failing and deliveries
+wait out their backoff, which `catraca_hooks_attempts_total{outcome="retry"}`
+shows per hook. `catraca outbox stats` shows the same per hook, with the
 dead and delivered counts.
 
 ## Idempotency
