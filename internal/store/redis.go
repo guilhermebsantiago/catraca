@@ -430,7 +430,7 @@ func (r *Redis) keys(o *op) []string {
 		return []string{r.prefix + "s:" + o.key}
 	case opFirstSeen:
 		return []string{r.prefix + "f:" + o.key}
-	default: // opSet, opGet
+	default: // opSet, opGet, opDelete
 		return []string{r.prefix + "v:" + o.key}
 	}
 }
@@ -466,6 +466,8 @@ func (r *Redis) encode(c *scriptCall, o *op, keys []string) {
 	case opGet:
 		c.args = append(c.args, "G", c.key(keys[0]))
 		c.reads = append(c.reads, o)
+	case opDelete:
+		c.args = append(c.args, "X", c.key(keys[0]))
 	}
 }
 

@@ -273,6 +273,9 @@ func (s *memShard) apply(o *op, now, horizon int64) {
 		if e := s.values[o.key]; e != nil && e.expires > now {
 			o.strs.val, o.strs.found = e.v, true
 		}
+
+	case opDelete:
+		delete(s.values, o.key)
 	}
 }
 

@@ -98,6 +98,7 @@ const (
 	opFirstSeen
 	opSet
 	opGet
+	opDelete
 )
 
 type op struct {
@@ -271,6 +272,13 @@ func (b *Batch) Get(key string) *StringResult {
 		b.ops = append(b.ops, op{kind: opGet, key: key, strs: r})
 	}
 	return r
+}
+
+// Delete removes the value stored under key by Set, if any.
+func (b *Batch) Delete(key string) {
+	if b.checkKey("Delete", key) {
+		b.ops = append(b.ops, op{kind: opDelete, key: key})
+	}
 }
 
 // minTime and maxTime bound the times that fit in Unix nanoseconds.
