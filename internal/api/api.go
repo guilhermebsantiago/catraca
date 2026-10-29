@@ -5,9 +5,9 @@
 //
 // Every /v1 route needs a bearer token with the route's scope, except the
 // feedback and secret scanning routes, which authenticate each request by
-// its signature. Every
-// response carries an X-Request-Id, every request is logged and measured,
-// and errors are JSON: {"error": {"code": "...", "message": "..."}}.
+// its signature. Every response carries an X-Request-Id, every request is
+// logged and measured, and errors are JSON:
+// {"error": {"code": "...", "message": "..."}}.
 package api
 
 import (
@@ -202,16 +202,15 @@ type Server struct {
 	mux *http.ServeMux
 	// admin serves health and metrics, which mux serves too unless
 	// Options.SeparateAdmin is set.
-	admin     *http.ServeMux
-	decider   Decider
-	rules     RuleSource
-	reloadFn  func() (*rules.Ruleset, error)
-	rulesetFn func() RulesetStatus
-	audit     AuditLog
-	gate      precision.Gate
-	tokens    []tokenHash
-	// routeScopes is the scope of each route that takes a token.
-	routeScopes  map[string]Scope
+	admin        *http.ServeMux
+	decider      Decider
+	rules        RuleSource
+	reloadFn     func() (*rules.Ruleset, error)
+	rulesetFn    func() RulesetStatus
+	audit        AuditLog
+	gate         precision.Gate
+	tokens       []tokenHash
+	routeScopes  map[string]Scope // by route pattern, for the routes that take a token
 	checks       []Check
 	dependencies func() map[string]DependencyStatus
 	log          *slog.Logger

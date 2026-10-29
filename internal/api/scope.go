@@ -7,8 +7,8 @@ import (
 )
 
 // Scope is what a token may do: each /v1 route that takes a token needs one
-// scope, and a token is accepted on the routes of the scopes it has. See
-// "Authentication" in docs/api.md for the route of each.
+// scope, and a token is accepted on the routes of the scopes it has. The
+// scopes paragraph of docs/api.md has the scope of each route.
 //
 // To add a scope, add it here and to Scopes, give it to the routes that
 // need it in New, and list it in config.TokenScopes and the route table of

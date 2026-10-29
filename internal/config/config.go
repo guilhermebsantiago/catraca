@@ -145,7 +145,7 @@ type Token struct {
 }
 
 // TokenScopes are the scopes a token may list, as api.Scopes names them.
-// See "Authentication" in docs/api.md for the routes of each.
+// The scopes paragraph of docs/api.md has the routes of each.
 var TokenScopes = []string{"decide", "read", "label", "admin"}
 
 // Rules configures the ruleset.
