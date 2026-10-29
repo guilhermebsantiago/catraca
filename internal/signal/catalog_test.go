@@ -119,6 +119,71 @@ func TestRatesWithZeroSends(t *testing.T) {
 	})
 }
 
+// TestRatesPerRecipient checks that rates divide by recipients, not sends:
+// providers report a bounce or complaint per recipient, so one send to 50
+// addresses that all bounce is half of 100 recipients, not 25 of 2 sends.
+func TestRatesPerRecipient(t *testing.T) {
+	to := func(n int) func(*event.Event) {
+		return func(e *event.Event) {
+			e.To = make([]string, n)
+			for i := range e.To {
+				e.To[i] = fmt.Sprintf("r%d@inbox.example", i)
+			}
+		}
+	}
+	recipient := func(i int) func(*event.Event) {
+		return func(e *event.Event) { e.Feedback.Recipient = fmt.Sprintf("r%d@inbox.example", i) }
+	}
+	eachBackend(t, func(t *testing.T, c signal.Catalog) {
+		observe(t, c, send(0, to(50)))
+		observe(t, c, send(time.Second, to(50)))
+		for i := range 50 {
+			observe(t, c, feedback(time.Minute, event.Bounce, "Permanent", recipient(i)))
+		}
+		set := observe(t, c, feedback(2*time.Minute, event.Complaint, "", recipient(7)))
+		want(t, "a batch whose first send all bounced", set.Account, map[string]any{
+			"sends_24h": int64(2), "recipients_24h": int64(100), "recipients_7d": int64(100),
+			"bounces_24h": int64(50), "hard_bounces_24h": int64(50), "complaints_24h": int64(1),
+			"bounce_rate_24h": 0.5, "hard_bounce_rate_24h": 0.5, "complaint_rate_24h": 0.01,
+			"bounces_7d": int64(50), "hard_bounces_7d": int64(50), "complaints_7d": int64(1),
+			"bounce_rate_7d": 0.5, "hard_bounce_rate_7d": 0.5, "complaint_rate_7d": 0.01,
+		})
+
+		set = observe(t, c, send(2*day, to(1)))
+		want(t, "two days later", set.Account, map[string]any{
+			"sends_24h": int64(1), "recipients_24h": int64(1), "recipients_7d": int64(101),
+			"bounces_24h": int64(0), "complaints_24h": int64(0),
+			"bounce_rate_24h": 0.0, "hard_bounce_rate_24h": 0.0, "complaint_rate_24h": 0.0,
+			"bounces_7d": int64(50), "hard_bounces_7d": int64(50), "complaints_7d": int64(1),
+			"bounce_rate_7d": 50.0 / 101, "hard_bounce_rate_7d": 50.0 / 101, "complaint_rate_7d": 1.0 / 101,
+		})
+
+		set = observe(t, c, send(week+time.Hour, to(1)))
+		want(t, "a week later", set.Account, map[string]any{
+			"recipients_7d": int64(2), "bounces_7d": int64(0), "hard_bounces_7d": int64(0), "complaints_7d": int64(0),
+			"bounce_rate_7d": 0.0, "complaint_rate_7d": 0.0,
+		})
+	})
+}
+
+// TestRatesWithoutRecipients checks that sends without to still count in the
+// denominator, one each, so a platform that leaves to out gets rates per send.
+func TestRatesWithoutRecipients(t *testing.T) {
+	noTo := func(e *event.Event) { e.To = nil }
+	eachBackend(t, func(t *testing.T, c signal.Catalog) {
+		for i := range 4 {
+			observe(t, c, send(time.Duration(i)*time.Second, noTo))
+		}
+		observe(t, c, feedback(time.Minute, event.Complaint, ""))
+		set := observe(t, c, feedback(time.Minute, event.Bounce, "permanent"))
+		want(t, "sends without to", set.Account, map[string]any{
+			"sends_24h": int64(4), "recipients_24h": int64(0), "recipients_7d": int64(0),
+			"complaint_rate_24h": 0.25, "hard_bounce_rate_24h": 0.25,
+			"complaint_rate_7d": 0.25, "hard_bounce_rate_7d": 0.25,
+		})
+	})
+}
+
 func TestVolumeRatio(t *testing.T) {
 	eachBackend(t, func(t *testing.T, c signal.Catalog) {
 		set := observe(t, c, send(0))

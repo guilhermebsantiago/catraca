@@ -183,10 +183,11 @@ func (c *catalog) Close() error { return c.store.Close() }
 
 type accountReads struct {
 	sends1m, sends1h, sends24h, sends7d                      *store.IntResult
-	recipients1h, recipients24h                              *store.IntResult
+	recipients1h, recipients24h, recipients7d                *store.IntResult
 	recipientDomains1h, recipientDomains24h                  *store.IntResult
 	ips24h, keys24h                                          *store.IntResult
 	bounces24h, hardBounces24h, complaints24h, deliveries24h *store.IntResult
+	bounces7d, hardBounces7d, complaints7d                   *store.IntResult
 	firstSeen                                                *store.TimeResult
 	createdAt                                                *store.StringResult
 	seenIP                                                   *store.BoolResult // nil without an IP
@@ -220,6 +221,7 @@ func (c *catalog) account(b *store.Batch, ev event.Event, f facts) *accountReads
 		if n := int64(len(ev.To)); n > 0 {
 			b.Incr(rcpts, time.Hour, at, n)
 			b.Incr(rcpts, day, at, n)
+			b.Incr(rcpts, week, at, n)
 		}
 		for _, d := range f.toDomains {
 			b.AddDistinct(domains, d, time.Hour, at)
@@ -236,11 +238,14 @@ func (c *catalog) account(b *store.Batch, ev event.Event, f facts) *accountReads
 			switch fb.Kind {
 			case event.Bounce:
 				b.Incr(bounces, day, at, 1)
+				b.Incr(bounces, week, at, 1)
 				if strings.EqualFold(fb.BounceType, "permanent") {
 					b.Incr(hard, day, at, 1)
+					b.Incr(hard, week, at, 1)
 				}
 			case event.Complaint:
 				b.Incr(complaints, day, at, 1)
+				b.Incr(complaints, week, at, 1)
 			case event.Delivery:
 				b.Incr(deliveries, day, at, 1)
 			}
@@ -257,6 +262,7 @@ func (c *catalog) account(b *store.Batch, ev event.Event, f facts) *accountReads
 		sends7d:             b.Count(sends, week, at),
 		recipients1h:        b.Count(rcpts, time.Hour, at),
 		recipients24h:       b.Count(rcpts, day, at),
+		recipients7d:        b.Count(rcpts, week, at),
 		recipientDomains1h:  b.Distinct(domains, time.Hour, at),
 		recipientDomains24h: b.Distinct(domains, day, at),
 		ips24h:              b.Distinct(ips, day, at),
@@ -265,6 +271,9 @@ func (c *catalog) account(b *store.Batch, ev event.Event, f facts) *accountReads
 		hardBounces24h:      b.Count(hard, day, at),
 		complaints24h:       b.Count(complaints, day, at),
 		deliveries24h:       b.Count(deliveries, day, at),
+		bounces7d:           b.Count(bounces, week, at),
+		hardBounces7d:       b.Count(hard, week, at),
+		complaints7d:        b.Count(complaints, week, at),
 		firstSeen:           b.FirstSeen(accountKey("first_seen", id), at, c.retention),
 		createdAt:           b.Get(created),
 	}
@@ -281,6 +290,10 @@ func (r *accountReads) signals(at time.Time) map[string]any {
 		return nil
 	}
 	sends24h := r.sends24h.Val()
+	// Feedback is counted per recipient, so rates are per recipient too; see
+	// recipientsOrSends.
+	of24h := recipientsOrSends(r.recipients24h.Val(), sends24h)
+	of7d := recipientsOrSends(r.recipients7d.Val(), r.sends7d.Val())
 	baseline := float64(r.sends7d.Val()) / week.Hours()
 	origin := r.firstSeen.Val()
 	if ms, err := strconv.ParseInt(r.createdAt.Val(), 10, 64); r.createdAt.Found() && err == nil {
@@ -293,6 +306,7 @@ func (r *accountReads) signals(at time.Time) map[string]any {
 		"sends_7d":                       r.sends7d.Val(),
 		"recipients_1h":                  r.recipients1h.Val(),
 		"recipients_24h":                 r.recipients24h.Val(),
+		"recipients_7d":                  r.recipients7d.Val(),
 		"distinct_recipient_domains_1h":  r.recipientDomains1h.Val(),
 		"distinct_recipient_domains_24h": r.recipientDomains24h.Val(),
 		"distinct_ips_24h":               r.ips24h.Val(),
@@ -301,9 +315,15 @@ func (r *accountReads) signals(at time.Time) map[string]any {
 		"hard_bounces_24h":               r.hardBounces24h.Val(),
 		"complaints_24h":                 r.complaints24h.Val(),
 		"deliveries_24h":                 r.deliveries24h.Val(),
-		"bounce_rate_24h":                rate(r.bounces24h.Val(), sends24h),
-		"hard_bounce_rate_24h":           rate(r.hardBounces24h.Val(), sends24h),
-		"complaint_rate_24h":             rate(r.complaints24h.Val(), sends24h),
+		"bounce_rate_24h":                rate(r.bounces24h.Val(), of24h),
+		"hard_bounce_rate_24h":           rate(r.hardBounces24h.Val(), of24h),
+		"complaint_rate_24h":             rate(r.complaints24h.Val(), of24h),
+		"bounces_7d":                     r.bounces7d.Val(),
+		"hard_bounces_7d":                r.hardBounces7d.Val(),
+		"complaints_7d":                  r.complaints7d.Val(),
+		"bounce_rate_7d":                 rate(r.bounces7d.Val(), of7d),
+		"hard_bounce_rate_7d":            rate(r.hardBounces7d.Val(), of7d),
+		"complaint_rate_7d":              rate(r.complaints7d.Val(), of7d),
 		"age_hours":                      ageHours(at, origin),
 		"hourly_baseline_7d":             baseline,
 		"volume_ratio_1h":                float64(r.sends1h.Val()) / max(baseline, 1),
@@ -489,8 +509,24 @@ func (r *domainReads) signals() map[string]any {
 	}
 }
 
-// rate returns n / max(of, 1), capped at 1: feedback can outnumber the sends
-// in the window when it is about older sends.
+// recipientsOrSends returns the denominator of the feedback rates: the
+// recipients of the window's sends, or its sends when they are more.
+//
+// Feedback providers report one bounce or complaint per recipient, so a send
+// to 50 addresses that all bounce is 50 bounces, and dividing by sends would
+// read it as 5,000%. Per recipient is also how the thresholds rules compare
+// against are defined: Amazon SES counts every recipient as an email sent,
+// and Gmail and Yahoo count a message delivered to each inbox. A send without
+// to counts no recipients, yet it reached someone, so a platform that leaves
+// to out gets its sends as the denominator, as before; one that sends to on
+// some events only gets the larger of the two, which leans toward a higher
+// rate.
+func recipientsOrSends(recipients, sends int64) int64 {
+	return max(recipients, sends)
+}
+
+// rate returns n / max(of, 1), capped at 1: feedback can outnumber the
+// recipients in the window when it is about older sends.
 func rate(n, of int64) float64 {
 	return min(float64(n)/float64(max(of, 1)), 1)
 }
