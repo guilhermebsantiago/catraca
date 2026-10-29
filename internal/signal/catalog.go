@@ -189,6 +189,7 @@ type accountReads struct {
 	bounces24h, hardBounces24h, complaints24h, deliveries24h *store.IntResult
 	firstSeen                                                *store.TimeResult
 	createdAt                                                *store.StringResult
+	state                                                    *store.StringResult
 	seenIP                                                   *store.BoolResult // nil without an IP
 	ipSends24h, ipSends7d                                    *store.IntResult  // nil without an IP
 }
@@ -267,6 +268,7 @@ func (c *catalog) account(b *store.Batch, ev event.Event, f facts) *accountReads
 		deliveries24h:       b.Count(deliveries, day, at),
 		firstSeen:           b.FirstSeen(accountKey("first_seen", id), at, c.retention),
 		createdAt:           b.Get(created),
+		state:               b.Get(accountKey("state", id)),
 	}
 	if f.ip != "" {
 		r.seenIP = b.SeenWithin(accountKey("seen_ips", id), f.ip, newIPLookback, at)
@@ -307,6 +309,11 @@ func (r *accountReads) signals(at time.Time) map[string]any {
 		"age_hours":                      ageHours(at, origin),
 		"hourly_baseline_7d":             baseline,
 		"volume_ratio_1h":                float64(r.sends1h.Val()) / max(baseline, 1),
+	}
+	// An unreadable state is left out, so rules that read it follow
+	// on_error rather than take the account for active.
+	if st, ok := parseAccountState(r.state, time.Now()); ok {
+		m["state"] = st.State
 	}
 	if r.seenIP != nil {
 		m["new_ip"] = !r.seenIP.Val()

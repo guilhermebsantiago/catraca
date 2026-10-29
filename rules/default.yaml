@@ -6,8 +6,11 @@
 # (`catraca rules gate`). The thresholds below are starting points; tune them
 # with `catraca replay` on your own traffic.
 #
-# The one exception is leaked-key-send: a key reported leaked is a fact, not
-# a guess, so it enforces from day one.
+# The exceptions are leaked-key-send, account-suspended and account-review: a
+# key reported leaked is a fact, and an account state is an operator's
+# explicit decision, not a guess, so they enforce from day one. Accounts an
+# operator marked trusted skip the volume heuristics, whose false positives
+# are large legitimate senders; the reputation rules still apply to them.
 #
 # How to write rules: docs/rules.md. Fixtures: default.test.yaml.
 version: 1
@@ -64,12 +67,54 @@ rules:
         labeled matches to clear the precision gate.
       at: 2026-10-15
 
+  - id: account-suspended
+    description: >-
+      Blocks every send from an account an operator suspended with PUT
+      /v1/accounts/{id}/state, until the state expires or is reset.
+    when: event.type == "send" && event.account_id != "" && account.state == "suspended"
+    action: block
+    mode: enforce
+    # Fails open: while the store is down the state cannot be read, and a
+    # store outage must never block every send.
+    on_error: open
+    reason: This account is suspended
+    tags: [account-state]
+    override:
+      by: catraca
+      reason: >-
+        An operator suspended the account through the API: the rule carries
+        out a decision a person made, not a guess, so there are no false
+        positives for the precision gate to measure.
+      at: 2026-10-29
+
+  - id: account-review
+    description: >-
+      Holds every send from an account an operator put under review with PUT
+      /v1/accounts/{id}/state, until the state expires or is reset.
+    when: event.type == "send" && event.account_id != "" && account.state == "review"
+    action: hold
+    mode: enforce
+    on_error: open
+    reason: This account is under review; its sends are held until it is cleared
+    tags: [account-state]
+    override:
+      by: catraca
+      reason: >-
+        An operator put the account under review through the API: the rule
+        carries out a decision a person made, not a guess, so there are no
+        false positives for the precision gate to measure.
+      at: 2026-10-29
+
   - id: new-account-burst
     description: >-
       Throttles accounts younger than a day that send more than 100 emails in
       a minute. Throwaway signups blast as soon as they can; real new
       customers integrate, test and ramp up.
-    when: event.type == "send" && account.age_hours < 24 && account.sends_1m > 100
+    when: >-
+      event.type == "send"
+      && account.age_hours < 24
+      && account.sends_1m > 100
+      && account.state != "trusted"
     action: throttle
     retry_after: 60s
     reason: New account sending at burst volume; slow down and retry later
@@ -136,6 +181,7 @@ rules:
       && account.sends_1h >= 200
       && account.volume_ratio_1h > 10
       && account.recent_ip
+      && account.state != "trusted"
     action: hold
     reason: Sudden volume spike from a new IP on an established account
     tags: [account-takeover]
@@ -149,6 +195,7 @@ rules:
       event.type == "send"
       && account.age_hours < 72
       && any_in_list("url_shorteners", event.link_domains)
+      && account.state != "trusted"
     action: flag
     reason: New account linking through a URL shortener
     tags: [content, new-account]
@@ -180,6 +227,7 @@ rules:
       && account.age_hours < 168
       && account.recipients_1h >= 200
       && ratio(account.distinct_recipient_domains_1h, account.recipients_1h) > 0.5
+      && account.state != "trusted"
     action: hold
     reason: New account sending to an unusually wide spread of recipient domains
     tags: [list-quality, new-account]

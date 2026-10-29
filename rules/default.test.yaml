@@ -45,6 +45,7 @@ base:
     ip_sends_24h: 450
     ip_sends_7d: 3000
     recent_ip: false
+    state: active
   key:
     sends_1m: 2
     sends_1h: 40
@@ -109,6 +110,8 @@ cases:
       matches: []
       errors:
         - leaked-key-send
+        - account-suspended
+        - account-review
         - new-account-burst
         - complaint-rate-high
         - hard-bounce-rate-high
@@ -129,6 +132,8 @@ cases:
       enforced: [leaked-key-send]
       shadow: []
       errors:
+        - account-suspended
+        - account-review
         - new-account-burst
         - complaint-rate-high
         - hard-bounce-rate-high
@@ -143,6 +148,89 @@ cases:
     expect:
       action: block
       matches: [leaked-key-send, new-account-burst]
+
+  # account-suspended, account-review and trusted accounts
+
+  - name: a send from a suspended account is blocked
+    signals:
+      account: {state: suspended}
+    expect:
+      action: block
+      enforced: [account-suspended]
+      shadow: []
+
+  - name: a send from an account under review is held
+    signals:
+      account: {state: review}
+    expect:
+      action: hold
+      enforced: [account-review]
+      shadow: []
+
+  - name: a suspended account outranks a burst whatever the burst rule's mode
+    signals:
+      account: {state: suspended, age_hours: 3, sends_1m: 250}
+    expect:
+      action: block
+      matches: [account-suspended, new-account-burst]
+
+  - name: a login from a suspended account is not a send
+    signals:
+      event: {type: account, account_action: login}
+      account: {state: suspended}
+    expect:
+      action: allow
+      matches: []
+
+  # The heuristics have no guard and fail open; the state rules are guarded.
+  - name: a send without an account does not read the account state
+    signals:
+      event: {account_id: ""}
+      account: null
+    expect:
+      action: allow
+      matches: []
+      errors:
+        - new-account-burst
+        - complaint-rate-high
+        - hard-bounce-rate-high
+        - account-takeover-volume
+        - recipient-domain-spray
+
+  - name: an unreadable account state fails open
+    signals:
+      account: {state: null}
+    expect:
+      action: allow
+      matches: []
+      errors: [account-suspended, account-review]
+
+  - name: a trusted account skips the volume heuristics
+    signals:
+      account:
+        state: trusted
+        age_hours: 3
+        sends_1m: 250
+        sends_1h: 400
+        recipients_1h: 400
+        distinct_recipient_domains_1h: 300
+      event: {link_domains: [bit.ly]}
+    expect:
+      action: allow
+      matches: []
+
+  - name: a trusted account still meets the reputation rules
+    signals:
+      account: {state: trusted, sends_24h: 2000, complaint_rate_24h: 0.01}
+    expect:
+      matches: [complaint-rate-high]
+
+  - name: a trusted or active account is neither blocked nor held for its state
+    signals:
+      account: {state: trusted}
+    expect:
+      action: allow
+      matches: []
 
   # new-account-burst
 

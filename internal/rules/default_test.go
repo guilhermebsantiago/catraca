@@ -43,14 +43,21 @@ func TestDefaultRulesetStartsInShadow(t *testing.T) {
 		if r.Description == "" {
 			t.Errorf("rule %s has no description", r.ID)
 		}
-		if r.ID == "leaked-key-send" {
+		switch r.ID {
+		case "leaked-key-send":
 			if r.Mode != "enforce" || r.OnError != "open" || !slices.Equal(r.Effects, []string{"revoke_key"}) || r.Override == nil {
 				t.Errorf("leaked-key-send = %+v, want enforce, on_error open, effect revoke_key and an override", r)
 			}
 			continue
+		case "account-suspended", "account-review":
+			// They carry out an operator's decision about the account.
+			if r.Mode != "enforce" || r.OnError != "open" || r.Override == nil {
+				t.Errorf("%s = %+v, want enforce, on_error open and an override", r.ID, r)
+			}
+			continue
 		}
 		if r.Mode != "shadow" {
-			t.Errorf("rule %s is %s; every default rule but leaked-key-send starts in shadow", r.ID, r.Mode)
+			t.Errorf("rule %s is %s; every default rule but leaked-key-send and the account state rules starts in shadow", r.ID, r.Mode)
 		}
 	}
 }
