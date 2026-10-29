@@ -79,11 +79,12 @@ rules:
     description: >-
       Holds sends from accounts whose spam complaint rate over the last 24
       hours is above 0.3%, the ceiling Gmail and Yahoo set for bulk senders.
-      It needs at least 1,000 sends in the window so that a couple of
-      complaints on a small account do not trip it.
+      The rate is per recipient, and the rule needs at least 1,000
+      recipients in the window, or 1,000 sends when sends carry no to list,
+      so that a couple of complaints on a small account do not trip it.
     when: >-
       event.type == "send"
-      && account.sends_24h >= 1000
+      && (account.recipients_24h >= 1000 || account.sends_24h >= 1000)
       && account.complaint_rate_24h > 0.003
     action: hold
     reason: Spam complaint rate above 0.3% in the last 24 hours
@@ -94,10 +95,12 @@ rules:
       Holds sends from accounts whose hard bounce rate over the last 24 hours
       is above 5%, the rate at which Amazon SES puts an account under review.
       Hard bounces are addresses that do not exist, the mark of a bought,
-      scraped or stale list. It needs at least 500 sends in the window.
+      scraped or stale list. The rate is per recipient, and the rule needs
+      at least 500 recipients in the window, or 500 sends when sends carry
+      no to list.
     when: >-
       event.type == "send"
-      && account.sends_24h >= 500
+      && (account.recipients_24h >= 500 || account.sends_24h >= 500)
       && account.hard_bounce_rate_24h > 0.05
     action: hold
     reason: Hard bounce rate above 5% in the last 24 hours; the recipient list looks bought or stale

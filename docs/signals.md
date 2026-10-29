@@ -140,6 +140,7 @@ The account that sent the event.
 | `sends_7d` | int | 7 d | send events |
 | `recipients_1h` | int | 1 h | `to` addresses over all send events |
 | `recipients_24h` | int | 24 h | `to` addresses over all send events |
+| `recipients_7d` | int | 7 d | `to` addresses over all send events |
 | `distinct_recipient_domains_1h` | int | 1 h | distinct `to` domains of send events |
 | `distinct_recipient_domains_24h` | int | 24 h | distinct `to` domains of send events |
 | `distinct_ips_24h` | int | 24 h | distinct IPs of send events |
@@ -148,9 +149,15 @@ The account that sent the event.
 | `hard_bounces_24h` | int | 24 h | bounce feedback events with bounce type `permanent` (in any case) |
 | `complaints_24h` | int | 24 h | complaint feedback events |
 | `deliveries_24h` | int | 24 h | delivery feedback events |
-| `bounce_rate_24h` | double | 24 h | `bounces_24h / max(sends_24h, 1)`, at most 1 |
-| `hard_bounce_rate_24h` | double | 24 h | `hard_bounces_24h / max(sends_24h, 1)`, at most 1 |
-| `complaint_rate_24h` | double | 24 h | `complaints_24h / max(sends_24h, 1)`, at most 1 |
+| `bounce_rate_24h` | double | 24 h | `bounces_24h / max(recipients_24h, sends_24h, 1)`, at most 1 |
+| `hard_bounce_rate_24h` | double | 24 h | `hard_bounces_24h / max(recipients_24h, sends_24h, 1)`, at most 1 |
+| `complaint_rate_24h` | double | 24 h | `complaints_24h / max(recipients_24h, sends_24h, 1)`, at most 1 |
+| `bounces_7d` | int | 7 d | bounce feedback events |
+| `hard_bounces_7d` | int | 7 d | bounce feedback events with bounce type `permanent` (in any case) |
+| `complaints_7d` | int | 7 d | complaint feedback events |
+| `bounce_rate_7d` | double | 7 d | `bounces_7d / max(recipients_7d, sends_7d, 1)`, at most 1 |
+| `hard_bounce_rate_7d` | double | 7 d | `hard_bounces_7d / max(recipients_7d, sends_7d, 1)`, at most 1 |
+| `complaint_rate_7d` | double | 7 d | `complaints_7d / max(recipients_7d, sends_7d, 1)`, at most 1 |
 | `age_hours` | double | | hours since the account was created, or since it was first seen when the creation time is unknown |
 | `hourly_baseline_7d` | double | 7 d | `sends_7d / 168`: the average sends per hour over the week |
 | `volume_ratio_1h` | double | 1 h | `sends_1h / max(hourly_baseline_7d, 1)`: how this hour compares to the weekly average |
@@ -159,9 +166,33 @@ The account that sent the event.
 | `ip_sends_7d` | int | 7 d | send events of the account from this IP |
 | `recent_ip` | bool | 24 h, 7 d | true when no send event of the account came from this IP between 24 hours and 7 days ago: `ip_sends_7d == ip_sends_24h` |
 
-Rates are capped at 1 because feedback about sends older than 24 hours can
-outnumber the sends in the window. Use `ratio(account.bounces_24h,
-account.sends_24h)` for the uncapped value.
+### Feedback rates
+
+Rates are per recipient. Feedback providers report a bounce or a complaint
+for each recipient it is about, and the feedback endpoints turn each into one
+feedback event, so a send to 50 addresses that all bounce counts 50 bounces.
+Dividing by send events would read that as 5,000%; dividing by recipients
+reads it as 100%. Per recipient is also how the thresholds rules compare
+against are defined: Amazon SES counts each recipient as one email when it
+computes an account's bounce and complaint rates, and the 0.3% spam rate
+ceiling of Gmail and Yahoo is over messages delivered to their users'
+inboxes, one per recipient.
+
+A send event without `to` counts no recipients but reached at least one, so
+the denominator is the larger of recipients and send events. A platform that
+always sends `to` gets rates per recipient; one that never does gets rates
+per send event, the best it can tell. One that sends `to` on some events
+only gets the larger of the two counts, which undercounts recipients and so
+errs toward a higher rate. Gate rate rules on the same denominator, so that
+batch senders reach the minimum volume as soon as their recipients do:
+`(account.recipients_24h >= 1000 || account.sends_24h >= 1000)`.
+
+Rates are capped at 1 because feedback about sends older than the window can
+outnumber the recipients in it. When sends carry `to`, use
+`ratio(account.bounces_24h, account.recipients_24h)` for the uncapped value.
+
+The 7 day rates smooth out a bad day and catch an account that stays just
+under a 24 hour threshold; the 24 hour rates react sooner.
 
 The creation time comes from `account.created_at` on any event; the latest one
 sent wins. The first-seen time is the earliest event time seen for the
@@ -253,7 +284,9 @@ rules:
     reason: Established account sending far above its baseline from a new IP
 
   - id: complaint-rate
-    when: account.sends_24h >= 1000 && account.complaint_rate_24h > 0.003
+    when: >
+      (account.recipients_24h >= 1000 || account.sends_24h >= 1000) &&
+      account.complaint_rate_24h > 0.003
     action: flag
     reason: Complaint rate above 0.3% over the last day
 

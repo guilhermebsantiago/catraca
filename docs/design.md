@@ -90,13 +90,15 @@ Rates are `float64` in [0, 1]; counts are `int64`; ages are hours as
 | name | meaning |
 |---|---|
 | sends_1m, sends_1h, sends_24h, sends_7d | send events |
-| recipients_1h, recipients_24h | sum of recipients |
+| recipients_1h, recipients_24h, recipients_7d | sum of recipients |
 | distinct_recipient_domains_1h, distinct_recipient_domains_24h | distinct To domains |
 | distinct_ips_24h, distinct_keys_24h | distinct IPs / API keys used |
 | bounces_24h, hard_bounces_24h, complaints_24h, deliveries_24h | feedback events |
-| bounce_rate_24h | bounces_24h / max(sends_24h, 1) |
-| hard_bounce_rate_24h | hard_bounces_24h / max(sends_24h, 1) |
-| complaint_rate_24h | complaints_24h / max(sends_24h, 1) |
+| bounces_7d, hard_bounces_7d, complaints_7d | feedback events |
+| bounce_rate_24h | bounces_24h / max(recipients_24h, sends_24h, 1) |
+| hard_bounce_rate_24h | hard_bounces_24h / max(recipients_24h, sends_24h, 1) |
+| complaint_rate_24h | complaints_24h / max(recipients_24h, sends_24h, 1) |
+| bounce_rate_7d, hard_bounce_rate_7d, complaint_rate_7d | the same over 7 days |
 | age_hours | since AccountInfo.CreatedAt, else since first seen |
 | hourly_baseline_7d | sends_7d / 168 |
 | volume_ratio_1h | sends_1h / max(hourly_baseline_7d, 1) |

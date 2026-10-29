@@ -8,6 +8,7 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
+	"time"
 )
 
 func ptr[T any](v T) *T { return &v }
@@ -122,6 +123,7 @@ func newTestSES(t *testing.T, cfg SESConfig) http.Handler {
 	if err != nil {
 		t.Fatal(err)
 	}
+	h.(*sesHandler).now = func() time.Time { return testSNSNow }
 	return h
 }
 
@@ -234,6 +236,64 @@ func subscription(t *testing.T, typ, subscribeURL string) *snsMessage {
 	}
 	testSigner().sign(t, m, "1")
 	return m
+}
+
+func TestSESRefusesOldMessages(t *testing.T) {
+	published := time.Date(2026, 10, 15, 12, 0, 0, 0, time.UTC)
+	tests := []struct {
+		name   string
+		maxAge time.Duration
+		at     time.Time
+		stamp  string
+		want   int
+	}{
+		{"just published", 0, published.Add(time.Second), "", http.StatusOK},
+		{"retried within the hour", 0, published.Add(59 * time.Minute), "", http.StatusOK},
+		{"at the default bound", 0, published.Add(DefaultSNSMaxMessageAge), "", http.StatusOK},
+		{"past the default bound", 0, published.Add(DefaultSNSMaxMessageAge + time.Millisecond), "", http.StatusForbidden},
+		{"a day old", 0, published.Add(24 * time.Hour), "", http.StatusForbidden},
+		{"past a configured bound", 10 * time.Minute, published.Add(11 * time.Minute), "", http.StatusForbidden},
+		{"within a configured bound", 10 * time.Minute, published.Add(9 * time.Minute), "", http.StatusOK},
+		{"no timestamp", 0, published, " ", http.StatusForbidden},
+		{"timestamp not RFC 3339", 0, published, "Thu, 15 Oct 2026 12:00:00 GMT", http.StatusForbidden},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			dec := &recorder{}
+			var out outcomes
+			h := newTestSES(t, SESConfig{Decider: dec, FetchCert: (&fetcher{}).fetch, MaxMessageAge: tt.maxAge, OnOutcome: out.add})
+			h.(*sesHandler).now = func() time.Time { return tt.at }
+			m := notification(t, deliveryJSON)
+			if tt.stamp != "" {
+				m.Timestamp = strings.TrimSpace(tt.stamp)
+				testSigner().sign(t, m, "2")
+			}
+			rec := postJSON(t, h, m)
+			if rec.Code != tt.want {
+				t.Fatalf("status %d, want %d: %s", rec.Code, tt.want, rec.Body)
+			}
+			if tt.want == http.StatusForbidden && (len(dec.got()) != 0 || !out.has(OutcomeInvalidSignature)) {
+				t.Errorf("an old message decided %d events", len(dec.got()))
+			}
+			if tt.want == http.StatusOK && len(dec.got()) != 1 {
+				t.Errorf("a fresh message decided %d events, want 1", len(dec.got()))
+			}
+		})
+	}
+
+	t.Run("old subscription confirmation", func(t *testing.T) {
+		calls := 0
+		client := &http.Client{Transport: roundTripper(func(r *http.Request) (*http.Response, error) {
+			calls++
+			return &http.Response{StatusCode: http.StatusOK, Body: io.NopCloser(strings.NewReader(""))}, nil
+		})}
+		h := newTestSES(t, SESConfig{Decider: &recorder{}, FetchCert: (&fetcher{}).fetch, HTTPClient: client})
+		h.(*sesHandler).now = func() time.Time { return published.Add(2 * time.Hour) }
+		m := subscription(t, snsSubscriptionConfirmation, "https://sns.us-east-1.amazonaws.com/?Action=ConfirmSubscription&TopicArn="+testTopic+"&Token=2336412f37")
+		if rec := postJSON(t, h, m); rec.Code != http.StatusForbidden || calls != 0 {
+			t.Fatalf("status %d and %d visits, want 403 and none", rec.Code, calls)
+		}
+	})
 }
 
 func TestSESConfirmsSubscription(t *testing.T) {

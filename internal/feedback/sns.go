@@ -38,6 +38,14 @@ var snsHostPattern = regexp.MustCompile(`^sns\.[a-zA-Z0-9\-]{3,}\.amazonaws\.com
 
 var errBadSignature = errors.New("sns: invalid signature")
 
+// DefaultSNSMaxMessageAge is the default for SESConfig.MaxMessageAge. SNS
+// stops retrying an HTTPS delivery at most an hour after the first attempt,
+// the hard limit of its delivery policies, and every attempt carries the
+// first one's Timestamp. The quarter hour on top covers the last attempt's
+// timeout and clock skew between AWS and this host.
+// https://docs.aws.amazon.com/sns/latest/dg/sns-message-delivery-retries.html
+const DefaultSNSMaxMessageAge = 75 * time.Minute
+
 // snsMessage is the JSON document SNS posts to HTTP(S) endpoints.
 type snsMessage struct {
 	Type      string `json:"Type"`
@@ -52,6 +60,13 @@ type snsMessage struct {
 	SigningCertURL   string  `json:"SigningCertURL"`
 	SubscribeURL     string  `json:"SubscribeURL"`
 	Token            string  `json:"Token"`
+}
+
+// fresh reports whether m was published at most maxAge before now. A
+// Timestamp that does not parse is not fresh: SNS always sends one.
+func (m *snsMessage) fresh(now time.Time, maxAge time.Duration) bool {
+	t, err := time.Parse(time.RFC3339Nano, m.Timestamp)
+	return err == nil && now.Sub(t) <= maxAge
 }
 
 // stringToSign builds the canonical string SNS signs: "Key\nValue\n" for a

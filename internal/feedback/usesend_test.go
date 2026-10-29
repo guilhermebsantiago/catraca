@@ -123,6 +123,45 @@ func TestUseSendKinds(t *testing.T) {
 	}
 }
 
+// TestUseSendComplaintCountsOnce checks that a complaint about an email to
+// many addresses is one event, not one per address: useSend sends the whole
+// to list, and only one person marked the email as spam.
+func TestUseSendComplaintCountsOnce(t *testing.T) {
+	tests := []struct {
+		name string
+		to   string
+		rcpt string
+	}{
+		{"ten recipients", `["a@example.org","b@example.org","c@example.org","d@example.org","e@example.org","f@example.org","g@example.org","h@example.org","i@example.org","j@example.org"]`, ""},
+		{"one recipient", `["a@example.org"]`, "a@example.org"},
+		{"no recipients", `[]`, ""},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			dec := &recorder{}
+			h := newTestUseSend(t, UseSendConfig{Decider: dec})
+			body := []byte(`{"id":"call_c1","type":"email.complained","teamId":5,"data":{"id":"email_9","to":` + tt.to + `}}`)
+			// The same call twice, as useSend sends it again after a 5xx:
+			// both times one event with the same id, so it counts once.
+			for range 2 {
+				if rec := post(t, h, body, useSendHeaders(useSendSecret, time.Now(), body)); rec.Code != http.StatusOK {
+					t.Fatalf("status %d", rec.Code)
+				}
+			}
+			evs := dec.got()
+			if len(evs) != 2 {
+				t.Fatalf("got %d events, want one per call", len(evs))
+			}
+			for _, ev := range evs {
+				want := event.FeedbackInfo{Kind: event.Complaint, Recipient: tt.rcpt, MessageID: "email_9"}
+				if *ev.Feedback != want || ev.ID != "usesend:call_c1:0" {
+					t.Errorf("event %s: feedback %+v, want %+v", ev.ID, *ev.Feedback, want)
+				}
+			}
+		})
+	}
+}
+
 func TestUseSendIgnoresOtherEvents(t *testing.T) {
 	for _, body := range []string{
 		`{"type":"email.opened","teamId":5,"data":{"id":"e","to":["a@example.org"]}}`,
