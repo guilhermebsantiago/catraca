@@ -3,8 +3,9 @@
 // feedback and secret scanning endpoints providers call, and health and
 // Prometheus metrics. See docs/api.md.
 //
-// Every /v1 route needs a bearer token, except the feedback and secret
-// scanning routes, which authenticate each request by its signature. Every
+// Every /v1 route needs a bearer token with the route's scope, except the
+// feedback and secret scanning routes, which authenticate each request by
+// its signature. Every
 // response carries an X-Request-Id, every request is logged and measured,
 // and errors are JSON: {"error": {"code": "...", "message": "..."}}.
 package api
@@ -74,6 +75,10 @@ type Token struct {
 	// accepted, and their access log lines say previous_token, so the
 	// operator can tell when the client has moved to its new token.
 	Previous bool
+	// Scopes are the routes the token may call; see Scope. Nil gives it
+	// every scope. A previous token has the scopes of the client's current
+	// one.
+	Scopes []Scope
 }
 
 // Check is one readiness check. It answers from the server's own state,
@@ -197,14 +202,16 @@ type Server struct {
 	mux *http.ServeMux
 	// admin serves health and metrics, which mux serves too unless
 	// Options.SeparateAdmin is set.
-	admin        *http.ServeMux
-	decider      Decider
-	rules        RuleSource
-	reloadFn     func() (*rules.Ruleset, error)
-	rulesetFn    func() RulesetStatus
-	audit        AuditLog
-	gate         precision.Gate
-	tokens       []tokenHash
+	admin     *http.ServeMux
+	decider   Decider
+	rules     RuleSource
+	reloadFn  func() (*rules.Ruleset, error)
+	rulesetFn func() RulesetStatus
+	audit     AuditLog
+	gate      precision.Gate
+	tokens    []tokenHash
+	// routeScopes is the scope of each route that takes a token.
+	routeScopes  map[string]Scope
 	checks       []Check
 	dependencies func() map[string]DependencyStatus
 	log          *slog.Logger
@@ -224,6 +231,7 @@ type tokenHash struct {
 	name     string
 	sum      [sha256.Size]byte
 	previous bool
+	scopes   scopeSet
 }
 
 // New returns a Server with every route registered.
@@ -252,12 +260,17 @@ func New(opts Options) (*Server, error) {
 		log:          opts.Logger,
 		maxBody:      opts.MaxBodyBytes,
 		now:          opts.Now,
+		routeScopes:  map[string]Scope{},
 	}
 	for _, t := range opts.Tokens {
 		if t.Value == "" {
 			return nil, fmt.Errorf("api: token %q is empty", t.Name)
 		}
-		s.tokens = append(s.tokens, tokenHash{name: t.Name, sum: sha256.Sum256([]byte(t.Value)), previous: t.Previous})
+		scopes, err := newScopeSet(t.Scopes)
+		if err != nil {
+			return nil, fmt.Errorf("api: token %q: %w", t.Name, err)
+		}
+		s.tokens = append(s.tokens, tokenHash{name: t.Name, sum: sha256.Sum256([]byte(t.Value)), previous: t.Previous, scopes: scopes})
 	}
 	if s.log == nil {
 		s.log = slog.New(slog.DiscardHandler)
@@ -282,14 +295,15 @@ func New(opts Options) (*Server, error) {
 		return nil, fmt.Errorf("api: admission: %w", err)
 	}
 
-	s.handle(s.mux, "POST /v1/decide", s.authed(s.decide(http.StatusOK)))
-	s.handle(s.mux, "POST /v1/events", s.authed(s.decide(http.StatusAccepted)))
-	s.handle(s.mux, "GET /v1/decisions/{id}", s.authed(s.getDecision))
-	s.handle(s.mux, "POST /v1/decisions/{id}/labels", s.authed(s.label))
-	s.handle(s.mux, "GET /v1/rules", s.authed(s.getRules))
-	s.handle(s.mux, "POST /v1/rules/reload", s.authed(s.reload))
-	s.handle(s.mux, "GET /v1/rules/{id}/review", s.authed(s.review))
-	s.handle(s.mux, "GET /v1/stats/rules", s.authed(s.ruleStats))
+	// Each route that takes a token needs one scope; see scope.go.
+	s.v1("POST /v1/decide", ScopeDecide, s.decide(http.StatusOK))
+	s.v1("POST /v1/events", ScopeDecide, s.decide(http.StatusAccepted))
+	s.v1("GET /v1/decisions/{id}", ScopeRead, s.getDecision)
+	s.v1("POST /v1/decisions/{id}/labels", ScopeLabel, s.label)
+	s.v1("GET /v1/rules", ScopeRead, s.getRules)
+	s.v1("POST /v1/rules/reload", ScopeAdmin, s.reload)
+	s.v1("GET /v1/rules/{id}/review", ScopeRead, s.review)
+	s.v1("GET /v1/stats/rules", ScopeRead, s.ruleStats)
 
 	s.handle(s.mux, routeFeedback, provider("generic feedback", "feedback.generic", s.admitFeedback(routeFeedback, opts.GenericFeedback)))
 	s.handle(s.mux, routeFeedbackSES, provider("SES feedback", "feedback.ses", s.admitFeedback(routeFeedbackSES, opts.SESFeedback)))

@@ -41,6 +41,40 @@ also has `"previous_token": true` ([rotating secrets](rotation.md#api-tokens)).
 A missing or wrong token gets `401` with
 `WWW-Authenticate: Bearer realm="catraca"`.
 
+**Scopes.** Each route that takes a token needs one scope, and a token
+calls only the routes of the [scopes it lists](config.md#auth). The token
+on the send path, deployed on every app server, needs `decide` alone; with
+it, a leaked app server cannot read the audit log, label decisions or
+reload the rules:
+
+| route | scope |
+|---|---|
+| `POST /v1/decide` | `decide` |
+| `POST /v1/events` | `decide` |
+| `GET /v1/decisions/{id}` | `read` |
+| `GET /v1/rules` | `read` |
+| `GET /v1/rules/{id}/review` | `read` |
+| `GET /v1/stats/rules` | `read` |
+| `POST /v1/decisions/{id}/labels` | `label` |
+| `POST /v1/rules/reload` | `admin` |
+
+`read` returns what the audit log holds: account ids, IPs, recipient
+domains, and addresses and links with `audit.event_detail: full`. `admin`
+is for what changes how Catraca decides. The feedback and secret scanning
+routes take no token, so no scope: their signature proves the provider sent
+them. A token configured without `scopes` has every scope, so
+configurations written before scopes keep working; `catraca config check`
+warns about each one. A token without the route's scope gets `403
+insufficient_scope` with
+`WWW-Authenticate: Bearer realm="catraca", error="insufficient_scope", scope="read"`,
+and the access log line has `client`, `scope` and `"scope_check":
+"denied"` (`"allowed"` once the token has it).
+
+A new route takes one of these scopes, or a new one: add it to `Scopes` in
+`internal/api/scope.go` and `TokenScopes` in `internal/config`, and to this
+table. Tokens without `scopes` get it too; tokens that list theirs do not
+until it is added to them.
+
 `/healthz`, `/readyz` and `/metrics` take no token. Keep them off the
 public internet: serve them on a port of their own with
 [`server.admin_addr`](config.md#server), or expose only `/v1` through the
@@ -72,6 +106,7 @@ ruleset reload adds `details`, one entry per problem. The provider routes
 | 400 | `invalid_label` | the label's verdict or `by` is missing or wrong |
 | 400 | `invalid_parameter` | a query parameter is out of range |
 | 401 | `unauthorized` | no token, or not a configured one |
+| 403 | `insufficient_scope` | the token does not have the route's [scope](#conventions); `WWW-Authenticate` names it |
 | 404 | `not_found` | no such decision, or no such route |
 | 404 | `not_configured` | a provider route whose section is not in catraca.yaml |
 | 405 | `method_not_allowed` | the route exists for another method (see `Allow`) |
@@ -388,6 +423,10 @@ labels.
 | `rule_id` | | label only this rule's match; without it the label covers every rule that matched |
 | `time` | | when the verdict was given; defaults to now. The latest label of a match counts |
 
+Catraca adds `client` to the label: the name of the token that sent it,
+whatever the body says. `by` is what the caller says; `client` is which
+credential said it.
+
 **A reversal is a false positive.** When the platform undoes an enforced
 decision, such as unblocking a sender after an appeal, it should label the
 decision `false_positive`: every reversal counts against the rules that
@@ -408,6 +447,7 @@ curl -s -X POST "$CATRACA/v1/decisions/01M50QGQP8YVGSY487W3YJ8J24/labels" \
       "verdict": "true_positive",
       "by": "security@platform.example",
       "reason": "key confirmed public in a gist",
+      "client": "ops",
       "time": "2026-10-15T21:29:39.210011Z"
     }
   ]
@@ -868,8 +908,12 @@ catraca_decisions_total{action="throttle"} 2
 Every request is logged once, as JSON by default (`logging.format`):
 
 ```json
-{"time":"2026-10-15T21:25:43.490Z","level":"INFO","msg":"request","request_id":"b2dfbafcacbab0f963ec8b7177322d5c","method":"POST","route":"POST /v1/decide","path":"/v1/decide","status":200,"bytes":387,"duration_ms":0.498,"remote":"127.0.0.1:58358","decision_id":"01M50Q9TE1EPGZCTSX7N6NPC78","action":"block","client":"platform"}
+{"time":"2026-10-15T21:25:43.490Z","level":"INFO","msg":"request","request_id":"b2dfbafcacbab0f963ec8b7177322d5c","method":"POST","route":"POST /v1/decide","path":"/v1/decide","status":200,"bytes":387,"duration_ms":0.498,"remote":"127.0.0.1:58358","scope":"decide","scope_check":"allowed","decision_id":"01M50Q9TE1EPGZCTSX7N6NPC78","action":"block","client":"send-path"}
 ```
+
+`client` is the name of the token, and `scope` and `scope_check` the scope
+the route needs and whether the token had it (`allowed` or `denied`), on
+every route that takes a token.
 
 Requests to `/healthz`, `/readyz` and `/metrics` are logged at debug level.
 Tokens, secrets and message content are never logged.

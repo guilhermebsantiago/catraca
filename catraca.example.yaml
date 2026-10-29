@@ -39,13 +39,22 @@ server:
 
 auth:
   # Bearer tokens for the /v1 routes (feedback and secret scanning
-  # authenticate by signature instead). Give each client its own token. To
+  # authenticate by signature instead). Give each client its own token,
+  # with only the scopes it needs: decide (POST /v1/decide and /v1/events),
+  # read (decisions, the review queue, stats, rules), label, admin (rules
+  # reload). The send path's token is on every app server, so it gets
+  # decide alone. A token without scopes has them all (docs/api.md). To
   # rotate one, make the new one token and the old one a previous token,
   # move the client, then remove the old one (docs/rotation.md).
   tokens:
-    - name: platform
+    - name: send-path
       token: ${CATRACA_API_TOKEN}
       # previous_tokens: ["${CATRACA_API_TOKEN_OLD}"]
+      scopes: [decide]
+    # Reviewers, dashboards and deploy tooling.
+    - name: ops
+      token: ${CATRACA_OPS_TOKEN}
+      scopes: [decide, read, label, admin]
 
 rules:
   # The ruleset, kept in git.

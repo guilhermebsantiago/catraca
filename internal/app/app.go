@@ -216,11 +216,17 @@ func New(ctx context.Context, cfg *config.Config, opts Options) (_ *App, err err
 		TracerProvider: a.tracerProvider(),
 	}
 	for _, t := range cfg.Auth.Tokens {
-		aopts.Tokens = append(aopts.Tokens, api.Token{Name: t.Name, Value: t.Token.Value()})
-		// A token being rotated out is accepted under the client's name, so
-		// access logs follow the client across the rotation.
+		// Without scopes in the file, nil: every scope.
+		var scopes []api.Scope
+		for _, sc := range t.Scopes {
+			scopes = append(scopes, api.Scope(sc))
+		}
+		aopts.Tokens = append(aopts.Tokens, api.Token{Name: t.Name, Value: t.Token.Value(), Scopes: scopes})
+		// A token being rotated out is accepted under the client's name and
+		// with its scopes, so access logs follow the client across the
+		// rotation and the rotation changes nothing it may do.
 		for _, p := range t.PreviousTokens {
-			aopts.Tokens = append(aopts.Tokens, api.Token{Name: t.Name, Value: p.Value(), Previous: true})
+			aopts.Tokens = append(aopts.Tokens, api.Token{Name: t.Name, Value: p.Value(), Previous: true, Scopes: scopes})
 		}
 	}
 	if err := a.feedback(&aopts); err != nil {

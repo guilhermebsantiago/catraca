@@ -5,6 +5,7 @@ import (
 	"net"
 	"net/url"
 	"regexp"
+	"slices"
 	"strings"
 	"time"
 
@@ -255,6 +256,28 @@ func (v *validator) auth(a Auth) {
 			}
 			values[p] = true
 		}
+		v.scopes(path+".scopes", t.Scopes)
+	}
+}
+
+// scopes checks the scopes of a token. Leaving the key out gives every
+// scope; an empty list would give none, which is a mistake rather than a
+// way to turn a token off.
+func (v *validator) scopes(path string, scopes []string) {
+	if v.isSet(path) && len(scopes) == 0 {
+		v.add(path, "is empty: list at least one of %s, or remove the key for every scope", strings.Join(TokenScopes, ", "))
+		return
+	}
+	seen := map[string]bool{}
+	for i, sc := range scopes {
+		p := fmt.Sprintf("%s[%d]", path, i)
+		switch {
+		case !slices.Contains(TokenScopes, sc):
+			v.add(p, "unknown scope %q: use %s", sc, strings.Join(TokenScopes, ", "))
+		case seen[sc]:
+			v.add(p, "%q is listed twice", sc)
+		}
+		seen[sc] = true
 	}
 }
 

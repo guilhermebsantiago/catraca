@@ -320,6 +320,7 @@ jobs:
     timeout-minutes: 15
     env:
       CATRACA_API_TOKEN: ci-token-0123456789abcdef
+      CATRACA_OPS_TOKEN: ci-ops-0123456789abcdef
       CATRACA_FEEDBACK_SECRET: ci-feedback-0123456789abcdef
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -357,6 +358,7 @@ jobs:
     timeout-minutes: 20
     env:
       CATRACA_API_TOKEN: ci-token-0123456789abcdef
+      CATRACA_OPS_TOKEN: ci-ops-0123456789abcdef
       CATRACA_FEEDBACK_SECRET: ci-feedback-0123456789abcdef
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -391,7 +393,7 @@ jobs:
           # /var/lib/catraca; the server only gets ready if nonroot can
           # write there.
           docker run --detach --name catraca -p 8080:8080 \
-            -e CATRACA_API_TOKEN -e CATRACA_FEEDBACK_SECRET "$image"
+            -e CATRACA_API_TOKEN -e CATRACA_OPS_TOKEN -e CATRACA_FEEDBACK_SECRET "$image"
           for _ in $(seq 1 30); do
             curl -fsS localhost:8080/readyz && break
             sleep 1

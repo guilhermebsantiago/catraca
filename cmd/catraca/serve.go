@@ -104,6 +104,12 @@ effects without a hook are warnings.
 		fmt.Fprintf(c.stderr, "%s: warning: %s\n", cfg.Rules.Path, m)
 		warnings++
 	}
+	for _, t := range cfg.Auth.Tokens {
+		if t.Scopes == nil {
+			fmt.Fprintf(c.stderr, "%s: warning: auth.tokens: %s has no scopes, so it can call every route, reading the audit log and reloading rules included; list its scopes (decide for the send path)\n", *path, t.Name)
+			warnings++
+		}
+	}
 	fmt.Fprintf(c.stdout, "%s is valid", *path)
 	if warnings > 0 {
 		fmt.Fprintf(c.stdout, " (%d warning(s))", warnings)
@@ -127,7 +133,11 @@ func (c *cli) summary(cfg *config.Config, rs *rules.Ruleset) {
 	row("shutdown", "drain %s, then up to %s", cfg.Server.DrainDelay, cfg.Server.ShutdownTimeout)
 	var names []string
 	for _, t := range cfg.Auth.Tokens {
-		names = append(names, t.Name)
+		scopes := "every scope"
+		if t.Scopes != nil {
+			scopes = strings.Join(t.Scopes, ", ")
+		}
+		names = append(names, fmt.Sprintf("%s (%s)", t.Name, scopes))
 	}
 	row("api tokens", "%s", strings.Join(names, ", "))
 	enforced, unproven := 0, 0

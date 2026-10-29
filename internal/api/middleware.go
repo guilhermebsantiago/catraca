@@ -146,27 +146,6 @@ func requestID(sent string) string {
 	return hex.EncodeToString(b[:])
 }
 
-// authed requires a valid bearer token.
-func (s *Server) authed(h http.HandlerFunc) http.Handler {
-	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		tok, problem := s.authenticate(r.Header.Get("Authorization"))
-		if problem != "" {
-			w.Header().Set("WWW-Authenticate", `Bearer realm="catraca"`)
-			writeError(w, http.StatusUnauthorized, "unauthorized", problem)
-			return
-		}
-		if ri := infoFrom(r.Context()); ri != nil {
-			ri.client = tok.name
-		}
-		if tok.previous {
-			// Until no request says this, the client has not moved to its
-			// new token, and the old one cannot be removed.
-			annotate(r, slog.Bool("previous_token", true))
-		}
-		h(w, r)
-	})
-}
-
 // authenticate returns the token in an Authorization header, or why the
 // header is not acceptable. Tokens are compared as SHA-256 sums in constant
 // time, and every configured token is compared, so neither the time taken
