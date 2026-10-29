@@ -45,6 +45,10 @@ type SESConfig struct {
 	// MaxBodyBytes limits the request body. The default is 1 MiB; an SNS
 	// message is at most 256 KiB before JSON escaping.
 	MaxBodyBytes int64
+	// MaxMessageAge is how old a message may be, by the Timestamp SNS
+	// signs, before it is refused as a replay. The default is
+	// DefaultSNSMaxMessageAge.
+	MaxMessageAge time.Duration
 	// Logger receives errors that are not shown to the caller. The default
 	// discards them.
 	Logger *slog.Logger
@@ -60,6 +64,8 @@ type sesHandler struct {
 	accountHeader string
 	certs         *certCache
 	client        *http.Client
+	maxAge        time.Duration
+	now           func() time.Time
 }
 
 // NewSESHandler returns a handler for Amazon SES bounce, complaint and
@@ -68,7 +74,8 @@ type sesHandler struct {
 // It verifies the SNS signature (SignatureVersion 1 and 2) with the signing
 // certificate, which it fetches only over HTTPS from an
 // sns.<region>.amazonaws.com or sns.<region>.amazonaws.com.cn host. It
-// confirms subscriptions to allowed topics and accepts both identity
+// refuses a message older than SESConfig.MaxMessageAge, confirms
+// subscriptions to allowed topics and accepts both identity
 // notifications (notificationType) and configuration set event publishing
 // (eventType). Raw message delivery must be disabled on the subscription,
 // since raw messages carry no signature.
@@ -99,6 +106,10 @@ func NewSESHandler(cfg SESConfig) (http.Handler, error) {
 	if fetch == nil {
 		fetch = HTTPCertFetcher(nil)
 	}
+	maxAge := cfg.MaxMessageAge
+	if maxAge <= 0 {
+		maxAge = DefaultSNSMaxMessageAge
+	}
 	return &sesHandler{
 		base:          b,
 		topics:        topics,
@@ -106,6 +117,8 @@ func NewSESHandler(cfg SESConfig) (http.Handler, error) {
 		accountHeader: cfg.AccountHeader,
 		certs:         newCertCache(fetch),
 		client:        noRedirects(cfg.HTTPClient),
+		maxAge:        maxAge,
+		now:           time.Now,
 	}, nil
 }
 
@@ -146,6 +159,16 @@ func (h *sesHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		h.log.WarnContext(r.Context(), "feedback: SNS signature rejected",
 			"topic", msg.TopicArn, "message_id", msg.MessageID, "error", err)
 		writeError(w, http.StatusForbidden, "invalid signature")
+		return
+	}
+	// The signature covers Timestamp, so an old message with a valid one is
+	// a recorded message posted again. Without this check it would count
+	// again once dedupe_ttl has forgotten it, however old it is.
+	if !msg.fresh(h.now(), h.maxAge) {
+		h.onOutcome(OutcomeInvalidSignature)
+		h.log.WarnContext(r.Context(), "feedback: SNS message too old",
+			"topic", msg.TopicArn, "message_id", msg.MessageID, "timestamp", msg.Timestamp)
+		writeError(w, http.StatusForbidden, "message too old")
 		return
 	}
 

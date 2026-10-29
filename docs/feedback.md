@@ -73,10 +73,21 @@ topic, and SNS posts them to Catraca over HTTPS. Catraca:
    only from a host matching `sns.<region>.amazonaws.com` or
    `sns.<region>.amazonaws.com.cn`, without following redirects, and is
    cached by URL. A forged message gets a 403.
-3. Confirms the subscription when SNS sends a `SubscriptionConfirmation`
+3. Refuses a message whose signed `Timestamp` is more than 75 minutes old,
+   with a 403 counted as `invalid_signature`. SNS keeps the first
+   attempt's `Timestamp` on every retry and stops retrying within an hour,
+   so an older message with a valid signature is a recorded one posted
+   again, which would otherwise count again once `dedupe_ttl` has
+   forgotten it. The quarter hour on top covers the last attempt's timeout
+   and clock skew; keep the host's clock synchronized, since a clock more
+   than that far ahead refuses every message. Go callers set the bound with
+   `SESConfig.MaxMessageAge`. A subscription confirmation is refused the
+   same way, so one that arrived before Catraca was ready must be requested
+   again from the SNS console.
+4. Confirms the subscription when SNS sends a `SubscriptionConfirmation`
    for an allowed topic, by visiting its `SubscribeURL` after checking that
    it is an SNS URL too.
-4. Turns each bounced, complained or delivered recipient into a feedback
+5. Turns each bounced, complained or delivered recipient into a feedback
    event. Other notifications (sends, opens, clicks, delivery delays) are
    acknowledged and ignored. The event's `from` is the original From
    header when SES includes headers, otherwise the envelope sender
@@ -93,9 +104,11 @@ final answer. SNS ignores `Retry-After` and follows the subscription's
 by default three more attempts, 20 seconds apart, each given about 15
 seconds to answer, so it gives up about a minute after the first. A policy
 of your own may retry for up to an hour (a hard limit), and a dead-letter
-queue on the subscription keeps what it gives up on. A redelivered
-notification keeps its `MessageId`, and Catraca names the events of a
-notification `ses:<MessageId>:<n>`, so they count once.
+queue on the subscription keeps what it gives up on, though a message
+posted from it to Catraca more than 75 minutes after it was published is
+refused (step 3). A redelivered notification keeps its `MessageId`, and
+Catraca names the events of a notification `ses:<MessageId>:<n>`, so they
+count once.
 
 On every feedback endpoint, when more requests are in flight than
 `server.max_inflight`, the server answers `503` with `Retry-After` before it
@@ -349,4 +362,5 @@ counts as `malformed`; SES and useSend get a `200` for it, since a retry
 would be refused the same way. A rising `no_account` usually
 means emails are being sent without the tag or header; a rising
 `invalid_signature` means someone other than the provider is posting to the
-endpoint, or a secret was rotated on one side only.
+endpoint, or a secret was rotated on one side only, or, for SES, that the
+host's clock is off.

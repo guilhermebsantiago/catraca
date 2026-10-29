@@ -166,6 +166,10 @@ func (f *fetcher) fetch(_ context.Context, certURL string) ([]byte, error) {
 	return testSigner().certPEM, nil
 }
 
+// testSNSNow is the clock of the SES handlers under test: shortly after the
+// Timestamp of the SNS messages they are sent, so those are fresh.
+var testSNSNow = time.Date(2026, 10, 15, 12, 0, 30, 0, time.UTC)
+
 // notification wraps an SES notification in a signed SNS Notification.
 func notification(t testing.TB, ses string) *snsMessage {
 	t.Helper()

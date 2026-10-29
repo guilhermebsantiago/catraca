@@ -123,6 +123,7 @@ func newFuzzSNS(tb testing.TB) *fuzzSNS {
 		tb.Fatal(err)
 	}
 	s.h = h.(*sesHandler)
+	s.h.now = func() time.Time { return testSNSNow }
 	return s
 }
 
