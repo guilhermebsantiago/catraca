@@ -230,7 +230,11 @@ Mapped events:
 Every other event (`email.sent`, `email.opened`, `email.suppressed`,
 `contact.*`, `domain.*`, `webhook.test`, ...) is acknowledged and ignored.
 useSend sends the email's whole `to` list rather than the recipient a bounce
-or complaint was about, so Catraca records one event per address in `to`.
+or complaint was about. A complaint comes from one person marking the email
+as spam, so Catraca records one complaint event per webhook, with the
+recipient only when `to` has a single address; one per address would count a
+complaint on an email to ten as ten. Bounces and deliveries are recorded once
+per address in `to`.
 
 **Account id.** By default it is the payload's `teamId`, which fits a
 self-hosted useSend whose teams are the platform's accounts: send your

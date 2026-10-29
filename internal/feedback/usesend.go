@@ -21,7 +21,8 @@ import (
 // which fits a self-hosted useSend whose teams are the platform's accounts.
 // Set AccountMetadataKey to read it from the email's metadata instead.
 type UseSendConfig struct {
-	// Decider receives one feedback event per recipient. Required.
+	// Decider receives the feedback events: one per complaint, and one per
+	// recipient of a bounce or delivery. Required.
 	Decider Decider
 	// Secret is the webhook's signing secret, shown when the webhook is
 	// created in useSend. Required.
@@ -61,8 +62,9 @@ type useSendHandler struct {
 // NewUseSendHandler returns a handler for useSend webhooks
 // (https://github.com/usesend/useSend). It verifies the X-UseSend-Signature
 // header and maps email.bounced, email.complained and email.delivered to
-// feedback events, one per address in the email's to list. Other event
-// types are acknowledged and ignored.
+// feedback events: a complaint counts once, and a bounce or delivery once
+// per address in the email's to list. Other event types are acknowledged and
+// ignored.
 //
 // useSend makes six attempts at a webhook call that gets any answer but a
 // 2xx, so only feedback that could not be counted is answered with a 5xx: a
@@ -248,7 +250,17 @@ func (h *useSendHandler) events(hook *useSendWebhook, email *useSendEmail, kind 
 		}
 	}
 	// useSend reports the email's whole to list, not only the recipients
-	// the bounce or complaint was about.
+	// the bounce or complaint was about. A complaint comes from one person
+	// marking the email as spam, so it counts once, whatever the length of
+	// the list: one per address would read one complaint on an email to ten
+	// as ten. It names its recipient only when the email had one.
+	if kind == event.Complaint {
+		var rcpt string
+		if len(email.To) == 1 {
+			rcpt = email.To[0]
+		}
+		return []event.Event{feedbackEvent(template, info, rcpt)}, ""
+	}
 	return feedbackEvents(template, info, email.To), ""
 }
 
