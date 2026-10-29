@@ -94,30 +94,36 @@ From source (Go 1.26+), with in-memory counters and SQLite:
 ```sh
 go build -o catraca ./cmd/catraca
 cp catraca.example.yaml catraca.yaml
-export CATRACA_API_TOKEN=$(openssl rand -hex 32) CATRACA_HOOK_SECRET=$(openssl rand -hex 32) CATRACA_FEEDBACK_SECRET=$(openssl rand -hex 32)
+export CATRACA_API_TOKEN=$(openssl rand -hex 32) CATRACA_FEEDBACK_SECRET=$(openssl rand -hex 32)
 ./catraca config check && ./catraca serve
 ```
 
-Ask before a send:
+`config check` warns that the `revoke_key` effect has no hook: the example
+leaves its hook commented out until you point it at your platform.
+
+Report an API key leaked, then ask before a send made with it:
 
 ```sh
+curl -s localhost:8080/v1/events -H "Authorization: Bearer $CATRACA_API_TOKEN" \
+  -d '{"type": "key_leak", "api_key_id": "key_9c2e", "leak": {"source": "support-ticket"}}'
 curl -s localhost:8080/v1/decide -H "Authorization: Bearer $CATRACA_API_TOKEN" \
   -d '{"type": "send", "account_id": "acct_tidal", "api_key_id": "key_9c2e", "ip": "192.0.2.200",
        "from": "alerts@tidal.example", "to": ["carla.34@box.example"], "subject": "Urgent: verify your account"}'
 ```
 
-This key had been reported leaked, so the answer, recorded from a real run,
-is a block that also fires the `revoke_key` hook:
+The answer to the send, recorded from a real run, is a block, with the
+`revoke_key` effect that a configured hook carries out:
 
 ```json
 {"decision": {
-  "id": "01M50Y33JMPZ4MYNAJMWSCZMV0",
-  "time": "2026-10-15T23:24:23.5084785Z",
+  "id": "01M65144B9R8Y769Q1EFQBETX5",
+  "event_id": "01M65144B9R8Y769Q1EFQBETX4",
+  "time": "2026-10-29T23:50:02.3457445Z",
   "action": "block",
   "matches": [{"rule_id": "leaked-key-send", "action": "block", "mode": "enforce", "effects": ["revoke_key"],
                "reason": "This API key was found in public and must be rotated before it can send again"}],
-  "ruleset_version": "3ed1ef48775c",
-  "latency_us": 109
+  "ruleset_version": "adf1d0464c14",
+  "latency_us": 95
 }}
 ```
 
@@ -150,6 +156,7 @@ caveats: [docs/benchmark.md](docs/benchmark.md).
 - [Feedback: SES, useSend](docs/feedback.md) · [GitHub secret scanning](docs/secret-scanning.md)
 - [Faults: what happens when a dependency fails](docs/faults.md) · [Objectives and alerts](docs/slo.md) · [Tracing](docs/tracing.md)
 - [Benchmarks](docs/benchmark.md) · [Brand](docs/brand.md)
+- [Compatibility: what is stable before 1.0](docs/compatibility.md) · [Changelog](CHANGELOG.md)
 
 ## Examples
 
@@ -163,8 +170,11 @@ caveats: [docs/benchmark.md](docs/benchmark.md).
 ## Status
 
 Early: everything above works and is tested (unit, contract, end-to-end, and
-CI against real Redis, Postgres and Docker), but the API and configuration
-may still change before a first tagged release.
+CI against real Redis, Postgres and Docker), but some of it may still change
+before 1.0. [docs/compatibility.md](docs/compatibility.md) says what is
+stable (the event and decision JSON, the ruleset format, the hook payload
+and its signature) and what may change (configuration keys, metric names,
+the command line), and [CHANGELOG.md](CHANGELOG.md) lists every change.
 
 Releases will be cut from `v*` tags: binaries for Linux, macOS and Windows
 (amd64 and arm64) with checksums, SBOMs and build provenance, and a signed

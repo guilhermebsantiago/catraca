@@ -129,23 +129,26 @@ gate:
   on_load: enforce
 
 # Webhooks that carry out the effects of enforced rules, one per effect name.
-# Each request is signed with the hook's secret (see docs/hooks.md).
-hooks:
-  - name: revoke_key
-    url: ${CATRACA_REVOKE_KEY_URL:-https://platform.internal/hooks/catraca/revoke-key}
-    secret: ${CATRACA_HOOK_SECRET}
-    # While the secret is rotated, requests are signed with the old one too,
-    # so the receiver accepts them before it switches (docs/rotation.md).
-    # previous_secrets: ["${CATRACA_HOOK_SECRET_OLD}"]
-    timeout: 10s
-    # headers:
-    #   Authorization: Bearer ${PLATFORM_HOOK_TOKEN}
-    # Deliveries to this hook attempted at once, at most outbox.workers.
-    concurrency: 4
-    # A delivery is given up after max_attempts failed attempts, or once
-    # max_age has passed since it was queued, whichever comes first.
-    max_attempts: 15
-    max_age: 24h
+# Each request is signed with the hook's secret (see docs/hooks.md). Until
+# a hook is configured, its effect does not run: `catraca config check` and
+# the server's log warn about it. Uncomment this one and point it at the
+# platform's endpoint that revokes an API key.
+# hooks:
+#   - name: revoke_key
+#     url: ${CATRACA_REVOKE_KEY_URL}
+#     secret: ${CATRACA_HOOK_SECRET}
+#     # While the secret is rotated, requests are signed with the old one too,
+#     # so the receiver accepts them before it switches (docs/rotation.md).
+#     # previous_secrets: ["${CATRACA_HOOK_SECRET_OLD}"]
+#     timeout: 10s
+#     # headers:
+#     #   Authorization: Bearer ${PLATFORM_HOOK_TOKEN}
+#     # Deliveries to this hook attempted at once, at most outbox.workers.
+#     concurrency: 4
+#     # A delivery is given up after max_attempts failed attempts, or once
+#     # max_age has passed since it was queued, whichever comes first.
+#     max_attempts: 15
+#     max_age: 24h
 
 # Delivery of the hooks: how many deliveries are attempted at once across
 # every hook. Each hook takes at most its own concurrency of them, so one

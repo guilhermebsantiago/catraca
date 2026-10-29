@@ -116,15 +116,18 @@ func (s *Server) auditError(w http.ResponseWriter, r *http.Request, id string, e
 	}
 }
 
-// auditFailed answers a request the audit log could not serve: 503 while it
-// is unavailable, 500 for any other failure, which is logged.
+// auditFailed answers a request the audit log could not serve with 503 and
+// Retry-After: audit_unavailable while it has not opened, unavailable for
+// any other failure, which is logged. A database error is taken as
+// transient, like a store error on the decide path, so the caller retries.
 func (s *Server) auditFailed(w http.ResponseWriter, r *http.Request, msg string, err error, attrs ...any) {
+	w.Header().Set("Retry-After", "1")
 	if errors.Is(err, ErrAuditUnavailable) {
 		writeError(w, http.StatusServiceUnavailable, "audit_unavailable", "the audit log is not available yet; decisions are still made; retry later")
 		return
 	}
 	s.log.ErrorContext(r.Context(), msg, append(attrs, "error", err)...)
-	writeError(w, http.StatusInternalServerError, "internal", "the audit log could not be read")
+	writeError(w, http.StatusServiceUnavailable, "unavailable", "the audit log could not answer; retry it")
 }
 
 func (s *Server) getRules(w http.ResponseWriter, r *http.Request) {

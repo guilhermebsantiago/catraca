@@ -158,15 +158,53 @@ func TestDecideErrors(t *testing.T) {
 	}
 }
 
-func TestAuditErrorsAreHidden(t *testing.T) {
-	s := newTestServer(t, nil, nil, func(o *Options) { o.Decider = deciderFunc(nil) })
-	for _, path := range []string{"/v1/decisions/x", "/v1/rules/r/review"} {
-		rec := serve(s, "GET", path, "")
-		if rec.Code != 500 || strings.Contains(rec.Body.String(), "database is down") {
-			t.Errorf("GET %s: %d %s", path, rec.Code, rec.Body)
+// staticRules serves one ruleset.
+type staticRules struct{ rs *rules.Ruleset }
+
+func (s staticRules) Current() *rules.Ruleset { return s.rs }
+
+// TestAuditErrors checks that every route of the audit log answers a
+// database error with 503 unavailable and Retry-After, so callers retry it,
+// and keeps the error itself in the server's log.
+func TestAuditErrors(t *testing.T) {
+	rs, err := rules.Parse([]byte(heldRules))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var logs bytes.Buffer
+	s := newTestServer(t, deciderFunc(nil), slog.New(slog.NewJSONHandler(&logs, nil)), func(o *Options) { o.Rules = staticRules{rs} })
+	for _, route := range []struct{ method, path, body string }{
+		{"GET", "/v1/decisions/x", ""},
+		{"POST", "/v1/decisions/x/labels", `{"verdict":"true_positive","by":"me"}`},
+		{"GET", "/v1/rules/r/review", ""},
+		{"GET", "/v1/stats/rules", ""},
+	} {
+		logs.Reset()
+		rec := serve(s, route.method, route.path, route.body)
+		if rec.Code != http.StatusServiceUnavailable || !strings.Contains(rec.Body.String(), `"code":"unavailable"`) || rec.Header().Get("Retry-After") != "1" {
+			t.Errorf("%s %s: %d %v %s", route.method, route.path, rec.Code, rec.Header(), rec.Body)
+		}
+		if strings.Contains(rec.Body.String(), "database is down") {
+			t.Errorf("%s %s: the answer shows the error: %s", route.method, route.path, rec.Body)
+		}
+		if !strings.Contains(logs.String(), "database is down") {
+			t.Errorf("%s %s: the error is not logged: %s", route.method, route.path, logs.String())
 		}
 	}
-	if rec := serve(s, "GET", "/v1/stats/rules", ""); rec.Code != 503 {
+
+	s = newTestServer(t, deciderFunc(nil), nil, func(o *Options) {
+		o.Rules = staticRules{rs}
+		o.Audit = fakeAudit{err: fmt.Errorf("open: %w", ErrAuditUnavailable)}
+	})
+	for _, path := range []string{"/v1/decisions/x", "/v1/rules/r/review", "/v1/stats/rules"} {
+		rec := serve(s, "GET", path, "")
+		if rec.Code != http.StatusServiceUnavailable || !strings.Contains(rec.Body.String(), `"code":"audit_unavailable"`) || rec.Header().Get("Retry-After") != "1" {
+			t.Errorf("GET %s while the audit log is unavailable: %d %v %s", path, rec.Code, rec.Header(), rec.Body)
+		}
+	}
+
+	s = newTestServer(t, deciderFunc(nil), nil)
+	if rec := serve(s, "GET", "/v1/stats/rules", ""); rec.Code != 503 || !strings.Contains(rec.Body.String(), `"code":"no_ruleset"`) {
 		t.Errorf("stats without a ruleset: %d %s", rec.Code, rec.Body)
 	}
 }
