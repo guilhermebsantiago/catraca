@@ -59,7 +59,7 @@ func (db *DB) get(ctx context.Context, id string) (Entry, error) {
 	}
 
 	rows, err := db.db.QueryContext(ctx, db.dialect.rebind(
-		"SELECT rule_id, verdict, labeled_by, reason, labeled_at_us FROM labels WHERE decision_id = ? ORDER BY id"), id)
+		"SELECT rule_id, verdict, labeled_by, reason, client, labeled_at_us FROM labels WHERE decision_id = ? ORDER BY id"), id)
 	if err != nil {
 		return Entry{}, fmt.Errorf("audit: get labels: %w", err)
 	}
@@ -68,7 +68,7 @@ func (db *DB) get(ctx context.Context, id string) (Entry, error) {
 	for rows.Next() {
 		var l Label
 		var at int64
-		if err := rows.Scan(&l.RuleID, &l.Verdict, &l.By, &l.Reason, &at); err != nil {
+		if err := rows.Scan(&l.RuleID, &l.Verdict, &l.By, &l.Reason, &l.Client, &at); err != nil {
 			return Entry{}, fmt.Errorf("audit: get labels: %w", err)
 		}
 		l.Time = fromMicros(at)
@@ -131,9 +131,9 @@ func (db *DB) label(ctx context.Context, id string, l Label) error {
 
 	at := toMicros(l.Time)
 	if _, err := tx.ExecContext(ctx, db.dialect.rebind(`INSERT INTO labels
-    (decision_id, rule_id, verdict, labeled_by, reason, labeled_at_us, created_at_us)
-VALUES (?, ?, ?, ?, ?, ?, ?)`),
-		id, l.RuleID, string(l.Verdict), l.By, l.Reason, at, toMicros(time.Now())); err != nil {
+    (decision_id, rule_id, verdict, labeled_by, reason, client, labeled_at_us, created_at_us)
+VALUES (?, ?, ?, ?, ?, ?, ?, ?)`),
+		id, l.RuleID, string(l.Verdict), l.By, l.Reason, l.Client, at, toMicros(time.Now())); err != nil {
 		return fmt.Errorf("audit: label: %w", err)
 	}
 

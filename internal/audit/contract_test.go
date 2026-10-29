@@ -106,6 +106,11 @@ func runContract(t *testing.T, newDSN func(t *testing.T) string) {
 		dsn := newDSN(t)
 		testMigrateOutbox(t, dsn, func(opts Options) *DB { return open(t, dsn, opts) })
 	})
+	t.Run("LabelClient", func(t *testing.T) { testLabelClient(t, fresh(t)) })
+	t.Run("MigrateLabelClient", func(t *testing.T) {
+		dsn := newDSN(t)
+		testMigrateLabelClient(t, dsn, func(opts Options) *DB { return open(t, dsn, opts) })
+	})
 	t.Run("CloseDrainsAndReopen", func(t *testing.T) {
 		dsn := newDSN(t)
 		testCloseDrainsAndReopen(t, dsn, func(opts Options) *DB { return open(t, dsn, opts) })
@@ -1047,6 +1052,93 @@ VALUES ('old', 'notify', '{}', 'pending', 0, %d, %d, %d)`, us, us, us)); err != 
 	var n int
 	if err := db.SQL().QueryRowContext(ctx, index).Scan(&n); err != nil || n != 1 {
 		t.Errorf("the outbox_effect_due index: %d, %v", n, err)
+	}
+}
+
+// testLabelClient checks that a label keeps the API token it was given
+// with, apart from its by.
+func testLabelClient(t *testing.T, db *DB) {
+	record(t, db, newDecision("d1", t0, []string{"a"}, nil))
+	label(t, db, "d1", Label{Verdict: TruePositive, By: "ana", Client: "ops", Time: t0})
+	label(t, db, "d1", Label{Verdict: FalsePositive, By: "appeals", Time: t0.Add(time.Minute)})
+	got, err := db.Get(context.Background(), "d1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got.Labels) != 2 || got.Labels[0].Client != "ops" || got.Labels[0].By != "ana" || got.Labels[1].Client != "" {
+		t.Errorf("labels = %+v, want the first given by ana with ops, the second without a client", got.Labels)
+	}
+}
+
+// testMigrateLabelClient upgrades a database at schema version 4 that has
+// a label: the label keeps its by and gets an empty client, and labels
+// given after the upgrade keep theirs.
+func testMigrateLabelClient(t *testing.T, dsn string, open func(Options) *DB) {
+	ctx := context.Background()
+	driver, source, d := "pgx", dsn, postgresDialect
+	if strings.HasPrefix(dsn, "sqlite:") {
+		driver, source, d = "sqlite", strings.TrimPrefix(dsn, "sqlite:"), sqliteDialect
+	}
+	raw, err := sql.Open(driver, source)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { raw.Close() })
+	ms, err := loadMigrations(d.migrations)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := raw.ExecContext(ctx, `CREATE TABLE schema_migrations (
+    version       BIGINT PRIMARY KEY,
+    name          TEXT NOT NULL,
+    applied_at_us BIGINT NOT NULL
+)`); err != nil {
+		t.Fatal(err)
+	}
+	for _, m := range ms {
+		if m.version > 4 {
+			break
+		}
+		if _, err := raw.ExecContext(ctx, m.sql); err != nil {
+			t.Fatalf("%s: %v", m.name, err)
+		}
+		if _, err := raw.ExecContext(ctx, fmt.Sprintf("INSERT INTO schema_migrations (version, name, applied_at_us) VALUES (%d, '%s', 0)", m.version, m.name)); err != nil {
+			t.Fatal(err)
+		}
+	}
+	us := toMicros(t0)
+	for _, q := range []string{
+		fmt.Sprintf(`INSERT INTO decisions (id, event_id, decided_at_us, action, event_type, account_id, api_key_id, ruleset_version, degraded, decision_json, event_json)
+VALUES ('old', 'e', %d, 'allow', 'send', 'acct', '', 'v1', FALSE, '{}', '{}')`, us),
+		fmt.Sprintf(`INSERT INTO labels (decision_id, rule_id, verdict, labeled_by, reason, labeled_at_us, created_at_us)
+VALUES ('old', '', 'true_positive', 'ana', '', %d, %d)`, us, us),
+	} {
+		if _, err := raw.ExecContext(ctx, q); err != nil {
+			t.Fatal(err)
+		}
+	}
+	raw.Close()
+
+	db := open(Options{})
+	label(t, db, "old", Label{Verdict: FalsePositive, By: "bea", Client: "ops", Time: t0.Add(time.Minute)})
+	rows, err := db.SQL().QueryContext(ctx, "SELECT labeled_by, client FROM labels WHERE decision_id = 'old' ORDER BY id")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer rows.Close()
+	var got []string
+	for rows.Next() {
+		var by, client string
+		if err := rows.Scan(&by, &client); err != nil {
+			t.Fatal(err)
+		}
+		got = append(got, by+"/"+client)
+	}
+	if err := rows.Err(); err != nil {
+		t.Fatal(err)
+	}
+	if strings.Join(got, ",") != "ana/,bea/ops" {
+		t.Errorf("labels after the upgrade = %v, want ana/ (no client) and bea/ops", got)
 	}
 }
 
