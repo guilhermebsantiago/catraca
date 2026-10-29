@@ -15,6 +15,9 @@ keys; probes and Prometheus read health and metrics.
 | [`POST /v1/rules/reload`](#post-v1rulesreload) | token | reload the ruleset from disk |
 | [`GET /v1/rules/{id}/review`](#get-v1rulesidreview) | token | unlabeled matches of a rule, for reviewers |
 | [`GET /v1/stats/rules`](#get-v1statsrules) | token | precision per rule against the gate |
+| [`GET /v1/accounts/{id}/state`](#account-states) | token | an account's state: active, review, suspended or trusted |
+| [`PUT /v1/accounts/{id}/state`](#account-states) | token | set an account's state, optionally until a time |
+| [`DELETE /v1/accounts/{id}/state`](#account-states) | token | reset an account to active |
 | [`POST /v1/feedback`](#post-v1feedback) | signature | a feedback event in Catraca's format |
 | [`POST /v1/feedback/ses`](#post-v1feedbackses-and-post-v1feedbackusesend) | SNS signature | Amazon SES notifications through SNS |
 | [`POST /v1/feedback/usesend`](#post-v1feedbackses-and-post-v1feedbackusesend) | useSend signature | useSend webhooks |
@@ -71,6 +74,8 @@ ruleset reload adds `details`, one entry per problem. The provider routes
 | 400 | `invalid_event` | the event is missing what its type needs, or is over a [limit](#limits) |
 | 400 | `invalid_label` | the label's verdict or `by` is missing or wrong |
 | 400 | `invalid_parameter` | a query parameter is out of range |
+| 400 | `invalid_state` | an account state that is not one of the four, an `until` that has passed, or a `reason` over 1024 bytes |
+| 400 | `invalid_account_id` | an account id over 256 bytes |
 | 401 | `unauthorized` | no token, or not a configured one |
 | 404 | `not_found` | no such decision, or no such route |
 | 404 | `not_configured` | a provider route whose section is not in catraca.yaml |
@@ -82,6 +87,7 @@ ruleset reload adds `details`, one entry per problem. The provider routes
 | 503 | `no_ruleset` | no ruleset is loaded: decisions cannot be made |
 | 503 | `unavailable` | the event could not be decided; retry it after `Retry-After` |
 | 503 | `overloaded` | too many events are being decided, and this one is a `feedback` or `key_leak` event that a decision without the store would not record ([admission](config.md#admission)); send it again after `Retry-After` |
+| 503 | `store_unavailable` | the store did not answer an account state request; retry it |
 | 503 | `audit_unavailable` | the audit database has not opened yet (see [audit](config.md#audit)); decisions are still made, the routes that read or label them answer this until it opens |
 
 **Decisions.** `POST /v1/decide` and `POST /v1/events` answer
@@ -615,6 +621,68 @@ curl -s "$CATRACA/v1/stats/rules?since=30d" -H "Authorization: Bearer $TOKEN"
 `status` is `passes`, `insufficient_labels` or `below_precision`. Counts add
 up a rule's matches in both modes. `catraca report` prints the same report
 from the audit database directly.
+
+## Account states
+
+An operator's decision about an account, which rules read as
+[`account.state`](signals.md#account-states): suspend it, put it under
+review, or trust it, without editing the ruleset. The state is kept in the
+counter store, so every replica sees it, and it survives restarts when the
+store is Redis.
+
+| state | | default ruleset |
+|---|---|---|
+| `active` | no state: the default | |
+| `review` | a person should look at its sends | `account-review` holds every send |
+| `suspended` | the account must not send | `account-suspended` blocks every send |
+| `trusted` | the operator vouches for it | the volume heuristics skip it |
+
+### PUT /v1/accounts/{id}/state
+
+Sets the account's state, replacing any other, and answers `200` with it.
+
+| field | | |
+|---|---|---|
+| `state` | required | `review`, `suspended` or `trusted`; `active` resets the account, as `DELETE` does |
+| `until` | | when the state expires and the account is active again, in RFC 3339; without it the state lasts until it is changed |
+| `reason` | | why, for whoever reads the state later: a ticket number, say. At most 1024 bytes |
+
+```sh
+curl -s -X PUT "$CATRACA/v1/accounts/acct_123/state"   -H "Authorization: Bearer $TOKEN"   -d '{"state": "suspended", "until": "2026-11-01T18:00:00Z", "reason": "chargeback fraud, ticket 4411"}'
+```
+
+```json
+{
+  "account_id": "acct_123",
+  "state": "suspended",
+  "until": "2026-11-01T18:00:00Z",
+  "reason": "chargeback fraud, ticket 4411",
+  "set_at": "2026-10-29T21:02:11.402115Z",
+  "set_by": "platform"
+}
+```
+
+`set_at` is when the state was set and `set_by` the name of the API token
+that set it. Every change is logged at info level as `account state
+changed`, with the account, the state, `until`, `reason`, `set_by` and the
+request id; the audit log does not record it.
+
+Errors: `400 invalid_state` for another state, an `until` that has passed
+or a `reason` over 1024 bytes; `503 store_unavailable` when the store does
+not answer, in which case the state may or may not have changed: send the
+request again.
+
+### GET /v1/accounts/{id}/state
+
+Answers `200` with the account's state, in the shape above. An account
+with no state, or whose state expired or was reset, is
+`{"account_id": "acct_123", "state": "active"}`.
+
+### DELETE /v1/accounts/{id}/state
+
+Resets the account to `active` and answers `200` with
+`{"account_id": "acct_123", "state": "active"}`, whether or not it had a
+state.
 
 ## Provider endpoints
 

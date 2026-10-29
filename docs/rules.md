@@ -273,6 +273,29 @@ The precision gate needs labeled matches, which a new rule does not have. An
 override lives next to the rule, so it is reviewed with it and shows up in
 `git blame`.
 
+Rules that carry out an operator's decision are the other natural case.
+[`account.state`](signals.md#account-states) is set through the API, so a
+rule on it has no false positives for the gate to measure:
+
+```yaml
+- id: account-suspended
+  when: event.type == "send" && event.account_id != "" && account.state == "suspended"
+  action: block
+  mode: enforce
+  on_error: open
+  reason: This account is suspended
+  override:
+    by: alice@example.com
+    reason: >-
+      An operator suspended the account; the rule carries out that
+      decision.
+    at: 2026-10-29
+```
+
+To exempt accounts the operator trusts from a noisy heuristic, add
+`&& account.state != "trusted"` to its `when`, as the starter ruleset does
+for its volume rules.
+
 ## Load-time checks and lint
 
 A ruleset that fails any of these checks does not load, and every problem is
