@@ -147,6 +147,9 @@ type Options struct {
 	// error the current ruleset must stay in place. Nil disables the route.
 	Reload func() (*rules.Ruleset, error)
 	Audit  AuditLog
+	// AccountStates serves the /v1/accounts/{id}/state routes. Nil
+	// answers them 404 not_configured.
+	AccountStates AccountStates
 	// Gate is the precision gate GET /v1/stats/rules evaluates rules
 	// against. Zero fields take the defaults.
 	Gate   precision.Gate
@@ -197,20 +200,22 @@ type Server struct {
 	mux *http.ServeMux
 	// admin serves health and metrics, which mux serves too unless
 	// Options.SeparateAdmin is set.
-	admin        *http.ServeMux
-	decider      Decider
-	rules        RuleSource
-	reloadFn     func() (*rules.Ruleset, error)
-	rulesetFn    func() RulesetStatus
-	audit        AuditLog
-	gate         precision.Gate
-	tokens       []tokenHash
-	checks       []Check
-	dependencies func() map[string]DependencyStatus
-	log          *slog.Logger
-	maxBody      int64
-	now          func() time.Time
-	duration     *prometheus.HistogramVec
+	admin     *http.ServeMux
+	decider   Decider
+	rules     RuleSource
+	reloadFn  func() (*rules.Ruleset, error)
+	rulesetFn func() RulesetStatus
+	audit     AuditLog
+	// accountStates is nil when the account state routes are off.
+	accountStates AccountStates
+	gate          precision.Gate
+	tokens        []tokenHash
+	checks        []Check
+	dependencies  func() map[string]DependencyStatus
+	log           *slog.Logger
+	maxBody       int64
+	now           func() time.Time
+	duration      *prometheus.HistogramVec
 	// tracer is nil with tracing off.
 	tracer trace.Tracer
 
@@ -239,19 +244,20 @@ func New(opts Options) (*Server, error) {
 		return nil, errors.New("api: at least one API token is required")
 	}
 	s := &Server{
-		mux:          http.NewServeMux(),
-		admin:        http.NewServeMux(),
-		decider:      opts.Decider,
-		rules:        opts.Rules,
-		reloadFn:     opts.Reload,
-		rulesetFn:    opts.Ruleset,
-		audit:        opts.Audit,
-		gate:         opts.Gate,
-		checks:       opts.Checks,
-		dependencies: opts.Dependencies,
-		log:          opts.Logger,
-		maxBody:      opts.MaxBodyBytes,
-		now:          opts.Now,
+		mux:           http.NewServeMux(),
+		admin:         http.NewServeMux(),
+		decider:       opts.Decider,
+		rules:         opts.Rules,
+		reloadFn:      opts.Reload,
+		rulesetFn:     opts.Ruleset,
+		audit:         opts.Audit,
+		accountStates: opts.AccountStates,
+		gate:          opts.Gate,
+		checks:        opts.Checks,
+		dependencies:  opts.Dependencies,
+		log:           opts.Logger,
+		maxBody:       opts.MaxBodyBytes,
+		now:           opts.Now,
 	}
 	for _, t := range opts.Tokens {
 		if t.Value == "" {
@@ -290,6 +296,9 @@ func New(opts Options) (*Server, error) {
 	s.handle(s.mux, "POST /v1/rules/reload", s.authed(s.reload))
 	s.handle(s.mux, "GET /v1/rules/{id}/review", s.authed(s.review))
 	s.handle(s.mux, "GET /v1/stats/rules", s.authed(s.ruleStats))
+	s.handle(s.mux, "GET /v1/accounts/{id}/state", s.authed(s.withAccountStates(s.getAccountState)))
+	s.handle(s.mux, "PUT /v1/accounts/{id}/state", s.authed(s.withAccountStates(s.putAccountState)))
+	s.handle(s.mux, "DELETE /v1/accounts/{id}/state", s.authed(s.withAccountStates(s.deleteAccountState)))
 
 	s.handle(s.mux, routeFeedback, provider("generic feedback", "feedback.generic", s.admitFeedback(routeFeedback, opts.GenericFeedback)))
 	s.handle(s.mux, routeFeedbackSES, provider("SES feedback", "feedback.ses", s.admitFeedback(routeFeedbackSES, opts.SESFeedback)))
@@ -360,7 +369,7 @@ func provider(name, section string, h http.Handler) http.Handler {
 func (s *Server) fallback(mux *http.ServeMux) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		var allowed []string
-		for _, m := range []string{http.MethodGet, http.MethodPost} {
+		for _, m := range []string{http.MethodGet, http.MethodPost, http.MethodPut, http.MethodDelete} {
 			if m == r.Method {
 				continue
 			}

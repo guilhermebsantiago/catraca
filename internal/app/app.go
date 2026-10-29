@@ -199,6 +199,7 @@ func New(ctx context.Context, cfg *config.Config, opts Options) (_ *App, err err
 		Reload:        a.Reload,
 		Ruleset:       a.rulesets.Status,
 		Audit:         a.audit,
+		AccountStates: signal.NewAccountStates(a.store),
 		Gate:          cfg.Gate.Precision(),
 		Checks:        a.checks(),
 		Dependencies:  a.deps.statuses,
