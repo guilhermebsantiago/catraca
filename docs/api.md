@@ -78,11 +78,11 @@ ruleset reload adds `details`, one entry per problem. The provider routes
 | 413 | `body_too_large` | the body is over the limit |
 | 422 | `rule_not_matched` | a label names a rule that did not match the decision |
 | 422 | `invalid_ruleset` | a reload found errors; the current ruleset keeps serving |
-| 500 | `internal` | the audit log could not be read; details are in the server log |
+| 500 | `internal` | an unexpected error; details are in the server log |
 | 503 | `no_ruleset` | no ruleset is loaded: decisions cannot be made |
-| 503 | `unavailable` | the event could not be decided; retry it after `Retry-After` |
+| 503 | `unavailable` | the event could not be decided, or the audit database failed to answer (details are in the server log); retry it after `Retry-After` |
 | 503 | `overloaded` | too many events are being decided, and this one is a `feedback` or `key_leak` event that a decision without the store would not record ([admission](config.md#admission)); send it again after `Retry-After` |
-| 503 | `audit_unavailable` | the audit database has not opened yet (see [audit](config.md#audit)); decisions are still made, the routes that read or label them answer this until it opens |
+| 503 | `audit_unavailable` | the audit database has not opened yet (see [audit](config.md#audit)); decisions are still made, the routes that read or label them answer this, with `Retry-After`, until it opens |
 
 **Decisions.** `POST /v1/decide` and `POST /v1/events` answer
 `{"decision": {...}}`:
@@ -373,7 +373,8 @@ curl -s "$CATRACA/v1/decisions/01M50QGQP8YVGSY487W3YJ8J24" -H "Authorization: Be
 }
 ```
 
-`404 not_found` when the decision is not in the log.
+`404 not_found` when the decision is not in the log, `503 unavailable` with
+`Retry-After` when the audit database fails to answer.
 
 ### POST /v1/decisions/{id}/labels
 
@@ -416,8 +417,10 @@ curl -s -X POST "$CATRACA/v1/decisions/01M50QGQP8YVGSY487W3YJ8J24/labels" \
 
 Errors: `404 not_found` for an unknown decision, `400 invalid_label` for a
 missing `by` or an unknown verdict, `422 rule_not_matched` when `rule_id`
-names a rule that did not match the decision. `catraca label` sends the
-same request from the command line.
+names a rule that did not match the decision, `503 unavailable` with
+`Retry-After` when the audit database fails to answer. Sending a label again
+after a `503` is safe: precision counts the latest label of each match.
+`catraca label` sends the same request from the command line.
 
 ## Rules
 
