@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"os"
 	"path/filepath"
 	"reflect"
 	"strings"
@@ -96,14 +97,50 @@ func TestExampleConfig(t *testing.T) {
 	if want := "sqlite:" + filepath.Join("..", "..", "catraca.db"); cfg.Audit.DSN.Value() != want {
 		t.Errorf("audit.dsn = %q, want %q", cfg.Audit.DSN.Value(), want)
 	}
-	if len(cfg.Hooks) != 1 || cfg.Hooks[0].Name != "revoke_key" || cfg.Hooks[0].Timeout != 10*time.Second {
-		t.Errorf("hooks = %#v", cfg.Hooks)
+	// A hook enabled out of the box would retry deliveries to a placeholder
+	// URL after the README's quick start.
+	if len(cfg.Hooks) != 0 {
+		t.Errorf("hooks = %#v, want none until one is uncommented", cfg.Hooks)
 	}
 	if cfg.Feedback.Generic == nil || cfg.Feedback.SES != nil || cfg.Feedback.UseSend != nil {
 		t.Errorf("feedback = %#v", cfg.Feedback)
 	}
 	if cfg.SecretScanning.GitHub.Enabled {
 		t.Error("secret scanning is enabled")
+	}
+}
+
+// TestExampleConfigHook keeps the commented-out hook of the example valid:
+// uncommented, it loads.
+func TestExampleConfigHook(t *testing.T) {
+	path := filepath.Join("..", "..", "catraca.example.yaml")
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	lines := strings.Split(string(data), "\n")
+	in := false
+	for i, line := range lines {
+		if line == "# hooks:" {
+			in = true
+		} else if in && !strings.HasPrefix(line, "# ") {
+			in = false
+		}
+		if in {
+			lines[i] = strings.TrimPrefix(line, "# ")
+		}
+	}
+	cfg, err := Parse([]byte(strings.Join(lines, "\n")), path, env(map[string]string{
+		"CATRACA_API_TOKEN":       testToken,
+		"CATRACA_HOOK_SECRET":     testSecret,
+		"CATRACA_FEEDBACK_SECRET": testSecret,
+		"CATRACA_REVOKE_KEY_URL":  "https://platform.example/hooks/catraca/revoke-key",
+	}))
+	if err != nil {
+		t.Fatalf("the example configuration with its hook uncommented does not load:\n%v", err)
+	}
+	if len(cfg.Hooks) != 1 || cfg.Hooks[0].Name != "revoke_key" || cfg.Hooks[0].Timeout != 10*time.Second {
+		t.Errorf("hooks = %#v", cfg.Hooks)
 	}
 }
 

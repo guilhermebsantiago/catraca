@@ -94,30 +94,36 @@ From source (Go 1.26+), with in-memory counters and SQLite:
 ```sh
 go build -o catraca ./cmd/catraca
 cp catraca.example.yaml catraca.yaml
-export CATRACA_API_TOKEN=$(openssl rand -hex 32) CATRACA_HOOK_SECRET=$(openssl rand -hex 32) CATRACA_FEEDBACK_SECRET=$(openssl rand -hex 32)
+export CATRACA_API_TOKEN=$(openssl rand -hex 32) CATRACA_FEEDBACK_SECRET=$(openssl rand -hex 32)
 ./catraca config check && ./catraca serve
 ```
 
-Ask before a send:
+`config check` warns that the `revoke_key` effect has no hook: the example
+leaves its hook commented out until you point it at your platform.
+
+Report an API key leaked, then ask before a send made with it:
 
 ```sh
+curl -s localhost:8080/v1/events -H "Authorization: Bearer $CATRACA_API_TOKEN" \
+  -d '{"type": "key_leak", "api_key_id": "key_9c2e", "leak": {"source": "support-ticket"}}'
 curl -s localhost:8080/v1/decide -H "Authorization: Bearer $CATRACA_API_TOKEN" \
   -d '{"type": "send", "account_id": "acct_tidal", "api_key_id": "key_9c2e", "ip": "192.0.2.200",
        "from": "alerts@tidal.example", "to": ["carla.34@box.example"], "subject": "Urgent: verify your account"}'
 ```
 
-This key had been reported leaked, so the answer, recorded from a real run,
-is a block that also fires the `revoke_key` hook:
+The answer to the send, recorded from a real run, is a block, with the
+`revoke_key` effect that a configured hook carries out:
 
 ```json
 {"decision": {
-  "id": "01M50Y33JMPZ4MYNAJMWSCZMV0",
-  "time": "2026-10-15T23:24:23.5084785Z",
+  "id": "01M65144B9R8Y769Q1EFQBETX5",
+  "event_id": "01M65144B9R8Y769Q1EFQBETX4",
+  "time": "2026-10-29T23:50:02.3457445Z",
   "action": "block",
   "matches": [{"rule_id": "leaked-key-send", "action": "block", "mode": "enforce", "effects": ["revoke_key"],
                "reason": "This API key was found in public and must be rotated before it can send again"}],
-  "ruleset_version": "3ed1ef48775c",
-  "latency_us": 109
+  "ruleset_version": "adf1d0464c14",
+  "latency_us": 95
 }}
 ```
 
