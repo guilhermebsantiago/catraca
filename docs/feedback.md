@@ -3,8 +3,9 @@
 Bounces and complaints are the clearest sign that an account is sending
 mail people did not ask for. Catraca turns them into `feedback` events, one
 per affected recipient, so rules can read `account.bounce_rate_24h`,
-`account.hard_bounce_rate_24h`, `account.complaint_rate_24h` and
-`domain.complaints_24h`.
+`account.hard_bounce_rate_24h`, `account.complaint_rate_24h`, their 7 day
+variants and `domain.complaints_24h`. The rates are per recipient, like the
+events ([feedback rates](signals.md#feedback-rates)).
 
 | route | source | authentication |
 |---|---|---|
