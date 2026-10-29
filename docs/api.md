@@ -58,17 +58,19 @@ reload the rules:
 | `POST /v1/decisions/{id}/labels` | `label` |
 | `POST /v1/rules/reload` | `admin` |
 
-`read` returns what the audit log holds: account ids, IPs, recipient
+`read` reads what the audit log holds: account ids, IPs, recipient
 domains, and addresses and links with `audit.event_detail: full`. `admin`
 is for what changes how Catraca decides. The feedback and secret scanning
 routes take no token, so no scope: their signature proves the provider sent
 them. A token configured without `scopes` has every scope, so
 configurations written before scopes keep working; `catraca config check`
-warns about each one. A token without the route's scope gets `403
-insufficient_scope` with
-`WWW-Authenticate: Bearer realm="catraca", error="insufficient_scope", scope="read"`,
-and the access log line has `client`, `scope` and `"scope_check":
-"denied"` (`"allowed"` once the token has it).
+warns about each one.
+
+A token without the route's scope gets `403 insufficient_scope` with
+`WWW-Authenticate: Bearer realm="catraca", error="insufficient_scope", scope="read"`
+(the scope the route needs), and its access log line has the token's
+`client` name, the `scope` and `"scope_check": "denied"`; a request the
+token may make has `"scope_check": "allowed"`.
 
 A new route takes one of these scopes, or a new one: add it to `Scopes` in
 `internal/api/scope.go` and `TokenScopes` in `internal/config`, and to this

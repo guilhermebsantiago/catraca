@@ -78,8 +78,8 @@ func (c *cli) configCheck(_ context.Context, args []string) int {
 	fs := c.flagSet("config check", `Usage: catraca config check [-config catraca.yaml]
 
 Validates the configuration and the ruleset it names without starting the
-server, and prints a summary. Problems are errors; ruleset lint findings and
-effects without a hook are warnings.
+server, and prints a summary. Problems are errors; ruleset lint findings,
+effects without a hook and API tokens without scopes are warnings.
 `)
 	path := c.configFlag(fs)
 	if _, code := parse(fs, args, 0, 0); code >= 0 {
