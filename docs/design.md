@@ -334,11 +334,12 @@ scanning routes, which authenticate by signature.
 | route | |
 |---|---|
 | POST /v1/decide | decide an event (sends: synchronous) |
-| POST /v1/events | record an event (feedback, account): 202 + decision |
-| GET /v1/decisions/{id} | a decision and its labels |
+| POST /v1/events | record an event (feedback, account, key leak): 202 + decision |
+| GET /v1/decisions/{id} | a decision, its stored event and its labels |
 | POST /v1/decisions/{id}/labels | label a decision (reversal = false_positive) |
 | GET /v1/rules | the loaded ruleset and its version |
 | POST /v1/rules/reload | reload the ruleset from disk |
+| GET /v1/rules/{id}/review | unlabeled matches of a rule, for reviewers |
 | GET /v1/stats/rules?since=720h | precision per rule |
 | POST /v1/feedback, /v1/feedback/ses, /v1/feedback/usesend | feedback |
 | POST /v1/secret-scanning/github | GitHub partner endpoint |

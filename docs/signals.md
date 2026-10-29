@@ -167,9 +167,9 @@ The creation time comes from `account.created_at` on any event; the latest one
 sent wins. The first-seen time is the earliest event time seen for the
 account, whatever the order events arrived in; since older events are
 rejected, it is at most `engine.max_event_age` before the account's first
-event reached Catraca. Both are kept for a year after
-the account's last event (configurable), so an account idle for longer looks
-new again. Ages are never negative: a creation time in the future gives 0.
+event reached Catraca. Both are kept for a year after the account's last
+event, so an account idle for longer looks new again. Ages are never
+negative: a creation time in the future gives 0.
 
 ### `new_ip` and `recent_ip`
 

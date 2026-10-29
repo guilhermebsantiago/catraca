@@ -93,8 +93,8 @@ ruleset reload adds `details`, one entry per problem. The provider routes
 | `event_id` | the event's id: the one you sent, or a generated one |
 | `time` | when the decision was made |
 | `action` | `allow`, `flag`, `throttle`, `hold` or `block`: what to do |
-| `retry_after` | for `throttle`, how long to wait, in **nanoseconds** (a Go duration); the `Retry-After` header has it in seconds |
-| `matches` | the enforced rules that matched: `rule_id`, `reason`, `action`, `mode`, `effects`, `retry_after`, and `errored` when the rule matched only because it fails closed |
+| `retry_after` | for `throttle`, how long to wait, in whole seconds rounded up, the same number as the `Retry-After` header |
+| `matches` | the enforced rules that matched: `rule_id`, `reason`, `action`, `mode`, `effects`, `retry_after` (whole seconds, for a throttle rule), and `errored` when the rule matched only because it fails closed |
 | `shadow` | shadow rules that matched: what would have happened |
 | `errors` | rules that could not be evaluated, with why |
 | `degraded` | true when signals were missing, for example because the store timed out |
