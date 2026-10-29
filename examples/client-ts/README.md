@@ -18,7 +18,6 @@ const catraca = new Catraca({
   baseUrl: "http://catraca.internal:8080",
   token: process.env.CATRACA_TOKEN!,
   timeoutMs: 250,
-  failOpen: true,
 });
 
 const decision = await catraca.decide({
@@ -63,7 +62,7 @@ to 1000 ms; on the send path, set it to what a send can afford to wait.
 
 ## Failing open
 
-With `failOpen: true`, `decide` and `record` never throw because Catraca is
+By default, `decide` and `record` never throw because Catraca is
 unavailable. When Catraca cannot be reached, times out, answers with a 5xx,
 or answers with something that is not a decision, they return
 
@@ -80,6 +79,11 @@ those would turn detection off without anyone noticing. A request canceled
 through your own `signal` throws its abort reason.
 
 `label` and `getDecision` never fail open: they are not on the send path.
+
+A platform that would rather not send unchecked mail sets `failOpen: false`.
+Then `decide` and `record` throw a `CatracaError` when Catraca is unavailable
+too, with `unavailable` set to true, and the platform decides what to do with
+the send, for example queue it and try again.
 
 ## Develop
 

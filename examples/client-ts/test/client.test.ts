@@ -47,13 +47,14 @@ const entry: DecisionEntry = {
 
 describe("Catraca client", () => {
   let mock: MockCatraca;
+  // client has the default options, so it fails open; failClosed does not.
   let client: Catraca;
-  let failOpen: Catraca;
+  let failClosed: Catraca;
 
   before(async () => {
     mock = await startMock();
     client = new Catraca({ baseUrl: mock.url, token: "secret", timeoutMs: 200 });
-    failOpen = new Catraca({ baseUrl: mock.url, token: "secret", timeoutMs: 200, failOpen: true });
+    failClosed = new Catraca({ baseUrl: mock.url, token: "secret", timeoutMs: 200, failOpen: false });
   });
   after(() => mock.close());
   beforeEach(() => {
@@ -111,7 +112,7 @@ describe("Catraca client", () => {
     mock.handle((_req, res) =>
       json(res, 400, { error: { code: "invalid_event", message: "event: account_id is required", details: ["x"] } }),
     );
-    for (const c of [client, failOpen]) {
+    for (const c of [client, failClosed]) {
       await assert.rejects(c.decide(send), (err: unknown) => {
         assert.ok(err instanceof CatracaError);
         assert.equal(err.kind, "http");
@@ -127,13 +128,21 @@ describe("Catraca client", () => {
 
   it("throws on a bad token, even when failing open", async () => {
     mock.handle((_req, res) => json(res, 401, { error: { code: "unauthorized", message: "bad token" } }));
-    await assert.rejects(failOpen.decide(send), { name: "CatracaError", status: 401 });
+    await assert.rejects(client.decide(send), { name: "CatracaError", status: 401 });
+  });
+
+  it("fails open by default", async () => {
+    mock.handle((_req, res) => json(res, 502, { error: { code: "bad_gateway", message: "upstream" } }));
+    const d = await new Catraca({ baseUrl: mock.url, token: "secret" }).decide(send);
+    assert.equal(d.action, "allow");
+    assert.equal(d.fail_open?.status, 502);
+    await assert.rejects(failClosed.decide(send), { name: "CatracaError", status: 502 });
   });
 
   it("fails open on a server error", async () => {
     mock.handle((_req, res) => json(res, 503, { error: { code: "no_ruleset", message: "no ruleset is loaded" } }));
-    await assert.rejects(client.decide(send), { name: "CatracaError", kind: "http", status: 503 });
-    const d = await failOpen.decide(send);
+    await assert.rejects(failClosed.decide(send), { name: "CatracaError", kind: "http", status: 503 });
+    const d = await client.decide(send);
     assert.equal(d.action, "allow");
     assert.equal(d.id, "");
     assert.equal(d.fail_open?.kind, "http");
@@ -144,9 +153,9 @@ describe("Catraca client", () => {
     mock.handle(() => {
       // Never answer.
     });
-    await assert.rejects(client.decide(send), { name: "CatracaError", kind: "timeout" });
+    await assert.rejects(failClosed.decide(send), { name: "CatracaError", kind: "timeout" });
     const started = Date.now();
-    const d = await failOpen.decide(send, { timeoutMs: 50 });
+    const d = await client.decide(send, { timeoutMs: 50 });
     assert.ok(Date.now() - started < 1000, "the per-request timeout was not used");
     assert.equal(d.action, "allow");
     assert.equal(d.fail_open?.kind, "timeout");
@@ -158,32 +167,32 @@ describe("Catraca client", () => {
         res.writeHead(200, { "Content-Type": "application/json" });
         res.end(reply);
       });
-      await assert.rejects(client.decide(send), { name: "CatracaError", kind: "invalid_response" });
-      assert.equal((await failOpen.decide(send)).fail_open?.kind, "invalid_response");
+      await assert.rejects(failClosed.decide(send), { name: "CatracaError", kind: "invalid_response" });
+      assert.equal((await client.decide(send)).fail_open?.kind, "invalid_response");
     }
   });
 
   it("rethrows the caller's abort instead of failing open", async () => {
     mock.handle(() => {});
     const controller = new AbortController();
-    const pending = failOpen.decide(send, { signal: controller.signal });
+    const pending = client.decide(send, { signal: controller.signal });
     controller.abort(new Error("caller gave up"));
     await assert.rejects(pending, { message: "caller gave up" });
   });
 
   it("does not fail open for label and getDecision", async () => {
     mock.handle((_req, res) => json(res, 500, { error: { code: "internal", message: "boom" } }));
-    await assert.rejects(failOpen.getDecision("x"), { name: "CatracaError", status: 500 });
-    await assert.rejects(failOpen.label("x", { verdict: "true_positive", by: "me" }), { status: 500 });
+    await assert.rejects(client.getDecision("x"), { name: "CatracaError", status: 500 });
+    await assert.rejects(client.label("x", { verdict: "true_positive", by: "me" }), { status: 500 });
   });
 });
 
 describe("Catraca client without a server", () => {
   it("fails open when Catraca cannot be reached", async () => {
     const url = await closedPortUrl();
-    const client = new Catraca({ baseUrl: url, token: "t" });
-    await assert.rejects(client.decide(send), { name: "CatracaError", kind: "network" });
-    const d = await new Catraca({ baseUrl: url, token: "t", failOpen: true }).decide(send);
+    const failClosed = new Catraca({ baseUrl: url, token: "t", failOpen: false });
+    await assert.rejects(failClosed.decide(send), { name: "CatracaError", kind: "network" });
+    const d = await new Catraca({ baseUrl: url, token: "t" }).decide(send);
     assert.equal(d.action, "allow");
     assert.equal(d.fail_open?.kind, "network");
   });

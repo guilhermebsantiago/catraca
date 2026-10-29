@@ -21,7 +21,8 @@ export interface CatracaOptions {
    * `fail_open` set, so the platform keeps sending. Errors that mean the
    * request itself is wrong (4xx: a bad token, an invalid event) still throw,
    * so they are found and fixed instead of silently turning detection off.
-   * Default false.
+   * Default true. Set it to false to have every failure throw a CatracaError
+   * instead, for a platform that would rather not send unchecked mail.
    */
   failOpen?: boolean;
   /** The fetch to use. Default globalThis.fetch. */
@@ -103,7 +104,7 @@ export class Catraca {
     this.#baseUrl = url.href.replace(/\/+$/, "");
     this.#token = options.token;
     this.#timeoutMs = options.timeoutMs ?? defaultTimeoutMs;
-    this.#failOpen = options.failOpen ?? false;
+    this.#failOpen = options.failOpen ?? true;
     this.#fetch = options.fetch ?? globalThis.fetch;
   }
 
