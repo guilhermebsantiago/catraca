@@ -156,6 +156,7 @@ caveats: [docs/benchmark.md](docs/benchmark.md).
 - [Feedback: SES, useSend](docs/feedback.md) · [GitHub secret scanning](docs/secret-scanning.md)
 - [Faults: what happens when a dependency fails](docs/faults.md) · [Objectives and alerts](docs/slo.md) · [Tracing](docs/tracing.md)
 - [Benchmarks](docs/benchmark.md) · [Brand](docs/brand.md)
+- [Compatibility: what is stable before 1.0](docs/compatibility.md) · [Changelog](CHANGELOG.md)
 
 ## Examples
 
@@ -169,8 +170,11 @@ caveats: [docs/benchmark.md](docs/benchmark.md).
 ## Status
 
 Early: everything above works and is tested (unit, contract, end-to-end, and
-CI against real Redis, Postgres and Docker), but the API and configuration
-may still change before a first tagged release.
+CI against real Redis, Postgres and Docker), but some of it may still change
+before 1.0. [docs/compatibility.md](docs/compatibility.md) says what is
+stable (the event and decision JSON, the ruleset format, the hook payload
+and its signature) and what may change (configuration keys, metric names,
+the command line), and [CHANGELOG.md](CHANGELOG.md) lists every change.
 
 Releases will be cut from `v*` tags: binaries for Linux, macOS and Windows
 (amd64 and arm64) with checksums, SBOMs and build provenance, and a signed

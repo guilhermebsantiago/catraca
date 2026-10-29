@@ -44,6 +44,11 @@ go run golang.org/x/vuln/cmd/govulncheck@v1.9.0 ./...
   [docs/slo.md](docs/slo.md) says why.
 - A span never carries an account, a key, an address, a token or content:
   see [docs/tracing.md](docs/tracing.md#no-personal-data).
+- A change users can see gets a line under Unreleased in
+  [CHANGELOG.md](CHANGELOG.md), by area. A change to a surface that
+  [docs/compatibility.md](docs/compatibility.md) calls stable only adds to
+  it; one that breaks something that may change goes under Changed or
+  Removed, with what to do about it.
 - Commits explain why, in the imperative.
 
 ## Fuzzing
@@ -115,7 +120,9 @@ Releases are cut by pushing a tag; [release.yml](.github/workflows/release.yml)
 runs [GoReleaser](.goreleaser.yaml) and nothing is built on a laptop.
 
 1. Check that `main` is green, including the release dry run, and that
-   `go.mod`'s toolchain is the newest Go patch release.
+   `go.mod`'s toolchain is the newest Go patch release. In
+   [CHANGELOG.md](CHANGELOG.md), move Unreleased under a heading for the
+   new version and its date, and commit that.
 2. Tag the commit and push the tag:
 
    ```sh
