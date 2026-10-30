@@ -115,6 +115,25 @@ func TestAccountStateErrors(t *testing.T) {
 	}
 }
 
+func TestAccountStateUnreadable(t *testing.T) {
+	m := store.NewMemory()
+	var b store.Batch
+	b.Set("account:state:a", "{", 0)
+	if err := m.Do(context.Background(), &b); err != nil {
+		t.Fatal(err)
+	}
+	s := newTestServer(t, deciderFunc(nil), nil, withStates(signal.NewAccountStates(m)))
+	if rec := serve(s, "GET", "/v1/accounts/a/state", ""); rec.Code != 500 || !strings.Contains(rec.Body.String(), `"code":"internal"`) {
+		t.Errorf("GET of an unreadable state: %d %s", rec.Code, rec.Body)
+	}
+	if rec := serve(s, "DELETE", "/v1/accounts/a/state", ""); rec.Code != 200 {
+		t.Errorf("DELETE of an unreadable state: %d %s", rec.Code, rec.Body)
+	}
+	if rec := serve(s, "GET", "/v1/accounts/a/state", ""); rec.Code != 200 {
+		t.Errorf("GET after DELETE: %d %s", rec.Code, rec.Body)
+	}
+}
+
 type failingStates struct{}
 
 func (failingStates) Get(context.Context, string) (signal.AccountState, error) {

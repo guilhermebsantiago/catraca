@@ -60,6 +60,11 @@ func (s *Server) getAccountState(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	st, err := s.accountStates.Get(r.Context(), id)
+	if errors.Is(err, signal.ErrUnreadableAccountState) {
+		s.log.ErrorContext(r.Context(), "account state could not be read", "error", err)
+		writeError(w, http.StatusInternalServerError, "internal", "the stored account state could not be read; PUT or DELETE replaces it")
+		return
+	}
 	if err != nil {
 		s.accountStateFailed(w, r, "read", err)
 		return

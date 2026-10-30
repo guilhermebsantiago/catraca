@@ -152,7 +152,14 @@ func TestAccountStateUnreadable(t *testing.T) {
 	if _, ok := set.Account["sends_1m"]; !ok {
 		t.Error("the other account signals are absent")
 	}
-	if _, err := signal.NewAccountStates(s).Get(context.Background(), "acct-1"); err == nil {
-		t.Error("Get of an unreadable state succeeded")
+	states := signal.NewAccountStates(s)
+	if _, err := states.Get(context.Background(), "acct-1"); !errors.Is(err, signal.ErrUnreadableAccountState) {
+		t.Errorf("Get of an unreadable state = %v, want ErrUnreadableAccountState", err)
+	}
+	if err := states.Set(context.Background(), "acct-1", signal.AccountState{State: signal.StateReview}); err != nil {
+		t.Fatal(err)
+	}
+	if got := observe(t, c, send(time.Second)).Account["state"]; got != signal.StateReview {
+		t.Errorf("account.state after replacing an unreadable state = %v, want review", got)
 	}
 }

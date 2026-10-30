@@ -628,7 +628,7 @@ An operator's decision about an account, which rules read as
 [`account.state`](signals.md#account-states): suspend it, put it under
 review, or trust it, without editing the ruleset. The state is kept in the
 counter store, so every replica sees it, and it survives restarts when the
-store is Redis.
+store is Redis with persistence (RDB or AOF); the memory store loses it.
 
 | state | | default ruleset |
 |---|---|---|
@@ -676,7 +676,9 @@ request again.
 
 Answers `200` with the account's state, in the shape above. An account
 with no state, or whose state expired or was reset, is
-`{"account_id": "acct_123", "state": "active"}`.
+`{"account_id": "acct_123", "state": "active"}`. A stored state Catraca
+cannot read, written to the store by something else, answers
+`500 internal`; `PUT` or `DELETE` replaces it.
 
 ### DELETE /v1/accounts/{id}/state
 

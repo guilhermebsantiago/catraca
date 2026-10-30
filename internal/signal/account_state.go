@@ -30,6 +30,11 @@ const (
 // state it does not accept.
 var ErrInvalidAccountState = errors.New("signal: invalid account state")
 
+// ErrUnreadableAccountState is returned, wrapped, by AccountStates.Get when
+// the stored state is not one Set wrote. Setting or resetting the state
+// replaces it.
+var ErrUnreadableAccountState = errors.New("signal: unreadable account state")
+
 // maxStateReasonBytes bounds AccountState.Reason, which is stored with the
 // state and read with every event of the account.
 const maxStateReasonBytes = 1024
@@ -77,7 +82,7 @@ func (a *AccountStates) Get(ctx context.Context, id string) (AccountState, error
 	}
 	st, ok := parseAccountState(r, a.now())
 	if !ok {
-		return AccountState{}, fmt.Errorf("signal: account %q has an unreadable state", id)
+		return AccountState{}, fmt.Errorf("%w for account %q", ErrUnreadableAccountState, id)
 	}
 	return st, nil
 }
