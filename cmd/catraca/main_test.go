@@ -76,7 +76,7 @@ func TestUsageAndVersion(t *testing.T) {
 	expect(t, runCLI(t, nil), exitUsage, "Usage:", "Exit codes:")
 	expect(t, runCLI(t, nil, "help"), exitOK, "rules gate")
 	expect(t, runCLI(t, nil, "deploy"), exitUsage, `unknown command "deploy"`)
-	expect(t, runCLI(t, nil, "rules"), exitUsage, "Usage: catraca rules <check|test|gate>")
+	expect(t, runCLI(t, nil, "rules"), exitUsage, "Usage: catraca rules <check|test|gate|explain>")
 	expect(t, runCLI(t, nil, "outbox"), exitUsage, "Usage: catraca outbox <list|retry|stats>")
 	expect(t, runCLI(t, nil, "outbox", "drain"), exitUsage, `unknown command "drain"`)
 	expect(t, runCLI(t, nil, "rules", "lint"), exitUsage, `unknown command "lint"`)
@@ -155,6 +155,54 @@ func TestRulesTest(t *testing.T) {
 	expect(t, runCLI(t, nil, "rules", "test", rules, badFixture), exitFailed, "unknown field")
 	expect(t, runCLI(t, nil, "rules", "test", rules), exitUsage, "Usage: catraca rules test")
 	expect(t, runCLI(t, nil, "rules", "test", rules, filepath.Join(dir, "none.yaml")), exitError)
+}
+
+const explainRules = `version: 1
+rules:
+  - id: burst
+    when: event.type == "send" && account.sends_1m > 10
+    action: throttle
+    retry_after: 90s
+    mode: enforce
+    on_error: open
+    reason: burst
+  - id: young
+    when: account.age_hours < 24
+    action: hold
+    mode: shadow
+    on_error: closed
+    reason: young
+`
+
+func TestRulesExplain(t *testing.T) {
+	dir := t.TempDir()
+	rules := writeFile(t, dir, "rules.yaml", explainRules)
+	signals := writeFile(t, dir, "signals.yaml", "event: {type: send}\naccount: {sends_1m: 11}\n")
+	r := runCLI(t, nil, "rules", "explain", rules, signals)
+	expect(t, r, exitOK, "RULE", "burst", "young", "signal account.age_hours is absent (on_error: closed)", "action: throttle (retry after 90s)")
+	if !strings.Contains(r.stdout, "yes") {
+		t.Errorf("no rule matched:\n%s", r)
+	}
+
+	// A response of POST /v1/rules/explain is read back.
+	resp := writeFile(t, dir, "explained.json", `{"ruleset_version":"x","signals":{"event":{"type":"send"},"account":{"sends_1m":2,"age_hours":100},"key":null,"ip":null,"domain":null},"rules":[]}`)
+	r = runCLI(t, nil, "rules", "explain", rules, resp, "--json")
+	expect(t, r, exitOK, `"action": "allow"`, `"matched": false`, `"sends_1m": 2`)
+	var x struct {
+		Rules []struct {
+			ID      string
+			Matched bool
+			Error   string
+		}
+	}
+	if err := json.Unmarshal([]byte(r.stdout), &x); err != nil || len(x.Rules) != 2 || x.Rules[1].Error != "" {
+		t.Errorf("JSON explanation %v:\n%s", err, r)
+	}
+
+	bad := writeFile(t, dir, "bad.yaml", "account: {sends_1m: many}\n")
+	expect(t, runCLI(t, nil, "rules", "explain", rules, bad), exitFailed, "account.sends_1m: want an integer")
+	expect(t, runCLI(t, nil, "rules", "explain", rules), exitUsage, "Usage: catraca rules explain")
+	expect(t, runCLI(t, nil, "rules", "explain", rules, filepath.Join(dir, "none.yaml")), exitError)
 }
 
 // auditDB creates a SQLite audit database with n decisions that rule
