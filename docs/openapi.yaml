@@ -16,14 +16,25 @@ info:
     route that takes a token needs one scope, named by `x-catraca-scope` on
     the operation. `/healthz`, `/readyz` and `/metrics` take no token.
 
+    Paths are relative to the server, `server.addr` (`:8080` by default);
+    with `server.admin_addr`, `/healthz`, `/readyz` and `/metrics` are on
+    that address instead.
+
     Times are RFC 3339 strings. `retry_after` is whole seconds, rounded up,
     the same number as the `Retry-After` header.
   license:
     name: Apache-2.0
     identifier: Apache-2.0
 servers:
-  - url: http://localhost:8080
-    description: A local server on the default address.
+  - url: '{scheme}://{host}'
+    description: A Catraca server, `$CATRACA` in docs/api.md.
+    variables:
+      scheme:
+        enum: [http, https]
+        default: http
+      host:
+        description: The host and port of `server.addr`.
+        default: localhost:8080
 security:
   - bearerToken: []
 tags:
@@ -568,7 +579,15 @@ paths:
         content:
           application/json:
             schema:
-              $ref: '#/components/schemas/Event'
+              $ref: '#/components/schemas/FeedbackRequest'
+            example:
+              account_id: acct_42
+              time: '2026-10-15T12:00:00Z'
+              from: news@shop.example
+              feedback:
+                kind: bounce
+                bounce_type: permanent
+                recipient: gone@mail.example
       responses:
         '202':
           description: The event was recorded; the decision.
@@ -711,6 +730,8 @@ paths:
                 required: [status]
                 properties:
                   status: {type: string, const: ok}
+        '404':
+          $ref: '#/components/responses/AdminElsewhere'
   /readyz:
     get:
       operationId: readyz
@@ -741,6 +762,8 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/Readiness'
+        '404':
+          $ref: '#/components/responses/AdminElsewhere'
   /metrics:
     get:
       operationId: metrics
@@ -759,7 +782,7 @@ paths:
             application/openmetrics-text:
               schema: {type: string}
         '404':
-          $ref: '#/components/responses/NotFound'
+          $ref: '#/components/responses/AdminElsewhere'
 components:
   securitySchemes:
     bearerToken:
@@ -887,6 +910,15 @@ components:
         application/json:
           schema:
             $ref: '#/components/schemas/ErrorResponse'
+    AdminElsewhere:
+      description: |
+        `not_found` on the API address when `server.admin_addr` serves this
+        route on an address of its own; for `/metrics`, also
+        `not_configured` without a metrics registry.
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorResponse'
     ProviderError:
       description: An error in the format providers expect.
       content:
@@ -921,8 +953,7 @@ components:
           $ref: '#/components/schemas/FeedbackKind'
         bounce_type:
           type: string
-          description: For bounces.
-          enum: [permanent, transient]
+          description: For bounces, `permanent` or `transient`.
         recipient: {type: string}
         message_id:
           type: string
@@ -946,14 +977,30 @@ components:
         source: {type: string}
         url: {type: string}
     Event:
-      type: object
       description: |
         An event. Decoded strictly: an unknown field is `400 invalid_json`.
         `account_id` is required except for `key_leak`, which needs
         `api_key_id`; a `feedback` event needs `feedback`. The limits of
         docs/api.md#limits apply; an event over one is `400 invalid_event`.
-      additionalProperties: false
+      allOf:
+        - $ref: '#/components/schemas/EventFields'
       required: [type]
+      unevaluatedProperties: false
+    FeedbackRequest:
+      description: |
+        A feedback event for `POST /v1/feedback`: an event whose `type`, if
+        present, is `feedback`. `bounce_type` is matched without regard to
+        case there.
+      allOf:
+        - $ref: '#/components/schemas/EventFields'
+      required: [account_id, feedback]
+      properties:
+        type:
+          const: feedback
+      unevaluatedProperties: false
+    EventFields:
+      type: object
+      description: Every field an event may carry.
       properties:
         id:
           type: string
