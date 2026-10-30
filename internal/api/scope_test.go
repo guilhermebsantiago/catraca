@@ -33,6 +33,7 @@ var scopedRoutes = []struct {
 	{"POST /v1/decisions/{id}/labels", "/v1/decisions/d1/labels", `{"verdict":"true_positive","by":"ana"}`, ScopeLabel},
 	{"GET /v1/rules", "/v1/rules", "", ScopeRead},
 	{"POST /v1/rules/reload", "/v1/rules/reload", "", ScopeAdmin},
+	{"POST /v1/rules/explain", "/v1/rules/explain", `{"type":"send","account_id":"a"}`, ScopeRead},
 	{"GET /v1/rules/{id}/review", "/v1/rules/r1/review", "", ScopeRead},
 	{"GET /v1/stats/rules", "/v1/stats/rules", "", ScopeRead},
 	{"GET /v1/accounts/{id}/state", "/v1/accounts/a/state", "", ScopeRead},

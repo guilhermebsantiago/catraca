@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"flag"
 	"fmt"
@@ -130,6 +131,59 @@ See docs/rules.md for the fixture format.
 		}
 	}
 	return result
+}
+
+func (c *cli) rulesExplain(_ context.Context, args []string) int {
+	fs := c.flagSet("rules explain", `Usage: catraca rules explain <ruleset> <signals> [--json]
+
+Evaluates a ruleset against the signals in a file, with no server and no
+store, and prints each rule's result and the action a decision with those
+signals would take. The signals are written as a fixture case's (see
+docs/rules.md), in YAML or JSON; a response of POST /v1/rules/explain is
+read too, so the signals of a real event can be edited and explained again.
+`)
+	asJSON := fs.Bool("json", false, "print the explanation as JSON, as POST /v1/rules/explain does")
+	pos, code := parse(fs, args, 2, 2)
+	if code >= 0 {
+		return code
+	}
+	rs, code := c.loadRuleset(pos[0])
+	if rs == nil {
+		return code
+	}
+	set, err := rules.LoadSignals(pos[1])
+	if err != nil {
+		c.printRulesError(pos[1], err)
+		return failure(err)
+	}
+	x := rs.Explain(set)
+	if *asJSON {
+		enc := json.NewEncoder(c.stdout)
+		enc.SetIndent("", "  ")
+		if err := enc.Encode(x); err != nil {
+			return exitError
+		}
+		return exitOK
+	}
+	tw := tabwriter.NewWriter(c.stdout, 0, 0, 2, ' ', 0)
+	fmt.Fprintln(tw, "RULE\tMATCHED\tMODE\tACTION\tERROR")
+	for _, r := range x.Rules {
+		matched, errText := "no", "-"
+		if r.Matched {
+			matched = "yes"
+		}
+		if r.Error != "" {
+			errText = fmt.Sprintf("%s (on_error: %s)", r.Error, r.OnError)
+		}
+		fmt.Fprintf(tw, "%s\t%s\t%s\t%s\t%s\n", r.ID, matched, r.Mode, r.Action, errText)
+	}
+	_ = tw.Flush()
+	action := string(x.Action)
+	if x.RetryAfter > 0 {
+		action += fmt.Sprintf(" (retry after %ds)", x.RetryAfter)
+	}
+	fmt.Fprintf(c.stdout, "\naction: %s, ruleset version %s\n", action, x.RulesetVersion)
+	return exitOK
 }
 
 // gateFlags are the flags shared by rules gate and report.

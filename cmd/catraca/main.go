@@ -59,6 +59,7 @@ Commands:
   rules check    validate a ruleset and print its lint warnings
   rules test     run fixture files against a ruleset
   rules gate     fail when an enforced rule is below the precision gate
+  rules explain  show each rule's result for signals from a file
   replay         backtest a ruleset on labeled events
   report         print the precision of every rule, with promote and retire candidates
   label          label a decision on a running server
@@ -123,7 +124,7 @@ func run(ctx context.Context, args []string, stdout, stderr io.Writer, lookupEnv
 	case "config":
 		return c.group(ctx, "config", rest, map[string]command{"check": c.configCheck})
 	case "rules":
-		return c.group(ctx, "rules", rest, map[string]command{"check": c.rulesCheck, "test": c.rulesTest, "gate": c.rulesGate})
+		return c.group(ctx, "rules", rest, map[string]command{"check": c.rulesCheck, "test": c.rulesTest, "gate": c.rulesGate, "explain": c.rulesExplain})
 	case "replay":
 		return c.replay(ctx, rest)
 	case "report":
@@ -155,7 +156,7 @@ type command func(ctx context.Context, args []string) int
 // group runs a subcommand of a command with subcommands, such as rules.
 func (c *cli) group(ctx context.Context, name string, args []string, subs map[string]command) int {
 	var names []string
-	for _, n := range []string{"check", "test", "gate", "list", "retry", "stats", "state", "export"} {
+	for _, n := range []string{"check", "test", "gate", "explain", "list", "retry", "stats", "state", "export"} {
 		if _, ok := subs[n]; ok {
 			names = append(names, n)
 		}
