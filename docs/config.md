@@ -633,6 +633,14 @@ stored encrypted until it resolves. See
 
 Logs go to stderr. Tokens, secrets and message content are never logged.
 
+The Redis client's own messages, such as `connection pool: failed to dial
+after 5 attempts`, go through the same logger as `warn` lines with
+`component: redis` and a message starting `redis client:`. While Redis is
+down the client repeats them dozens of times a second, so at most one is
+logged a second, and its `suppressed` field counts those left out since the
+line before. An outage also shows in `/readyz` and
+`catraca_dependency_up`.
+
 ### tracing
 
 OpenTelemetry tracing, off by default; see [tracing](tracing.md). A field
