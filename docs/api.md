@@ -69,8 +69,9 @@ reload the rules:
 `read` reads what the audit log holds: account ids, IPs, recipient
 domains, and addresses and links with `audit.event_detail: full`. `admin`
 is for what changes how Catraca decides: reloading the ruleset and setting an
-account's state. The feedback and secret scanning
-routes take no token, so no scope: their signature proves the provider sent
+account's state. `POST /v1/rules/explain?observe=true` counts the event as
+deciding it does, so it takes `decide` as well as `read`. The feedback and
+secret scanning routes take no token, so no scope: their signature proves the provider sent
 them. A token configured without `scopes` has every scope, so
 configurations written before scopes keep working; `catraca config check`
 warns about each one.
@@ -588,8 +589,11 @@ reads them. That counts the event, as deciding it would, unless its `id`
 counted already: to explain an event that was decided without counting it
 again, send it with the `id` it was decided with, within
 [`engine.dedupe_ttl`](config.md#engine) (10 minutes by default) of the
-decision. `counted` says what happened. A `key_leak` event is refused with
-`400 invalid_event`: observing one marks its key leaked.
+decision. `counted` says what happened. Because it can count, `observe`
+also needs the `decide` scope: a token with `read` alone gets
+`403 insufficient_scope`, so it cannot push an account over a limit. A
+`key_leak` event is refused with `400 invalid_event`: observing one marks
+its key leaked.
 
 ```sh
 curl -s -X POST "$CATRACA/v1/rules/explain?observe=true" -H "Authorization: Bearer $TOKEN" \

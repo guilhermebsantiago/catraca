@@ -91,7 +91,7 @@ func (s *Server) authed(scope Scope, h http.HandlerFunc) http.Handler {
 			return
 		}
 		if ri := infoFrom(r.Context()); ri != nil {
-			ri.client = tok.name
+			ri.client, ri.scopes = tok.name, tok.scopes
 		}
 		if tok.previous {
 			// Until no request says this, the client has not moved to its

@@ -103,6 +103,43 @@ func TestExplain(t *testing.T) {
 	}
 }
 
+// TestExplainObserveNeedsDecide: a read token explains, but observing counts
+// the event, so it needs the decide scope too.
+func TestExplainObserveNeedsDecide(t *testing.T) {
+	rs, err := rules.Parse([]byte(explainTestRuleset))
+	if err != nil {
+		t.Fatal(err)
+	}
+	e, err := engine.New(engine.Options{
+		Catalog: signal.NewCatalog(store.NewMemory(), signal.Options{}),
+		Rules:   rules.NewHolder(rs),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	s := newTestServer(t, e, nil, func(o *Options) { o.Tokens = scopedTokens })
+	const ev = `{"type":"send","account_id":"a"}`
+	for _, tc := range []struct {
+		token, path string
+		status      int
+	}{
+		{"tok-read-0123456789", "/v1/rules/explain", http.StatusOK},
+		{"tok-read-0123456789", "/v1/rules/explain?observe=true", http.StatusForbidden},
+		{"tok-ops-0123456789", "/v1/rules/explain?observe=true", http.StatusForbidden},
+		{"tok-full-0123456789", "/v1/rules/explain?observe=true", http.StatusOK},
+		{"tok-decide-0123456789", "/v1/rules/explain", http.StatusForbidden},
+	} {
+		rec := send(s, "POST", tc.path, ev, tc.token)
+		if rec.Code != tc.status {
+			t.Errorf("%s %s: %d %s, want %d", tc.token, tc.path, rec.Code, rec.Body, tc.status)
+		}
+		if rec.Code == http.StatusForbidden && strings.Contains(tc.path, "observe") &&
+			!strings.Contains(rec.Header().Get("WWW-Authenticate"), `scope="decide"`) {
+			t.Errorf("%s %s: WWW-Authenticate %q does not name the decide scope", tc.token, tc.path, rec.Header().Get("WWW-Authenticate"))
+		}
+	}
+}
+
 func TestExplainErrors(t *testing.T) {
 	s := newExplainServer(t, explainTestRuleset)
 	for _, tc := range []struct {

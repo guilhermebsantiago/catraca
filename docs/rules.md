@@ -409,9 +409,10 @@ the event to [`POST /v1/rules/explain`](api.md#post-v1rulesexplain). It
 answers every signal by map and, for every rule, whether it matched, its
 action and mode, and why it could not be evaluated, without deciding the
 event. Without `?observe=true` only the `event` signals are present, and
-nothing counts; with it the signals come from the store, which counts the
-event unless it is sent with the `id` of a decision made within
-`engine.dedupe_ttl`. The answer's `counted` says which.
+nothing counts; with it, which needs the `decide` scope too, the signals
+come from the store, which counts the event unless it is sent with the `id`
+of a decision made within `engine.dedupe_ttl`. The answer's `counted` says
+which.
 
 Its `signals` object is written as a fixture case's `signals`, so it can be
 saved, edited and explained again offline, with no server or store:

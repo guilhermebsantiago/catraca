@@ -3,6 +3,7 @@ package api
 import (
 	"context"
 	"errors"
+	"fmt"
 	"net/http"
 	"strconv"
 	"strings"
@@ -37,6 +38,15 @@ func (s *Server) explain(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		observe = b
+	}
+	// Observing counts the event as deciding it does, so it takes the
+	// decide scope too: a token that may only read could otherwise push an
+	// account over a limit.
+	if ri := infoFrom(r.Context()); observe && ri != nil && !ri.scopes.has(ScopeDecide) {
+		w.Header().Set("WWW-Authenticate", fmt.Sprintf(`Bearer realm="catraca", error="insufficient_scope", scope="%s"`, ScopeDecide))
+		writeError(w, http.StatusForbidden, "insufficient_scope",
+			fmt.Sprintf("token %q does not have the %s scope observe=true needs: observing counts the event as deciding it does", ri.client, ScopeDecide))
+		return
 	}
 	var ev event.Event
 	if !s.readJSON(w, r, &ev) {

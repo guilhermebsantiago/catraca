@@ -27,8 +27,10 @@ type reqInfo struct {
 	id string
 	// route is the pattern that matched, or "unmatched".
 	route string
-	// client is the name of the token the request authenticated with.
+	// client is the name of the token the request authenticated with, and
+	// scopes the scopes it has.
 	client string
+	scopes scopeSet
 	// attrs are added to the access log line, for example a decision id.
 	attrs []slog.Attr
 	// span is the request's span, nil with tracing off.
