@@ -23,18 +23,22 @@ in [compatibility.md](compatibility.md); each change is in the
       `CONCURRENTLY` first ([below](#indexes-on-a-large-postgres-database)).
 - [ ] Give an `override` to any enforced rule that must keep enforcing
       while the gate cannot run, or check that its labels pass
-      `catraca rules gate`.
+      `catraca rules gate`. Run the gate with the release you run now:
+      the new one would migrate the database it reads.
 - [ ] Upgrade every Catraca instance before the platform sends a new event
       field, and before the ruleset reads a new signal.
 
 ## Migrations
 
 The SQL migrations are embedded in the binary, numbered (`0001_init.sql`,
-`0002_retention.sql`, ...) and applied when Catraca opens the audit
-database at start. Nothing else runs them, and there is no separate
-migrate command. SQLite opens before the server starts; Postgres opens in
-the background, so the server serves decisions while it does
-([audit](audit.md#choosing-a-database)).
+`0002_retention.sql`, ...) and applied by every process that opens the
+audit database: the server at start, and the commands that take
+`--audit`, such as `catraca rules gate`, `report`, `outbox` and
+`audit export`. There is no separate migrate command, so running a
+command of the new release against the production database migrates it,
+as starting the server would. SQLite opens before the server starts;
+Postgres opens in the background, so the server serves decisions while it
+does ([audit](audit.md#choosing-a-database)).
 
 Opening the database applies every migration it has not recorded, in
 order, in **one transaction**, and records each in `schema_migrations`. If
