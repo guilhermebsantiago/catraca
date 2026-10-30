@@ -440,6 +440,14 @@ func (l *auditLog) ReviewQueue(ctx context.Context, ruleID string, mode decision
 	return db.ReviewQueue(ctx, ruleID, mode, limit)
 }
 
+func (l *auditLog) ListDecisions(ctx context.Context, f audit.DecisionFilter, limit int) (audit.DecisionPage, error) {
+	db := l.current()
+	if db == nil {
+		return audit.DecisionPage{}, errAuditNotOpen
+	}
+	return db.ListDecisions(ctx, f, limit)
+}
+
 func (l *auditLog) Flush(ctx context.Context) error {
 	db, err := l.readable(ctx)
 	if err != nil {

@@ -93,6 +93,8 @@ func runContract(t *testing.T, newDSN func(t *testing.T) string) {
 	t.Run("LabelsAndRuleStats", func(t *testing.T) { testLabelsAndRuleStats(t, fresh(t)) })
 	t.Run("LatestLabelWins", func(t *testing.T) { testLatestLabelWins(t, fresh(t)) })
 	t.Run("ReviewQueue", func(t *testing.T) { testReviewQueue(t, fresh(t)) })
+	t.Run("ListDecisions", func(t *testing.T) { testListDecisions(t, fresh(t)) })
+	t.Run("Export", func(t *testing.T) { testExport(t, fresh(t)) })
 	t.Run("ConcurrentRecord", func(t *testing.T) { testConcurrentRecord(t, fresh(t)) })
 	t.Run("DuplicateRecord", func(t *testing.T) { testDuplicateRecord(t, fresh(t)) })
 	t.Run("Outbox", func(t *testing.T) { testOutbox(t, fresh(t)) })

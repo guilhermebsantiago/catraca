@@ -62,6 +62,7 @@ type AuditLog interface {
 	Label(ctx context.Context, decisionID string, l audit.Label) error
 	RuleStats(ctx context.Context, since time.Time) ([]precision.RuleStats, error)
 	ReviewQueue(ctx context.Context, ruleID string, mode decision.Mode, limit int) ([]audit.ReviewItem, error)
+	ListDecisions(ctx context.Context, f audit.DecisionFilter, limit int) (audit.DecisionPage, error)
 	Flush(ctx context.Context) error
 }
 
@@ -305,6 +306,7 @@ func New(opts Options) (*Server, error) {
 	// Each route that takes a token needs one scope; see scope.go.
 	s.v1("POST /v1/decide", ScopeDecide, s.decide(http.StatusOK))
 	s.v1("POST /v1/events", ScopeDecide, s.decide(http.StatusAccepted))
+	s.v1("GET /v1/decisions", ScopeRead, s.listDecisions)
 	s.v1("GET /v1/decisions/{id}", ScopeRead, s.getDecision)
 	s.v1("POST /v1/decisions/{id}/labels", ScopeLabel, s.label)
 	s.v1("GET /v1/rules", ScopeRead, s.getRules)

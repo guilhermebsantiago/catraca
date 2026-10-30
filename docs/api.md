@@ -54,6 +54,7 @@ reload the rules:
 |---|---|
 | `POST /v1/decide` | `decide` |
 | `POST /v1/events` | `decide` |
+| `GET /v1/decisions` | `read` |
 | `GET /v1/decisions/{id}` | `read` |
 | `GET /v1/rules` | `read` |
 | `GET /v1/rules/{id}/review` | `read` |

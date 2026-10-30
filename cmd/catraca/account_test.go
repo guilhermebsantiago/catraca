@@ -43,6 +43,9 @@ func (noAudit) RuleStats(context.Context, time.Time) ([]precision.RuleStats, err
 func (noAudit) ReviewQueue(context.Context, string, decision.Mode, int) ([]audit.ReviewItem, error) {
 	return nil, nil
 }
+func (noAudit) ListDecisions(context.Context, audit.DecisionFilter, int) (audit.DecisionPage, error) {
+	return audit.DecisionPage{}, nil
+}
 func (noAudit) Flush(context.Context) error { return nil }
 
 // TestAccountState runs the command against the API's account state routes
