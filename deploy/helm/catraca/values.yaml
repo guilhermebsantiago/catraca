@@ -254,7 +254,8 @@ networkPolicy:
   # -- Peers allowed on the API port; empty allows any.
   apiFrom: []
   # -- Peers allowed on the admin port, such as Prometheus's namespace;
-  # empty allows none but the kubelet's probes.
+  # empty allows none but the kubelet's probes (which most network plugins
+  # let through whatever the policy).
   adminFrom: []
 
 # -- Variables added to the container, as in a pod spec, such as

@@ -39,6 +39,8 @@ resources:
   limits:
     memory: 512Mi
 
+# One pod per node where it can; the labels are those of a release named
+# catraca.
 topologySpreadConstraints:
   - maxSkew: 1
     topologyKey: kubernetes.io/hostname
