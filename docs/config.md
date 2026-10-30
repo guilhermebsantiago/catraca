@@ -314,6 +314,14 @@ of keys reported leaked, which are kept until deleted. If Redis has a
   expiring, mostly short-window counters of senders that went quiet, which
   costs detection the least.
 
+To size `maxmemory`, count what was active over the last week: up to about
+8.5 KB per account, 2.6 KB per API key, 3.8 KB per IP and 1.2 KB per
+sender domain that send all the time, and 4.3, 1.6, 1.9 and 0.7 KB for
+those seen once; an IP or domain behind thousands of accounts holds up to
+about 25 KB. Accounts and API keys seen in the last year add under 0.2 KB
+each, their first-seen time. [Benchmarks](benchmark.md#redis-memory-per-entity)
+has the table and how it was measured.
+
 ### audit
 
 The decision log, labels and the webhook outbox. See [audit](audit.md).
@@ -427,11 +435,11 @@ among the first keys evicted under memory pressure, which costs retries
 their protection before it costs counters.
 
 **The recipient memory.** Each address remembered costs one member of a
-sorted set: about 110 bytes on Redis, split over 16 keys (16 hash slots on a
+sorted set: about 130 bytes on Redis, split over 16 keys (16 hash slots on a
 cluster), and about 50 bytes in the memory store. It is kept for
 `recipient_memory` after its latest hard bounce or complaint, so the memory
 holds the distinct addresses that bounced or complained in that window: at
-10,000 a day, about 33 MB on Redis with the default. A send checks at most
+10,000 a day, about 39 MB on Redis with the default. A send checks at most
 100 of its addresses, in the same round trip as its other signals; see
 [benchmarks](benchmark.md#the-recipient-memory) for the cost.
 
@@ -637,6 +645,14 @@ stored encrypted until it resolves. See
 | `format` | `json` | `json` or `text` |
 
 Logs go to stderr. Tokens, secrets and message content are never logged.
+
+The Redis client's own messages, such as `connection pool: failed to dial
+after 5 attempts`, go through the same logger as `warn` lines with
+`component: redis` and a message starting `redis client:`. While Redis is
+down the client repeats them dozens of times a second, so at most one is
+logged a second, and its `suppressed` field counts those left out since the
+line before. An outage also shows in `/readyz` and
+`catraca_dependency_up`.
 
 ### tracing
 

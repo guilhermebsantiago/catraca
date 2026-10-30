@@ -319,6 +319,61 @@ redialed, which exhausted ephemeral ports here and degraded every decision
 while Redis sat idle. The store now returns at the deadline and lets the
 round trip finish on its own connection, which goes back to the pool.
 
+### Redis memory per entity
+
+What Redis holds for each active entity, to size `maxmemory`
+([memory](config.md#store)). "Seen once" is an entity with one send in
+the windows; "sending all the time" adds what its counters hold once they
+have an event in every bucket of every window. Every key expires on its
+own: an entity quiet for longer than its longest window (a week for an
+account) costs nothing, except the first-seen time of an account or API
+key, under 0.2 KB, kept for a year after its last event.
+
+| entity | keys | seen once | sending all the time |
+|---|---|---|---|
+| account | 19 | 4.3 KB | about 8.5 KB |
+| API key | 8 | 1.6 KB | about 2.6 KB |
+| IP | 8 | 1.9 KB | about 3.8 KB |
+| sender domain | 3 | 0.7 KB | about 1.2 KB |
+| recipient-memory address | | 80 B up to about 2,000 addresses, then 130 B | |
+
+The account and IP rows each include the two counters of the account and
+IP pair, about 0.5 KB, so an account that sends from several IPs costs
+that much more per IP. The distinct counts of an IP or a sender domain
+(accounts per IP, accounts per domain) are HyperLogLogs that grow with
+the number of distinct accounts behind them, up to the 12 KB of a dense
+one for each of their two window blocks. The IP's or domain's own keys:
+
+| distinct accounts | IP | sender domain |
+|---|---|---|
+| 10 | 1.0 KB | 0.6 KB |
+| 100 | 1.5 KB | 1.1 KB |
+| 1,000 | 4.6 KB | 4.1 KB |
+| 10,000 | 25 KB | 25 KB |
+
+So 100,000 accounts active in a week, each with one API key, one IP and
+one sender domain of its own, need about 0.85 GB if each sent once and up
+to about 1.6 GB if all of them send all the time, plus the recipient
+memory and the dedupe entries ([events with ids](#events-with-ids)).
+
+**Method.** 2,000 send events, one per entity, ran through the real
+catalog (`signal.NewCatalog` on `store.NewRedis`) into an empty database
+that already held one event of fixed entities, and each new event changed
+only one of account, API key, IP or sender domain (one recipient each, no
+event ids). The first table divides the growth of `used_memory` in
+`INFO memory` by 2,000; it includes the keyspace and expiry entries of
+each key, 40 to 50% over the sum of `MEMORY USAGE key SAMPLES 0`, which
+the second table (that IP's or domain's own keys) uses. The recipient
+memory took 2,000 and then 20,000 hard bounces to distinct addresses: its
+16 sorted sets stay compact listpacks up to 128 members each. "Sending all
+the time" is derived rather than run, since the windows span a week: it
+adds, for each counter of the entity (nine for an account, two for an API
+key, four for an IP counting its account pair, one for a domain), the
+growth of a counter hash from one bucket to 60, 473 bytes by
+`MEMORY USAGE`. Redis is the Windows build above, which allocates with
+libc's malloc where the Linux builds use jemalloc; the encodings are the
+same, so the sizes per key should be close on Linux but not identical.
+
 ## HTTP load
 
 `POST /v1/decide` on a quiet machine, before and after interleaved per rate.

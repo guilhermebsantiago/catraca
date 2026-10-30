@@ -133,6 +133,11 @@ func New(ctx context.Context, cfg *config.Config, opts Options) (_ *App, err err
 	}
 	a.obs = newObservers(cfg, a.registry, a.tracing != nil)
 
+	if cfg.Store.Backend == config.StoreRedis {
+		// go-redis logs through one logger per process: the last App
+		// opened on Redis sets it.
+		store.SetRedisLogger(log.With("component", "redis"))
+	}
 	if a.store, err = openStore(cfg.Store); err != nil {
 		return nil, err
 	}
