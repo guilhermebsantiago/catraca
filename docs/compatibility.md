@@ -27,6 +27,13 @@ one minor release alongside it.
 | Signature scheme | [hooks.md](hooks.md#verifying-the-signature) | `Catraca-Signature: t=<unix seconds>,v1=<hex HMAC-SHA256>` over `t + "." + body`, for hooks, the resolver and the generic feedback endpoint; the exported API of the Go package [`signature`](../signature) |
 | Exit codes | [cli.md](cli.md#exit-codes) | what 0, 1, 2 and 3 mean |
 
+[openapi.yaml](openapi.yaml) is an OpenAPI 3.1 spec of the HTTP API: the
+event, decision and error JSON above, the other routes, and the scope of
+each. It follows these rules, changing in the same release as the route it
+describes, and a test keeps its routes, scopes and error codes in step with
+the server and api.md. Where the two differ, api.md is right and the spec
+is a bug.
+
 Additions to watch for:
 
 - **New fields** may appear in decisions, stored entries, hook payloads and

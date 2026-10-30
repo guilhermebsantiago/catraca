@@ -156,7 +156,7 @@ caveats: [docs/benchmark.md](docs/benchmark.md).
 ## Docs
 
 - [Design](docs/design.md): principles, packages, signals, rules, engine
-- [HTTP API](docs/api.md) · [Configuration](docs/config.md) · [Command line](docs/cli.md) · [Rotating secrets](docs/rotation.md)
+- [HTTP API](docs/api.md) ([OpenAPI spec](docs/openapi.yaml)) · [Configuration](docs/config.md) · [Command line](docs/cli.md) · [Rotating secrets](docs/rotation.md)
 - [Kubernetes: the Helm chart](docs/kubernetes.md)
 - [Signals](docs/signals.md) · [Writing rules](docs/rules.md)
 - [Audit log and the precision gate](docs/audit.md) · [Hooks](docs/hooks.md)

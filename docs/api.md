@@ -27,6 +27,8 @@ keys; probes and Prometheus read health and metrics.
 | [`GET /readyz`](#get-healthz-and-get-readyz) | none | readiness |
 | [`GET /metrics`](#get-metrics) | none | Prometheus metrics |
 
+[openapi.yaml](openapi.yaml) describes these routes, their bodies, scopes and status codes as an OpenAPI 3.1 spec, for generating clients; this page is the reference for behavior.
+
 The examples use two shell variables:
 
 ```sh
