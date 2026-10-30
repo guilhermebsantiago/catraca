@@ -45,6 +45,21 @@ const (
 // read.
 const gateUnavailable = "unavailable"
 
+// gateRun says why the gate runs, which decides what it logs.
+type gateRun int
+
+const (
+	// gateOnLoad is a load: the gate logs every rule it holds and why.
+	gateOnLoad gateRun = iota
+	// gateRetried runs it again on the file last loaded because the audit
+	// database could not answer then, which was logged then.
+	gateRetried
+	// gateRechecked runs it again on the rules it holds, every
+	// gate.recheck_interval, for the labels given since: it logs only the
+	// rules it lets enforce.
+	gateRechecked
+)
+
 // rulesetLoader loads the ruleset file into the holder decisions read it
 // from: at start, on SIGHUP, on POST /v1/rules/reload, and when the watch
 // sees the file change. A load reads the file once, parses and compiles it
@@ -68,7 +83,9 @@ type rulesetLoader struct {
 	holder   *rules.Holder
 	// policy is gate.on_load.
 	policy string
-	gate   precision.Gate
+	// recheck is gate.recheck_interval; 0 turns the re-check off.
+	recheck time.Duration
+	gate    precision.Gate
 	// stats reads the labeled outcomes of every rule, for the gate.
 	stats func(context.Context) ([]precision.RuleStats, error)
 	hooks []config.Hook
@@ -92,6 +109,10 @@ type rulesetLoader struct {
 	// that the gate could not run on it and holds rules until it does.
 	file   *rules.Ruleset
 	regate bool
+	// recheckAt is when the gate next runs again on the rules it holds, for
+	// the labels given since; zero when it holds none or the re-check is
+	// off.
+	recheckAt time.Time
 
 	// status is what /readyz?verbose and the metrics show. It is replaced
 	// whole, never changed in place.
@@ -110,6 +131,7 @@ func newRulesetLoader(cfg *config.Config, holder *rules.Holder, lb labels, reg p
 		interval: cfg.Rules.WatchInterval,
 		holder:   holder,
 		policy:   cfg.Gate.OnLoad,
+		recheck:  cfg.Gate.RecheckInterval,
 		gate:     cfg.Gate.Precision(),
 		// Labels count over all time, as in catraca rules gate.
 		stats:    func(ctx context.Context) ([]precision.RuleStats, error) { return lb.RuleStats(ctx, time.Time{}) },
@@ -154,7 +176,7 @@ func (l *rulesetLoader) load(ctx context.Context, source string, data []byte, re
 		file, err = rules.ParseFile(data, l.path)
 	}
 	if err == nil {
-		rs, holds, unavailable, err = l.gated(ctx, file, prev, false)
+		rs, holds, unavailable, err = l.gated(ctx, file, prev, gateOnLoad)
 	}
 	if err != nil {
 		l.loads.WithLabelValues("error").Inc()
@@ -196,7 +218,7 @@ func (l *rulesetLoader) load(ctx context.Context, source string, data []byte, re
 // run then, and swaps in what it decides once it can run. l.mu is held.
 func (l *rulesetLoader) retryGate(ctx context.Context) {
 	prev := l.holder.Current()
-	rs, holds, unavailable, err := l.gated(ctx, l.file, prev, true)
+	rs, holds, unavailable, err := l.gated(ctx, l.file, prev, gateRetried)
 	switch {
 	case err != nil:
 		l.log.Error("the precision gate ran again, but the ruleset could not be built", "path", l.path, "error", err)
@@ -211,12 +233,63 @@ func (l *rulesetLoader) retryGate(ctx context.Context) {
 		"version", rs.Version(), "previous_version", prev.Version(), "held", ruleIDs(holds))
 }
 
+// recheckGate runs the gate again on the rules it holds, on the labels
+// given since, without reading the file again, and swaps in a ruleset that
+// enforces the ones that pass now. Only held rules are checked, so a rule
+// that enforces keeps enforcing. l.mu is held.
+func (l *rulesetLoader) recheckGate(ctx context.Context) {
+	l.recheckAt = l.now().Add(l.recheck)
+	prev := l.holder.Current()
+	st := l.Status()
+	rs, holds, unavailable, err := l.gated(ctx, l.file, prev, gateRechecked)
+	switch {
+	case err != nil:
+		l.log.Error("the precision gate ran again on the rules it holds, but the ruleset could not be built", "path", l.path, "error", err)
+		return
+	case unavailable:
+		// The rules stay held as they are, and the next re-check tries
+		// again; catraca_dependency_up says the audit database is down.
+		return
+	case sameHolds(holds, st.Held):
+		return
+	}
+	still := map[string]bool{}
+	for _, h := range holds {
+		still[h.Rule] = true
+	}
+	var promoted []string
+	for _, h := range st.Held {
+		if !still[h.Rule] {
+			promoted = append(promoted, h.Rule)
+		}
+	}
+	l.swap(st.Source, l.file, rs, holds, false)
+	if len(promoted) > 0 {
+		l.log.Info("rules held in shadow mode passed the precision gate and enforce now", "path", l.path, "rules", promoted,
+			"version", rs.Version(), "previous_version", prev.Version(), "held", ruleIDs(holds))
+	}
+}
+
+// sameHolds reports whether a and b hold the same rules with the same
+// statuses, in the same order.
+func sameHolds(a, b []api.GateHold) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	for i := range a {
+		if a[i] != b[i] {
+			return false
+		}
+	}
+	return true
+}
+
 // gated returns the ruleset to decide with for file: file itself, or a copy
 // with the rules the gate holds in shadow mode. holds are the rules that
 // did not pass, held or not, and unavailable says the gate could not run.
-// retrying says the gate could not run before, which was logged then.
-func (l *rulesetLoader) gated(ctx context.Context, file, prev *rules.Ruleset, retrying bool) (rs *rules.Ruleset, holds []api.GateHold, unavailable bool, err error) {
-	holds, unavailable = l.gateCheck(ctx, file, prev, retrying)
+// run says why the gate runs.
+func (l *rulesetLoader) gated(ctx context.Context, file, prev *rules.Ruleset, run gateRun) (rs *rules.Ruleset, holds []api.GateHold, unavailable bool, err error) {
+	holds, unavailable = l.gateCheck(ctx, file, prev, run)
 	if len(holds) == 0 || l.policy != config.GateEnforce {
 		return file, holds, unavailable, nil
 	}
@@ -237,6 +310,10 @@ func (l *rulesetLoader) swap(source string, file, rs *rules.Ruleset, holds []api
 		st.Ungated = holds
 	}
 	l.regate = unavailable && l.policy == config.GateEnforce
+	l.recheckAt = time.Time{}
+	if l.recheck > 0 && l.policy == config.GateEnforce && len(holds) > 0 && !unavailable {
+		l.recheckAt = st.LoadedAt.Add(l.recheck)
+	}
 	l.holder.Store(rs)
 	l.status.Store(st)
 }
@@ -249,9 +326,8 @@ func (l *rulesetLoader) swap(source string, file, rs *rules.Ruleset, holds []api
 // change of mode, not of condition, starts a promotion. A rule with an
 // override is not checked, as in catraca rules gate. It returns the
 // checked rules that did not pass, and all of them with unavailable set
-// when the audit database could not answer, which it logs unless
-// retrying.
-func (l *rulesetLoader) gateCheck(ctx context.Context, file, prev *rules.Ruleset, retrying bool) (holds []api.GateHold, unavailable bool) {
+// when the audit database could not answer, which it logs on a load.
+func (l *rulesetLoader) gateCheck(ctx context.Context, file, prev *rules.Ruleset, run gateRun) (holds []api.GateHold, unavailable bool) {
 	if l.policy == config.GateOff {
 		return nil, false
 	}
@@ -279,7 +355,7 @@ func (l *rulesetLoader) gateCheck(ctx context.Context, file, prev *rules.Ruleset
 			holds = append(holds, api.GateHold{Rule: c.ID, Status: gateUnavailable})
 		}
 		switch {
-		case retrying:
+		case run != gateOnLoad:
 		case l.policy == config.GateEnforce:
 			l.log.Warn("the precision gate cannot read the labels in the audit database, so the rules it would check stay in shadow mode until it can; it is tried again every few seconds",
 				"rules", ruleIDs(holds), "error", err)
@@ -294,6 +370,10 @@ func (l *rulesetLoader) gateCheck(ctx context.Context, file, prev *rules.Ruleset
 			continue
 		}
 		holds = append(holds, api.GateHold{Rule: res.RuleID, Status: string(res.Status)})
+		if run == gateRechecked {
+			// Logged when the load held it.
+			continue
+		}
 		attrs := []any{"rule", res.RuleID, "status", res.Status, "labeled", res.Labeled, "true_positives", res.TruePositives,
 			"precision_lower", res.Lower, "min_labeled", l.gate.MinLabeled, "min_precision", l.gate.MinPrecision}
 		if l.policy == config.GateEnforce {
@@ -316,7 +396,8 @@ func (l *rulesetLoader) wait() time.Duration {
 // check is one look of the watch, at now. With the watch on, it loads the
 // file when its content differs from what the last load read and has stayed
 // the same for watchSettle. Then it runs the gate again if it could not run
-// at the last load. It returns how long to wait before the next look.
+// at the last load, or on the rules it holds once gate.recheck_interval has
+// passed. It returns how long to wait before the next look.
 func (l *rulesetLoader) check(ctx context.Context, now time.Time) time.Duration {
 	l.mu.Lock()
 	defer l.mu.Unlock()
@@ -339,6 +420,13 @@ func (l *rulesetLoader) check(ctx context.Context, now time.Time) time.Duration 
 	}
 	if l.regate && l.file != nil {
 		l.retryGate(ctx)
+		return next
+	}
+	if !l.recheckAt.IsZero() && l.file != nil {
+		if wait := l.recheckAt.Sub(now); wait > 0 {
+			return min(next, wait)
+		}
+		l.recheckGate(ctx)
 	}
 	return next
 }
@@ -404,7 +492,7 @@ var (
 		"When the current ruleset was loaded, in Unix seconds, labeled by what loaded it: start, watch, signal or api. Absent while no ruleset is loaded.",
 		[]string{"source"}, nil)
 	rulesetGateDesc = prometheus.NewDesc("catraca_ruleset_gate_failures",
-		"Rules the ruleset file enforces that had not passed the precision gate when it loaded, by gate status: held in shadow mode with gate.on_load enforce, enforcing with warn.",
+		"Rules the ruleset file enforces that had not passed the precision gate when it loaded, or at the last re-check of held rules, by gate status: held in shadow mode with gate.on_load enforce, enforcing with warn.",
 		[]string{"status"}, nil)
 )
 

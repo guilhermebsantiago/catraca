@@ -169,6 +169,10 @@ gate:
   # the audit database: enforce holds it in shadow mode until it does, warn
   # lets it enforce and logs it, off does not check.
   on_load: enforce
+  # How often the gate runs again on the rules on_load: enforce holds, on the
+  # labels given since, and lets the ones that pass enforce without a
+  # reload. 0s turns it off.
+  recheck_interval: 5m
 
 # Webhooks that carry out the effects of enforced rules, one per effect name.
 # Each request is signed with the hook's secret (see docs/hooks.md). Until

@@ -244,6 +244,36 @@ func TestListDecisionsPlan(t *testing.T) {
 	}
 }
 
+// TestRuleStatsPlan checks, on SQLite, that RuleStats counts from the
+// covering matches_stats index and finds duplicates through the
+// decisions_duplicate partial index, reading no decision's JSON.
+func TestRuleStatsPlan(t *testing.T) {
+	ctx := context.Background()
+	db, err := Open(ctx, ":memory:", Options{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close(ctx)
+	rows, err := db.SQL().QueryContext(ctx, "EXPLAIN QUERY PLAN "+ruleStatsQuery, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer rows.Close()
+	var plan []string
+	for rows.Next() {
+		var id, parent, unused int
+		var detail string
+		if err := rows.Scan(&id, &parent, &unused, &detail); err != nil {
+			t.Fatal(err)
+		}
+		plan = append(plan, detail)
+	}
+	got := strings.Join(plan, "; ")
+	if !strings.Contains(got, "COVERING INDEX matches_stats") || !strings.Contains(got, "INDEX decisions_duplicate") {
+		t.Errorf("plan %q, want matches_stats, covering, and decisions_duplicate", got)
+	}
+}
+
 func TestReplayEvent(t *testing.T) {
 	ev := sendEvent("d1")
 	got, full := NewStoredEvent(ev, EventFull).ReplayEvent()

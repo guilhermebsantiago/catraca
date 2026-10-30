@@ -525,6 +525,109 @@ func TestWatchRetriesGateWhileOff(t *testing.T) {
 	}
 }
 
+// gateFailures returns catraca_ruleset_gate_failures by status.
+func (lt *loaderTest) gateFailures() map[string]float64 {
+	lt.t.Helper()
+	ch := make(chan prometheus.Metric, 16)
+	rulesetLoadCollector{lt.l}.Collect(ch)
+	close(ch)
+	out := map[string]float64{}
+	for m := range ch {
+		if m.Desc() != rulesetGateDesc {
+			continue
+		}
+		var d dto.Metric
+		if err := m.Write(&d); err != nil {
+			lt.t.Fatal(err)
+		}
+		out[d.GetLabel()[0].GetValue()] = d.GetGauge().GetValue()
+	}
+	return out
+}
+
+// TestGateRechecksHeldRules checks that the gate runs again on the rules it
+// holds every gate.recheck_interval, without reading the file: a rule
+// enforces once its labels pass, and a rule that enforces is not demoted.
+func TestGateRechecksHeldRules(t *testing.T) {
+	lt := newLoaderTest(t, config.GateEnforce, 0)
+	lt.l.recheck = time.Minute
+	lt.write(gateFile("enforce"))
+	if _, err := lt.reload(sourceStart); err != nil {
+		t.Fatal(err)
+	}
+	if want := map[string]string{"a": "insufficient_labels", "c": "insufficient_labels"}; !equalMaps(holds(lt.l.Status()), want) {
+		t.Fatalf("held %v, want %v", holds(lt.l.Status()), want)
+	}
+
+	// Before the re-check is due, a look reads no labels and wakes up for it.
+	calls := lt.labels.count()
+	if next := lt.check(50 * time.Second); next != gateRetry {
+		t.Errorf("next look in %v, want %v", next, gateRetry)
+	}
+	if next := lt.check(7 * time.Second); next != 3*time.Second {
+		t.Errorf("next look in %v, want 3s, when the re-check is due", next)
+	}
+	if lt.labels.count() != calls {
+		t.Errorf("the gate read labels %d times before the re-check was due", lt.labels.count()-calls)
+	}
+
+	// Labels prove a and disprove c, and the file changes on disk: the
+	// re-check lets a enforce, keeps c held, and loads nothing.
+	lt.labels.set(nil, proven("a"), disproven("c"))
+	lt.write(gateFile("shadow"))
+	lt.check(3 * time.Second)
+	st := lt.l.Status()
+	if lt.mode("a") != decision.Enforce || lt.mode("c") != decision.Shadow || lt.loads("ok") != 1 || st.Source != sourceStart {
+		t.Errorf("a %s, c %s, loads %v, source %s; want a promoted, c held, the file not loaded",
+			lt.mode("a"), lt.mode("c"), lt.loads("ok"), st.Source)
+	}
+	if want := map[string]string{"c": "below_precision"}; !equalMaps(holds(st), want) {
+		t.Errorf("held %v, want %v", holds(st), want)
+	}
+	if got := lt.gateFailures(); got["insufficient_labels"] != 0 || got["below_precision"] != 1 {
+		t.Errorf("catraca_ruleset_gate_failures = %v, want only c below precision", got)
+	}
+	if !strings.Contains(lt.logs.String(), "passed the precision gate and enforce now") ||
+		strings.Count(lt.logs.String(), "rule c stays in shadow mode") != 1 {
+		t.Errorf("want the promotion of a logged, and c's hold logged once, at the load:\n%s", lt.logs)
+	}
+
+	// a's precision falls: the next re-check leaves it enforcing.
+	lt.labels.set(nil, disproven("a"), disproven("c"))
+	lt.check(time.Minute)
+	if lt.mode("a") != decision.Enforce || lt.mode("c") != decision.Shadow {
+		t.Errorf("a %s, c %s; want a still enforcing", lt.mode("a"), lt.mode("c"))
+	}
+
+	// Once c passes, nothing is held and the re-checks stop.
+	lt.labels.set(nil, disproven("a"), proven("c"))
+	lt.check(time.Minute)
+	if lt.mode("a") != decision.Enforce || lt.mode("c") != decision.Enforce || len(lt.l.Status().Held) != 0 {
+		t.Errorf("a %s, c %s, held %v; want both enforcing", lt.mode("a"), lt.mode("c"), lt.l.Status().Held)
+	}
+	calls = lt.labels.count()
+	lt.check(time.Hour)
+	if lt.labels.count() != calls {
+		t.Errorf("the gate read labels with no rule held")
+	}
+}
+
+// TestGateRecheckOff checks that recheck_interval 0s leaves held rules to
+// the next load.
+func TestGateRecheckOff(t *testing.T) {
+	lt := newLoaderTest(t, config.GateEnforce, 0)
+	lt.write(gateFile("shadow"))
+	if _, err := lt.reload(sourceStart); err != nil {
+		t.Fatal(err)
+	}
+	lt.labels.set(nil, proven("a"))
+	calls := lt.labels.count()
+	lt.check(time.Hour)
+	if lt.mode("a") != decision.Shadow || lt.labels.count() != calls {
+		t.Errorf("a %s after %d label reads; want it held until a load", lt.mode("a"), lt.labels.count()-calls)
+	}
+}
+
 func equalMaps(a, b map[string]string) bool {
 	if len(a) != len(b) {
 		return false

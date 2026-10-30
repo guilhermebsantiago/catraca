@@ -214,6 +214,9 @@ func (v *validator) config(c *Config) {
 	default:
 		v.add("gate.on_load", "want off, warn or enforce, got %q", c.Gate.OnLoad)
 	}
+	if d := c.Gate.RecheckInterval; d < 0 || (d > 0 && d < time.Second) {
+		v.add("gate.recheck_interval", "must be at least 1s, or 0s to turn the re-check off, got %s", d)
+	}
 	v.store(c.Store)
 	v.audit(c.Audit)
 	v.hooks(c.Hooks, c.Outbox)
