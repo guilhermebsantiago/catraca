@@ -509,6 +509,120 @@ With the default `audit.event_detail: minimal` the exported events lack
 recipients, subject and links, so rules that read them cannot be measured
 this way; see [exporting labeled decisions](audit.md#exporting-labeled-decisions-for-a-backtest).
 
+## Recipes
+
+Each of these loads with `catraca rules check` without a warning and was
+tested with a fixture like the one under [Fixtures](#fixtures). Thresholds
+are examples: backtest them on your own traffic.
+
+### Exempting accounts or plans
+
+An exemption is a clause that makes the rule not match, so it belongs on
+the volume and reputation heuristics, where an enterprise tenant looks like
+abuse. Keep it off the rules about leaked keys, suspended accounts and
+spam traps: a trusted account's leaked key is still leaked.
+
+There are three ways to name who is exempt:
+
+- **`account.state == "trusted"`**, set by an operator with
+  `PUT /v1/accounts/{id}/state` ([api.md](api.md#account-states)). It
+  needs no change to the ruleset and can expire with `until`. The starter
+  ruleset's volume rules check `account.state != "trusted"`.
+- **An attribute the platform sends**, such as the account's plan.
+- **A list** of account ids in the ruleset, reviewed like the rules.
+
+```yaml
+lists:
+  allowlisted_accounts: [acct_partner_1, acct_partner_2]
+
+rules:
+  - id: volume-spike
+    description: An account sending over ten times its weekly hourly average
+    when: >-
+      event.type == "send"
+      && account.state != "trusted"
+      && !(has(event.attributes.plan) && event.attributes.plan == "enterprise")
+      && !in_list("allowlisted_accounts", event.account_id)
+      && account.sends_1h > 200
+      && account.volume_ratio_1h > 10.0
+    action: hold
+    reason: Sending volume jumped far above this account's usual hourly rate
+```
+
+Guard every attribute. `event.attributes` holds only what the platform sent,
+and reading a name it lacks is an error, not `""`, so the rule follows its
+`on_error`. Written as `event.attributes.plan != "enterprise"`, the rule
+above would error on every event without a plan: skipped with `open`, so
+it never catches those accounts, and matched with `closed`, so it holds
+them all. `has(event.attributes.plan) && ...` or
+`event.attributes.?plan.orValue("") == "free"` says what an absent plan
+means instead. That is the use of `has` the [on_error](#when-a-rule-cannot-be-evaluated-on_error)
+section allows: platform data that may be missing, not a store signal.
+
+An attribute is only as trustworthy as the code that sets it. Set it on the
+platform's server from the account's record, never from anything the
+sender controls, such as a header of the email.
+
+### Warm-up schedules
+
+A new account earns its volume. `account.age_hours` is the hours since the
+account was created, or first seen when the platform did not send its
+creation time, and the `recipients_*` counters count addresses, as
+providers count emails:
+
+```yaml
+  - id: warm-up
+    description: >-
+      New accounts ramp up: 200 recipients a day in the first day, 1,000 in
+      the first week, 5,000 in the first 30 days.
+    when: >-
+      event.type == "send"
+      && account.state != "trusted"
+      && (
+        (account.age_hours < 24.0 && account.recipients_24h > 200)
+        || (account.age_hours < 168.0 && account.recipients_24h > 1000)
+        || (account.age_hours < 720.0 && account.recipients_24h > 5000)
+      )
+    action: throttle
+    retry_after: 1h
+    reason: New account over its daily sending allowance while it warms up
+```
+
+The window slides, so a throttled account gets room back as its sends of
+the day before age out; `retry_after: 1h` is a fair wait. Use
+`sends_24h` instead of `recipients_24h` to count send events, or
+`recipients_1h` for an hourly step. Trusted accounts skip it, so an
+operator can let a known customer migrate in at full volume.
+
+### Wide sends
+
+A send to many domains costs more than its count suggests: each distinct
+recipient domain is about 25 µs of Redis time, inside the script that
+holds Redis, so an event at the 1,000-address [limit](api.md#limits) with
+a domain per address holds Redis for about 26 ms
+([benchmark](benchmark.md#a-send-to-many-domains)). Legitimate bulk mail
+comes from established accounts; a new account addressing hundreds of
+domains in one event is list blasting:
+
+```yaml
+  - id: wide-send-new-account
+    description: A send to hundreds of domains at once from an account under a week old
+    when: >-
+      event.type == "send"
+      && account.age_hours < 168.0
+      && size(event.to_domains) > 200
+    action: hold
+    reason: A new account sent one email to hundreds of domains at once
+```
+
+The rule runs after the event is counted, so it does not save the Redis
+time. Nor does it always see the event: some 400 distinct domains take the
+whole default [`engine.deadline`](config.md#engine) of 10 ms by
+themselves, so a wider send is often decided without its signals, marked
+`degraded`, and this rule follows its `on_error`. To bound both, have the
+platform split its batches into events of at most 50 recipients, the most
+SES, Postmark and Resend take per message anyway.
+
 ## Checklist for a new rule
 
 - [ ] It starts in shadow mode.
