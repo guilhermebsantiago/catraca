@@ -57,6 +57,7 @@ reload the rules:
 | `GET /v1/decisions/{id}` | `read` |
 | `GET /v1/rules` | `read` |
 | `GET /v1/rules/{id}/review` | `read` |
+| `POST /v1/rules/explain` | `read` |
 | `GET /v1/stats/rules` | `read` |
 | `GET /v1/accounts/{id}/state` | `read` |
 | `POST /v1/decisions/{id}/labels` | `label` |

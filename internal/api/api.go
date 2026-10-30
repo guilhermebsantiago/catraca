@@ -309,6 +309,7 @@ func New(opts Options) (*Server, error) {
 	s.v1("POST /v1/decisions/{id}/labels", ScopeLabel, s.label)
 	s.v1("GET /v1/rules", ScopeRead, s.getRules)
 	s.v1("POST /v1/rules/reload", ScopeAdmin, s.reload)
+	s.v1("POST /v1/rules/explain", ScopeRead, s.explain)
 	s.v1("GET /v1/rules/{id}/review", ScopeRead, s.review)
 	s.v1("GET /v1/stats/rules", ScopeRead, s.ruleStats)
 	// Setting an account's state changes how every later send of it is
