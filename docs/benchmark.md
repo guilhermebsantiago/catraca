@@ -175,7 +175,11 @@ time per event varied by a quarter between runs, as in the sections above:
 With three recipients, the common case, the difference is within noise.
 A lookup costs about 1.5 to 3.5 µs of Redis time on this Redis build, about
 as much as the `SET NX` of an id, so the 100-address cap bounds a send to
-some 150 to 360 µs of it, against the 26 ms 1,000 domains may cost. In Go
+some 150 to 360 µs of it, against the 26 ms 1,000 domains may cost. On a
+three-node cluster the lookups go out as up to 16 more script calls, one per
+set of the memory, in the same pipeline: in two runs a send to 100
+addresses took 0.67 ms instead of 0.50 ms, and about 420 µs more Redis time
+over the primaries, and one to 1,000 took 1.05 ms instead of 0.70 ms. In Go
 the cost past 100 addresses is hashing: an HMAC-SHA-256 per address, about
 0.2 µs, to pick the 100 checked without letting the sender choose them.
 
