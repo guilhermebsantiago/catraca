@@ -88,6 +88,38 @@ The decision itself is kept whole: action, enforced matches and shadow
 matches with their reasons, rules that errored, the degraded flag, the
 ruleset version and the latency.
 
+### Personal data, and how long to keep it
+
+The audit database holds personal data in both modes. Plan for it as you
+would for any other store of your users' data, under the GDPR, the LGPD or
+whatever law applies to you:
+
+| data | where | mode |
+|---|---|---|
+| account ids and API key ids | every decision | both |
+| client IP addresses | every decision | both |
+| the sender's domain and recipients' domains, the number of recipients | sends | both |
+| a hash of the subject, which confirms a guessed subject | sends | both |
+| who labeled (`by`, often a reviewer's email), why (free text) and with which token | labels | both |
+| sender and recipient addresses, subject, links, platform attributes, the recipient of feedback | sends and feedback, under `full` | `full` only |
+| what each hook sends | webhook deliveries in the outbox | both |
+| where a leaked key was found | [leak reports](secret-scanning.md#privacy-of-tokens) | both |
+
+**Nothing is deleted by default**, so the database keeps all of it until
+you set a [retention](#retention). Set one when you deploy. A reasonable
+start is `retention: 2160h` (90 days) for decisions without a label, long
+enough to review and to cover the stats windows, and a `labeled_retention`
+no longer than your policy allows for evidence, such as one or two years.
+With `event_detail: full`, keep `retention` shorter, such as 30 days, and
+turn `full` on only for as long as you need it. To erase one person's data
+on request, delete their decisions by account id (see [schema](#schema));
+labels and matches go with them, webhook deliveries do not.
+
+Exports, listings and backups carry the same data: a file written by
+[`catraca audit export`](cli.md#audit-export) holds the stored events, and
+[`GET /v1/decisions`](api.md#get-v1decisions) returns them to any token
+with the `read` scope.
+
 ## How decisions are written
 
 The engine calls `Record` for every decision. Record never blocks and never

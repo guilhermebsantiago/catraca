@@ -322,7 +322,7 @@ The decision log, labels and the webhook outbox. See [audit](audit.md).
 |---|---|---|
 | `dsn` | `sqlite:catraca.db` | `sqlite:<path>` or a plain path for SQLite, `postgres://user:pass@host:5432/db?sslmode=require` for Postgres |
 | `event_detail` | `minimal` | `minimal` keeps no message content; `full` also keeps the whole event as sent |
-| `retention` | unset: keep everything | delete decisions without a label this long after they were decided, and webhook deliveries this long after they were delivered or died; at least `24h` |
+| `retention` | unset: keep everything | delete decisions without a label this long after they were decided, and webhook deliveries this long after they were delivered or died; at least `24h`. The log holds [personal data](audit.md#personal-data-and-how-long-to-keep-it): set one |
 | `labeled_retention` | unset: keep forever | delete labeled decisions, with their labels, this long after they were decided; needs `retention` and must be at least as long |
 | `max_open_conns` | `10` | most connections to the database from this process |
 | `max_idle_conns` | `max_open_conns` | most idle connections kept open for reuse; at most `max_open_conns` |
