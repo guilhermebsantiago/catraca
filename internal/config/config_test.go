@@ -191,6 +191,7 @@ func TestExampleConfigHook(t *testing.T) {
 	}
 	cfg, err := Parse([]byte(strings.Join(lines, "\n")), path, env(map[string]string{
 		"CATRACA_API_TOKEN":       testToken,
+		"CATRACA_OPS_TOKEN":       testToken + "-ops",
 		"CATRACA_HOOK_SECRET":     testSecret,
 		"CATRACA_FEEDBACK_SECRET": testSecret,
 		"CATRACA_REVOKE_KEY_URL":  "https://platform.example/hooks/catraca/revoke-key",
