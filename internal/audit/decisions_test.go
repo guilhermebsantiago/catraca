@@ -206,6 +206,44 @@ func TestEntryVerdict(t *testing.T) {
 	}
 }
 
+// TestListDecisionsPlan checks, on SQLite, that each filter reads its index
+// in order instead of scanning and sorting the decisions.
+func TestListDecisionsPlan(t *testing.T) {
+	ctx := context.Background()
+	db, err := Open(ctx, ":memory:", Options{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close(ctx)
+	for _, tt := range []struct{ where, index string }{
+		{"account_id = ?", "decisions_account"},
+		{"api_key_id = ?", "decisions_api_key"},
+		{"event_json->>'ip' = ?", "decisions_ip"},
+		{"action = ?", "decisions_action"},
+	} {
+		q := "EXPLAIN QUERY PLAN SELECT decided_at_us, id, decision_json, event_json FROM decisions WHERE " + tt.where +
+			" AND (decided_at_us, id) < (?, ?) ORDER BY decided_at_us DESC, id DESC LIMIT ?"
+		rows, err := db.SQL().QueryContext(ctx, q, "x", 1, "d", 10)
+		if err != nil {
+			t.Fatalf("%s: %v", tt.where, err)
+		}
+		var plan []string
+		for rows.Next() {
+			var id, parent, unused int
+			var detail string
+			if err := rows.Scan(&id, &parent, &unused, &detail); err != nil {
+				t.Fatal(err)
+			}
+			plan = append(plan, detail)
+		}
+		rows.Close()
+		got := strings.Join(plan, "; ")
+		if !strings.Contains(got, tt.index) || strings.Contains(got, "TEMP B-TREE") {
+			t.Errorf("%s: plan %q, want %s without a sort", tt.where, got, tt.index)
+		}
+	}
+}
+
 func TestReplayEvent(t *testing.T) {
 	ev := sendEvent("d1")
 	got, full := NewStoredEvent(ev, EventFull).ReplayEvent()
