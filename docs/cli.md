@@ -2,7 +2,7 @@
 
 `catraca` runs the server and the tools around rules: checking and testing a
 ruleset, the precision gate for CI, backtests and precision reports,
-labeling decisions, listing and redriving webhook deliveries, and the queue
+labeling decisions, setting account states, listing and redriving webhook deliveries, and the queue
 of leaked-key reports. `catraca help` lists the commands and
 `catraca <command> -h` the flags of one. Flags may come before or after
 positional arguments, with one dash or two.
@@ -16,7 +16,7 @@ go build -ldflags "-X main.version=v0.1.0" -o catraca ./cmd/catraca
 | code | meaning |
 |---|---|
 | 0 | success |
-| 1 | a check failed: an invalid configuration or ruleset, failing fixtures, rules below the gate, lint warnings with `--strict`, a label the server refused, deliveries `outbox retry` left alone, or reports to requeue that are not dead |
+| 1 | a check failed: an invalid configuration or ruleset, failing fixtures, rules below the gate, lint warnings with `--strict`, a label or account state the server refused, deliveries `outbox retry` left alone, or reports to requeue that are not dead |
 | 2 | the command line is wrong: an unknown command or flag, a missing argument |
 | 3 | the command could not run: a file, the audit database or the server was unavailable, or the server failed to start |
 
@@ -138,6 +138,26 @@ a server that cannot be reached or fails exits 3.
 ```sh
 CATRACA_TOKEN=... catraca label 01M50QGQP8YVGSY487W3YJ8J24 \
   --verdict false_positive --by support@platform.example --reason "appeal #4411"
+```
+
+## account state
+
+```sh
+catraca account state <account-id> [--set review|suspended|trusted|active]   [--until 72h|<RFC 3339 time>] [--reason <why>] [--reset]   [--server http://localhost:8080] [--token <token>]
+```
+
+Prints an account's [state](signals.md#account-states) on a running server,
+sets it with `--set`, or resets it to `active` with `--reset`, through the
+[account state routes](api.md#account-states). `--until` is a duration from
+now or a time, after which the account is active again. The token and
+server come from the same flags and variables as `label`'s. A state the
+server refuses exits 1; a server that cannot be reached or fails exits 3.
+
+```sh
+$ catraca account state acct_123 --set suspended --until 72h --reason "chargeback fraud, ticket 4411"
+account acct_123 is suspended until 2026-11-01T21:02:11Z, set 2026-10-29T21:02:11Z by platform: chargeback fraud, ticket 4411
+$ catraca account state acct_123 --reset
+account acct_123 is active
 ```
 
 ## outbox list
