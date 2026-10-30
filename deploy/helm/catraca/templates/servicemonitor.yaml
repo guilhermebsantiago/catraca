@@ -1,0 +1,28 @@
+{{- if .Values.serviceMonitor.enabled }}
+apiVersion: monitoring.coreos.com/v1
+kind: ServiceMonitor
+metadata:
+  name: {{ include "catraca.fullname" . }}
+  labels:
+    {{- include "catraca.labels" . | nindent 4 }}
+    {{- with .Values.serviceMonitor.labels }}
+    {{- toYaml . | nindent 4 }}
+    {{- end }}
+spec:
+  {{- if .Values.serviceMonitor.jobLabel }}
+  # job is the value of this label of the admin Service.
+  jobLabel: catraca-job
+  {{- end }}
+  selector:
+    matchLabels:
+      {{- include "catraca.selectorLabels" . | nindent 6 }}
+      app.kubernetes.io/component: admin
+  namespaceSelector:
+    matchNames:
+      - {{ .Release.Namespace }}
+  endpoints:
+    - port: admin
+      path: /metrics
+      interval: {{ .Values.serviceMonitor.interval }}
+      scrapeTimeout: {{ .Values.serviceMonitor.scrapeTimeout }}
+{{- end }}

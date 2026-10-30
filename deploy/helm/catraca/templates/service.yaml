@@ -1,0 +1,49 @@
+# The API's port only: /healthz, /readyz and /metrics are on the admin port,
+# which clients have no reason to reach.
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "catraca.fullname" . }}
+  labels:
+    {{- include "catraca.labels" . | nindent 4 }}
+  {{- with .Values.service.annotations }}
+  annotations:
+    {{- toYaml . | nindent 4 }}
+  {{- end }}
+spec:
+  type: {{ .Values.service.type }}
+  selector:
+    {{- include "catraca.selectorLabels" . | nindent 4 }}
+  ports:
+    - name: http
+      port: {{ .Values.service.port }}
+      targetPort: http
+      protocol: TCP
+{{- if or .Values.adminService.enabled .Values.serviceMonitor.enabled }}
+---
+# The admin port, for Prometheus and checks from inside the cluster.
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "catraca.fullname" . }}-admin
+  labels:
+    {{- include "catraca.labels" . | nindent 4 }}
+    app.kubernetes.io/component: admin
+    {{- with .Values.serviceMonitor.jobLabel }}
+    # The ServiceMonitor's job label.
+    catraca-job: {{ . | quote }}
+    {{- end }}
+  {{- with .Values.adminService.annotations }}
+  annotations:
+    {{- toYaml . | nindent 4 }}
+  {{- end }}
+spec:
+  type: ClusterIP
+  selector:
+    {{- include "catraca.selectorLabels" . | nindent 4 }}
+  ports:
+    - name: admin
+      port: {{ .Values.adminService.port }}
+      targetPort: admin
+      protocol: TCP
+{{- end }}

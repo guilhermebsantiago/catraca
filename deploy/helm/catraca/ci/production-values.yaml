@@ -1,0 +1,67 @@
+# An example of production values: three pods sharing counters in Redis and
+# the audit log in Postgres, scraped by the Prometheus Operator. CI lints and
+# renders the chart with it. The Secret holds, besides the tokens and the
+# feedback secret:
+#
+#   audit-dsn  postgres://catraca:...@postgres:5432/catraca?sslmode=require
+#   redis-url  redis://:...@redis:6379/0
+#
+#   helm install catraca deploy/helm/catraca -f deploy/helm/catraca/ci/production-values.yaml
+replicaCount: 3
+
+image:
+  # Until a release is published, an image you built and pushed.
+  repository: registry.example.com/catraca
+  tag: v0.1.0
+
+config:
+  store:
+    backend: redis
+    redis:
+      url: ${CATRACA_REDIS_URL}
+  audit:
+    dsn: ${CATRACA_AUDIT_DSN}
+    # Connections per pod: keep this times the pods under Postgres's
+    # max_connections.
+    max_open_conns: 10
+    # Delete unlabeled decisions and finished webhook deliveries after 90
+    # days (docs/audit.md).
+    retention: 2160h
+
+# Postgres holds the audit log: nothing to write on disk.
+sqlite:
+  enabled: false
+
+resources:
+  requests:
+    cpu: 250m
+    memory: 256Mi
+  limits:
+    memory: 512Mi
+
+topologySpreadConstraints:
+  - maxSkew: 1
+    topologyKey: kubernetes.io/hostname
+    whenUnsatisfiable: ScheduleAnyway
+    labelSelector:
+      matchLabels:
+        app.kubernetes.io/name: catraca
+        app.kubernetes.io/instance: catraca
+
+serviceMonitor:
+  enabled: true
+  labels:
+    release: prometheus
+  jobLabel: catraca
+
+prometheusRule:
+  enabled: true
+  labels:
+    release: prometheus
+
+networkPolicy:
+  enabled: true
+  adminFrom:
+    - namespaceSelector:
+        matchLabels:
+          kubernetes.io/metadata.name: monitoring

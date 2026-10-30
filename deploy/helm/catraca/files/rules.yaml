@@ -1,0 +1,255 @@
+# Catraca starter ruleset for platforms that send email.
+#
+# Every rule starts in shadow mode: it is evaluated and recorded, but it never
+# changes the action. Label its matches, watch its precision with
+# `catraca report`, and promote it to enforce once it clears the gate
+# (`catraca rules gate`). The thresholds below are starting points; tune them
+# with `catraca replay` on your own traffic.
+#
+# The exceptions are leaked-key-send, account-suspended and account-review: a
+# key reported leaked is a fact, and an account state is an operator's
+# explicit decision, not a guess, so they enforce from day one. Accounts an
+# operator marked trusted skip the volume heuristics, whose false positives
+# are large legitimate senders; the reputation rules still apply to them.
+#
+# How to write rules: docs/rules.md. Fixtures: default.test.yaml.
+version: 1
+
+defaults:
+  mode: shadow
+  on_error: open
+
+lists:
+  # Public URL shorteners. They hide the destination from recipients and
+  # filters, so mailbox providers distrust mail that uses them.
+  url_shorteners:
+    - bit.ly
+    - bl.ink
+    - buff.ly
+    - cutt.ly
+    - is.gd
+    - ow.ly
+    - rb.gy
+    - rebrand.ly
+    - s.id
+    - shorturl.at
+    - t.co
+    - t.ly
+    - tiny.cc
+    - tinyurl.com
+    - v.gd
+
+rules:
+  - id: leaked-key-send
+    description: >-
+      Blocks every send made with an API key that was reported leaked, for
+      example by GitHub secret scanning, and asks the platform to revoke the
+      key. Keys known to be leaked stay blocked while the store is down.
+    when: event.type == "send" && event.api_key_id != "" && key.leaked
+    action: block
+    mode: enforce
+    # Fails open, like every other rule here: a store outage must never block
+    # every send that carries an API key. Each Catraca process remembers the
+    # leaked keys it marked or read from the store and keeps key.leaked true
+    # for them while the store is down, so those keys stay blocked. The
+    # trade-off: a key reported to another replica during the outage is not
+    # seen by this one until the store recovers.
+    on_error: open
+    effects: [revoke_key]
+    reason: This API key was found in public and must be rotated before it can send again
+    tags: [credentials]
+    override:
+      by: catraca
+      reason: >-
+        A reported leaked key is a fact, not a guess: someone found the key
+        in public and reported it, so every send with it is abuse or about
+        to be. The rule enforces from the start instead of waiting for
+        labeled matches to clear the precision gate.
+      at: 2026-10-15
+
+  - id: account-suspended
+    description: >-
+      Blocks every send from an account an operator suspended with PUT
+      /v1/accounts/{id}/state, until the state expires or is reset.
+    when: event.type == "send" && event.account_id != "" && account.state == "suspended"
+    action: block
+    mode: enforce
+    # Fails open: while the store is down the state cannot be read, and a
+    # store outage must never block every send.
+    on_error: open
+    reason: This account is suspended
+    tags: [account-state]
+    override:
+      by: catraca
+      reason: >-
+        An operator suspended the account through the API: the rule carries
+        out a decision a person made, not a guess, so there are no false
+        positives for the precision gate to measure.
+      at: 2026-10-29
+
+  - id: account-review
+    description: >-
+      Holds every send from an account an operator put under review with PUT
+      /v1/accounts/{id}/state, until the state expires or is reset.
+    when: event.type == "send" && event.account_id != "" && account.state == "review"
+    action: hold
+    mode: enforce
+    on_error: open
+    reason: This account is under review; its sends are held until it is cleared
+    tags: [account-state]
+    override:
+      by: catraca
+      reason: >-
+        An operator put the account under review through the API: the rule
+        carries out a decision a person made, not a guess, so there are no
+        false positives for the precision gate to measure.
+      at: 2026-10-29
+
+  - id: new-account-burst
+    description: >-
+      Throttles accounts younger than a day that send more than 100 emails in
+      a minute. Throwaway signups blast as soon as they can; real new
+      customers integrate, test and ramp up.
+    when: >-
+      event.type == "send"
+      && account.age_hours < 24
+      && account.sends_1m > 100
+      && account.state != "trusted"
+    action: throttle
+    retry_after: 60s
+    reason: New account sending at burst volume; slow down and retry later
+    tags: [volume, new-account]
+
+  - id: complaint-rate-high
+    description: >-
+      Holds sends from accounts whose spam complaint rate over the last 24
+      hours is above 0.3%, the ceiling Gmail and Yahoo set for bulk senders.
+      The rate is per recipient, and the rule needs at least 1,000
+      recipients in the window, or 1,000 sends when sends carry no to list,
+      so that a couple of complaints on a small account do not trip it.
+    when: >-
+      event.type == "send"
+      && (account.recipients_24h >= 1000 || account.sends_24h >= 1000)
+      && account.complaint_rate_24h > 0.003
+    action: hold
+    reason: Spam complaint rate above 0.3% in the last 24 hours
+    tags: [reputation]
+
+  - id: hard-bounce-rate-high
+    description: >-
+      Holds sends from accounts whose hard bounce rate over the last 24 hours
+      is above 5%, the rate at which Amazon SES puts an account under review.
+      Hard bounces are addresses that do not exist, the mark of a bought,
+      scraped or stale list. The rate is per recipient, and the rule needs
+      at least 500 recipients in the window, or 500 sends when sends carry
+      no to list.
+    when: >-
+      event.type == "send"
+      && (account.recipients_24h >= 500 || account.sends_24h >= 500)
+      && account.hard_bounce_rate_24h > 0.05
+    action: hold
+    reason: Hard bounce rate above 5% in the last 24 hours; the recipient list looks bought or stale
+    tags: [reputation]
+
+  - id: key-many-ips
+    description: >-
+      Holds sends with an API key that was used from 20 or more IP addresses
+      in the last hour, when this IP is also new for the key: the shape of a
+      leaked key used from many machines at once. Serverless platforms
+      rotate IPs too, so measure precision before enforcing.
+    when: >-
+      event.type == "send"
+      && event.api_key_id != ""
+      && key.distinct_ips_1h >= 20
+      && key.new_ip
+    action: hold
+    reason: API key used from many new IP addresses in the last hour
+    tags: [credentials]
+
+  - id: account-takeover-volume
+    description: >-
+      Holds sends from accounts older than 30 days that send more than 10
+      times their usual hourly volume from an IP they started using in the
+      last day: an established account taken over and drained for spam.
+      account.recent_ip (no sends from the IP between a day and a week ago)
+      stays true for every send of that first day, unlike account.new_ip,
+      which is true for the first send only and so never meets the spike.
+      It needs 200 sends in the hour so small accounts with a tiny baseline
+      do not trip it. A launch from new servers looks the same, and so does
+      a sender that uses an IP only once a week: measure precision before
+      enforcing.
+    when: >-
+      event.type == "send"
+      && account.age_hours > 720
+      && account.sends_1h >= 200
+      && account.volume_ratio_1h > 10
+      && account.recent_ip
+      && account.state != "trusted"
+    action: hold
+    reason: Sudden volume spike from a new IP on an established account
+    tags: [account-takeover]
+
+  - id: shortener-links-new-account
+    description: >-
+      Flags sends from accounts younger than 3 days that link through a
+      public URL shortener. Established senders link to their own domains;
+      spam hides its destination.
+    when: >-
+      event.type == "send"
+      && account.age_hours < 72
+      && any_in_list("url_shorteners", event.link_domains)
+      && account.state != "trusted"
+    action: flag
+    reason: New account linking through a URL shortener
+    tags: [content, new-account]
+
+  - id: signup-farm-ip
+    description: >-
+      Flags signups from an IP address that created 5 or more accounts in the
+      last 24 hours, this one included: a farm making throwaway accounts.
+      Offices, universities and carrier-grade NAT share addresses too, so it
+      only flags.
+    when: >-
+      event.type == "account"
+      && event.account_action == "signup"
+      && event.ip != ""
+      && ip.signups_24h >= 5
+    action: flag
+    reason: Many signups from the same IP address in the last 24 hours
+    tags: [signup]
+
+  - id: recipient-domain-spray
+    description: >-
+      Holds sends from accounts younger than 7 days that mailed 200 or more
+      recipients in the last hour spread across many domains, more than one
+      domain for every two recipients. Real audiences cluster on a few large
+      mailbox providers; a list spread that thin was usually bought or
+      scraped.
+    when: >-
+      event.type == "send"
+      && account.age_hours < 168
+      && account.recipients_1h >= 200
+      && ratio(account.distinct_recipient_domains_1h, account.recipients_1h) > 0.5
+      && account.state != "trusted"
+    action: hold
+    reason: New account sending to an unusually wide spread of recipient domains
+    tags: [list-quality, new-account]
+
+  - id: suppressed-recipients-new-account
+    description: >-
+      Holds sends from accounts younger than 7 days when two or more of the
+      recipients checked, and over 10% of them, hard-bounced or complained
+      on this platform in the last 30 days, whoever sent to them. A new
+      customer's list should be fresh; one full of addresses other senders
+      already found dead or hostile was bought, scraped or left to go
+      stale. It is the check ESPs make with an account-level suppression
+      list, made before the bounces come back. Sends to a single address
+      never match: one typo or one reused address is not a list.
+    when: >-
+      event.type == "send"
+      && account.age_hours < 168
+      && event.suppressed_recipients >= 2
+      && event.suppressed_ratio > 0.1
+    action: hold
+    reason: New account mailing addresses that recently hard-bounced or complained on this platform
+    tags: [list-quality, new-account]

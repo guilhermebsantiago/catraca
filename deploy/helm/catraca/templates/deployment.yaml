@@ -1,0 +1,164 @@
+{{- if include "catraca.multiReplica" . }}
+{{- if or .Values.sqlite.enabled (ne (dig "store" "backend" "memory" .Values.config | toString) "redis") }}
+{{- fail "More than one replica (replicaCount > 1 or autoscaling.enabled) needs counters in Redis (config.store.backend: redis) and the audit log in Postgres (config.audit.dsn, sqlite.enabled: false): each pod would otherwise count and record on its own. See ci/production-values.yaml." }}
+{{- end }}
+{{- end }}
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "catraca.fullname" . }}
+  labels:
+    {{- include "catraca.labels" . | nindent 4 }}
+spec:
+  {{- if not .Values.autoscaling.enabled }}
+  replicas: {{ .Values.replicaCount }}
+  {{- end }}
+  revisionHistoryLimit: 5
+  selector:
+    matchLabels:
+      {{- include "catraca.selectorLabels" . | nindent 6 }}
+  strategy:
+    {{- if .Values.strategy }}
+    {{- toYaml .Values.strategy | nindent 4 }}
+    {{- else if and .Values.sqlite.enabled .Values.sqlite.existingClaim }}
+    type: Recreate
+    {{- else }}
+    type: RollingUpdate
+    rollingUpdate:
+      maxSurge: 1
+      maxUnavailable: 0
+    {{- end }}
+  template:
+    metadata:
+      annotations:
+        # The server reads its configuration at start: roll the pods when it
+        # changes. The ruleset has no checksum here, since each pod reloads
+        # it in place.
+        checksum/config: {{ include "catraca.config" . | sha256sum }}
+        {{- with .Values.podAnnotations }}
+        {{- toYaml . | nindent 8 }}
+        {{- end }}
+      labels:
+        {{- include "catraca.selectorLabels" . | nindent 8 }}
+        {{- with .Values.podLabels }}
+        {{- toYaml . | nindent 8 }}
+        {{- end }}
+    spec:
+      serviceAccountName: {{ include "catraca.serviceAccountName" . }}
+      automountServiceAccountToken: false
+      {{- with .Values.imagePullSecrets }}
+      imagePullSecrets:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.priorityClassName }}
+      priorityClassName: {{ . }}
+      {{- end }}
+      securityContext:
+        {{- toYaml .Values.podSecurityContext | nindent 8 }}
+      # At least server.drain_delay + server.shutdown_timeout. No preStop
+      # hook: on SIGTERM the server drains by itself (docs/config.md).
+      terminationGracePeriodSeconds: {{ .Values.terminationGracePeriodSeconds }}
+      containers:
+        - name: catraca
+          image: {{ include "catraca.image" . | quote }}
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          args: [serve]
+          securityContext:
+            {{- toYaml .Values.securityContext | nindent 12 }}
+          env:
+            - name: CATRACA_CONFIG
+              value: {{ printf "%s/catraca.yaml" (include "catraca.configDir" .) }}
+            {{- range $name, $key := .Values.secret.env }}
+            - name: {{ $name }}
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "catraca.secretName" $ }}
+                  key: {{ $key }}
+            {{- end }}
+            {{- range $name, $key := .Values.secret.optionalEnv }}
+            - name: {{ $name }}
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "catraca.secretName" $ }}
+                  key: {{ $key }}
+                  optional: true
+            {{- end }}
+            {{- with .Values.extraEnv }}
+            {{- toYaml . | nindent 12 }}
+            {{- end }}
+          {{- with .Values.extraEnvFrom }}
+          envFrom:
+            {{- toYaml . | nindent 12 }}
+          {{- end }}
+          ports:
+            - name: http
+              containerPort: {{ .Values.ports.http }}
+              protocol: TCP
+            - name: admin
+              containerPort: {{ .Values.ports.admin }}
+              protocol: TCP
+          livenessProbe:
+            httpGet:
+              path: /healthz
+              port: admin
+            {{- toYaml .Values.livenessProbe | nindent 12 }}
+          readinessProbe:
+            httpGet:
+              path: /readyz
+              port: admin
+            {{- toYaml .Values.readinessProbe | nindent 12 }}
+          {{- with .Values.resources }}
+          resources:
+            {{- toYaml . | nindent 12 }}
+          {{- end }}
+          volumeMounts:
+            - name: config
+              mountPath: {{ include "catraca.configDir" . }}
+              readOnly: true
+            # A directory, not a subPath, so ConfigMap updates reach the file.
+            - name: rules
+              mountPath: {{ include "catraca.rulesDir" . }}
+              readOnly: true
+            {{- if .Values.sqlite.enabled }}
+            - name: data
+              mountPath: /var/lib/catraca
+            {{- end }}
+            {{- with .Values.extraVolumeMounts }}
+            {{- toYaml . | nindent 12 }}
+            {{- end }}
+      volumes:
+        - name: config
+          configMap:
+            name: {{ include "catraca.fullname" . }}
+        - name: rules
+          configMap:
+            name: {{ include "catraca.rulesConfigMapName" . }}
+        {{- if .Values.sqlite.enabled }}
+        - name: data
+          {{- if .Values.sqlite.existingClaim }}
+          persistentVolumeClaim:
+            claimName: {{ .Values.sqlite.existingClaim }}
+          {{- else }}
+          emptyDir:
+            sizeLimit: {{ .Values.sqlite.sizeLimit }}
+          {{- end }}
+        {{- end }}
+        {{- with .Values.extraVolumes }}
+        {{- toYaml . | nindent 8 }}
+        {{- end }}
+      {{- with .Values.nodeSelector }}
+      nodeSelector:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.affinity }}
+      affinity:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.tolerations }}
+      tolerations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.topologySpreadConstraints }}
+      topologySpreadConstraints:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}

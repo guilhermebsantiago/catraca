@@ -1,0 +1,7 @@
+# Not part of the packaged chart.
+.git/
+*.orig
+*.rej
+*.swp
+*~
+ci/
