@@ -6,9 +6,15 @@ server:
   drain_delay: 0s
 
 auth:
+  # The send path's token decides and nothing else; reading the audit log,
+  # labeling and reloading the rules take the ops token (docs/api.md).
   tokens:
-    - name: platform
+    - name: send-path
       token: ${CATRACA_API_TOKEN}
+      scopes: [decide]
+    - name: ops
+      token: ${CATRACA_OPS_TOKEN}
+      scopes: [decide, read, label, admin]
 
 rules:
   path: rules/default.yaml

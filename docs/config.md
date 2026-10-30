@@ -172,14 +172,35 @@ limits at work, and each shed request's access log line has `"shed": true`.
 | `tokens` | required | the bearer tokens the `/v1` routes accept, at least one |
 | `tokens[].name` | required | identifies the client in access logs (`client`); letters, digits, `.`, `_`, `-` |
 | `tokens[].token` | required | at least 16 characters; generate one with `openssl rand -hex 32` |
-| `tokens[].previous_tokens` | | tokens of the same client being rotated out, accepted like `token` under the same name; requests with one are logged with `"previous_token": true` |
+| `tokens[].previous_tokens` | | tokens of the same client being rotated out, accepted like `token` under the same name and with the same scopes; requests with one are logged with `"previous_token": true` |
+| `tokens[].scopes` | every scope | what the token may call: `decide`, `read`, `label`, `admin`; see [scopes](api.md#conventions). Without the key the token has every scope; an empty list is an error |
 
-Give each client its own token. To rotate one, make the new token `token`
-and the old one a previous token, move the client to the new one, then
-remove the old one; see [rotating secrets](rotation.md#api-tokens). A token,
-current or previous, may appear once in the whole list. Tokens are compared
-in constant time. Feedback and secret scanning routes take no token; they
-verify signatures.
+Give each client its own token, with the scopes it needs and no more. The
+send path, whose token sits on every app server, needs `decide` alone; the
+tools that read the audit log, review and label decisions, and reload the
+rules get their own token:
+
+```yaml
+auth:
+  tokens:
+    - name: send-path
+      token: ${CATRACA_API_TOKEN}
+      scopes: [decide]
+    - name: ops
+      token: ${CATRACA_OPS_TOKEN}
+      scopes: [decide, read, label, admin]
+```
+
+A token without `scopes` has every scope, so a file written before scopes
+keeps working, and `catraca config check` warns about it. A label records
+the name of the token that gave it as `client`, next to the `by` the caller
+sends.
+
+To rotate a token, make the new token `token` and the old one a previous
+token, move the client to the new one, then remove the old one; see
+[rotating secrets](rotation.md#api-tokens). A token, current or previous,
+may appear once in the whole list. Tokens are compared in constant time.
+Feedback and secret scanning routes take no token; they verify signatures.
 
 ### rules
 

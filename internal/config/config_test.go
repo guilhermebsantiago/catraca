@@ -9,6 +9,7 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -76,9 +77,69 @@ func requireError(t *testing.T, msgs []string, want string) {
 	t.Errorf("no error contains %q; got:\n  %s", want, strings.Join(msgs, "\n  "))
 }
 
+func TestTokenScopes(t *testing.T) {
+	cfg := mustParse(t, `auth:
+  tokens:
+    - name: send-path
+      token: `+testToken+`
+      scopes: [decide]
+    - name: ops
+      token: `+testSecret+`
+      previous_tokens: [`+testSecret+`-old]
+      scopes: [read, label, admin]
+    - name: legacy
+      token: `+testToken+`-legacy
+`, nil)
+	toks := cfg.Auth.Tokens
+	if !slices.Equal(toks[0].Scopes, []string{"decide"}) || !slices.Equal(toks[1].Scopes, []string{"read", "label", "admin"}) {
+		t.Errorf("scopes = %q and %q", toks[0].Scopes, toks[1].Scopes)
+	}
+	// Without the key a token has every scope, as before scopes existed.
+	if toks[2].Scopes != nil {
+		t.Errorf("a token without scopes has %q, want nil for every scope", toks[2].Scopes)
+	}
+
+	msgs := parseErrors(t, `auth:
+  tokens:
+    - name: a
+      token: `+testToken+`
+      scopes: [decide, write, decide]
+    - name: b
+      token: `+testSecret+`
+      scopes: []
+    - name: c
+      token: `+testToken+`-c
+      scopes:
+    - name: d
+      token: `+testToken+`-d
+      scopes: [Read]
+`, nil)
+	for _, want := range []string{
+		`catraca.yaml:5: auth.tokens[0].scopes[1]: unknown scope "write": use decide, read, label, admin`,
+		`catraca.yaml:5: auth.tokens[0].scopes[2]: "decide" is listed twice`,
+		"catraca.yaml:8: auth.tokens[1].scopes: is empty: list at least one of decide, read, label, admin, or remove the key for every scope",
+		"catraca.yaml:11: auth.tokens[2].scopes: is empty",
+		`catraca.yaml:14: auth.tokens[3].scopes[0]: unknown scope "Read"`,
+	} {
+		requireError(t, msgs, want)
+	}
+}
+
+// requireSplitTokens checks that a shipped configuration gives the send
+// path a token that only decides, and everything else to another token.
+func requireSplitTokens(t *testing.T, what string, cfg *Config) {
+	t.Helper()
+	toks := cfg.Auth.Tokens
+	if len(toks) != 2 || toks[0].Name != "send-path" || toks[0].Token.Value() != testToken || !slices.Equal(toks[0].Scopes, []string{"decide"}) ||
+		toks[1].Name != "ops" || !slices.Equal(toks[1].Scopes, TokenScopes) {
+		t.Errorf("%s: tokens = %#v, want send-path with [decide] and ops with every scope", what, toks)
+	}
+}
+
 func TestExampleConfig(t *testing.T) {
 	cfg, err := LoadWith(filepath.Join("..", "..", "catraca.example.yaml"), env(map[string]string{
 		"CATRACA_API_TOKEN":       testToken,
+		"CATRACA_OPS_TOKEN":       testToken + "-ops",
 		"CATRACA_HOOK_SECRET":     testSecret,
 		"CATRACA_FEEDBACK_SECRET": testSecret,
 	}))
@@ -88,9 +149,7 @@ func TestExampleConfig(t *testing.T) {
 	if cfg.Server.Listen != ":8080" {
 		t.Errorf("listen = %q", cfg.Server.Listen)
 	}
-	if len(cfg.Auth.Tokens) != 1 || cfg.Auth.Tokens[0].Name != "platform" || cfg.Auth.Tokens[0].Token.Value() != testToken {
-		t.Errorf("tokens = %#v", cfg.Auth.Tokens)
-	}
+	requireSplitTokens(t, "the example", cfg)
 	if want := filepath.Join("..", "..", "rules", "default.yaml"); cfg.Rules.Path != want {
 		t.Errorf("rules.path = %q, want %q", cfg.Rules.Path, want)
 	}
@@ -147,13 +206,14 @@ func TestExampleConfigHook(t *testing.T) {
 // TestDeployConfigs keeps the configurations in deploy/ valid: the one
 // baked into the image and the one compose.yaml mounts.
 func TestDeployConfigs(t *testing.T) {
-	vars := env(map[string]string{"CATRACA_API_TOKEN": testToken, "CATRACA_FEEDBACK_SECRET": testSecret})
+	vars := env(map[string]string{"CATRACA_API_TOKEN": testToken, "CATRACA_OPS_TOKEN": testToken + "-ops", "CATRACA_FEEDBACK_SECRET": testSecret})
 	for file, want := range map[string]time.Duration{"catraca.yaml": 5 * time.Second, "catraca.compose.yaml": 0} {
 		cfg, err := LoadWith(filepath.Join("..", "..", "deploy", file), vars)
 		if err != nil {
 			t.Errorf("deploy/%s does not load:\n%v", file, err)
 			continue
 		}
+		requireSplitTokens(t, "deploy/"+file, cfg)
 		if cfg.Server.DrainDelay != want {
 			t.Errorf("deploy/%s: drain_delay = %v, want %v", file, cfg.Server.DrainDelay, want)
 		}

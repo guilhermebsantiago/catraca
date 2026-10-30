@@ -484,8 +484,9 @@ func TestConfigCheck(t *testing.T) {
 	env := map[string]string{"TOKEN": testToken}
 	path := testConfig(t, "")
 	r := runCLI(t, env, "config", "check", "-config", path)
-	expect(t, r, exitOK, path+" is valid", "(1 warning(s))", "effect revoke_key has no hook",
-		"api tokens  platform", "9 rules: 1 enforced, 8 shadow", "postgres://catraca:xxxxx@db.internal:5432/catraca",
+	expect(t, r, exitOK, path+" is valid", "(2 warning(s))", "effect revoke_key has no hook",
+		"platform has no scopes, so it can call every route",
+		"api tokens  platform (every scope)", "9 rules: 1 enforced, 8 shadow", "postgres://catraca:xxxxx@db.internal:5432/catraca",
 		"at most 5s ahead of the clock (later is clamped), 168h0m0s behind (older is rejected)",
 		"when the file changes (read every 5s), on SIGHUP", "no enforced rule without an override to check now")
 	// With the watch off, and a rule enforced without an override that the

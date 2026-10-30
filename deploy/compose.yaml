@@ -1,7 +1,7 @@
 # Catraca with Redis for counters and Postgres for the audit log.
 #
 #   cd deploy
-#   export CATRACA_API_TOKEN=$(openssl rand -hex 32) CATRACA_FEEDBACK_SECRET=$(openssl rand -hex 32)
+#   export CATRACA_API_TOKEN=$(openssl rand -hex 32) CATRACA_OPS_TOKEN=$(openssl rand -hex 32) CATRACA_FEEDBACK_SECRET=$(openssl rand -hex 32)
 #   docker compose up --build
 #
 # Then: curl localhost:8080/readyz
@@ -15,6 +15,7 @@ services:
       - "8080:8080"
     environment:
       CATRACA_API_TOKEN: ${CATRACA_API_TOKEN:?set CATRACA_API_TOKEN}
+      CATRACA_OPS_TOKEN: ${CATRACA_OPS_TOKEN:?set CATRACA_OPS_TOKEN}
       CATRACA_FEEDBACK_SECRET: ${CATRACA_FEEDBACK_SECRET:?set CATRACA_FEEDBACK_SECRET}
       CATRACA_CONFIG: /etc/catraca/compose.yaml
     volumes:

@@ -90,6 +90,11 @@ func (s *Server) label(w http.ResponseWriter, r *http.Request) {
 	if !s.readJSON(w, r, &l) {
 		return
 	}
+	// The token labels, whatever the body says: by is the caller's word.
+	l.Client = ""
+	if ri := infoFrom(r.Context()); ri != nil {
+		l.Client = ri.client
+	}
 	if err := s.audit.Label(r.Context(), id, l); err != nil {
 		s.auditError(w, r, id, err)
 		return

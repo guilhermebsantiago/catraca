@@ -85,7 +85,7 @@ With Docker, Redis counters and a Postgres audit log:
 
 ```sh
 git clone https://github.com/guilhermebsantiago/catraca && cd catraca/deploy
-export CATRACA_API_TOKEN=$(openssl rand -hex 32) CATRACA_FEEDBACK_SECRET=$(openssl rand -hex 32)
+export CATRACA_API_TOKEN=$(openssl rand -hex 32) CATRACA_OPS_TOKEN=$(openssl rand -hex 32) CATRACA_FEEDBACK_SECRET=$(openssl rand -hex 32)
 docker compose up --build
 ```
 
@@ -94,7 +94,7 @@ From source (Go 1.26+), with in-memory counters and SQLite:
 ```sh
 go build -o catraca ./cmd/catraca
 cp catraca.example.yaml catraca.yaml
-export CATRACA_API_TOKEN=$(openssl rand -hex 32) CATRACA_FEEDBACK_SECRET=$(openssl rand -hex 32)
+export CATRACA_API_TOKEN=$(openssl rand -hex 32) CATRACA_OPS_TOKEN=$(openssl rand -hex 32) CATRACA_FEEDBACK_SECRET=$(openssl rand -hex 32)
 ./catraca config check && ./catraca serve
 ```
 

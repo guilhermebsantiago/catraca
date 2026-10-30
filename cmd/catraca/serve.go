@@ -78,8 +78,8 @@ func (c *cli) configCheck(_ context.Context, args []string) int {
 	fs := c.flagSet("config check", `Usage: catraca config check [-config catraca.yaml]
 
 Validates the configuration and the ruleset it names without starting the
-server, and prints a summary. Problems are errors; ruleset lint findings and
-effects without a hook are warnings.
+server, and prints a summary. Problems are errors; ruleset lint findings,
+effects without a hook and API tokens without scopes are warnings.
 `)
 	path := c.configFlag(fs)
 	if _, code := parse(fs, args, 0, 0); code >= 0 {
@@ -104,6 +104,12 @@ effects without a hook are warnings.
 		fmt.Fprintf(c.stderr, "%s: warning: %s\n", cfg.Rules.Path, m)
 		warnings++
 	}
+	for _, t := range cfg.Auth.Tokens {
+		if t.Scopes == nil {
+			fmt.Fprintf(c.stderr, "%s: warning: auth.tokens: %s has no scopes, so it can call every route, reading the audit log and reloading rules included; list its scopes (decide for the send path)\n", *path, t.Name)
+			warnings++
+		}
+	}
 	fmt.Fprintf(c.stdout, "%s is valid", *path)
 	if warnings > 0 {
 		fmt.Fprintf(c.stdout, " (%d warning(s))", warnings)
@@ -127,7 +133,11 @@ func (c *cli) summary(cfg *config.Config, rs *rules.Ruleset) {
 	row("shutdown", "drain %s, then up to %s", cfg.Server.DrainDelay, cfg.Server.ShutdownTimeout)
 	var names []string
 	for _, t := range cfg.Auth.Tokens {
-		names = append(names, t.Name)
+		scopes := "every scope"
+		if t.Scopes != nil {
+			scopes = strings.Join(t.Scopes, ", ")
+		}
+		names = append(names, fmt.Sprintf("%s (%s)", t.Name, scopes))
 	}
 	row("api tokens", "%s", strings.Join(names, ", "))
 	enforced, unproven := 0, 0

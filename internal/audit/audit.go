@@ -78,6 +78,11 @@ type Label struct {
 	// appeals flow. Required.
 	By     string `json:"by"`
 	Reason string `json:"reason,omitempty"`
+	// Client is the name of the API token the label was given with, set by
+	// Catraca, not by the caller: By says who the caller claims labeled,
+	// Client which credential sent it. Empty for labels given before it
+	// was recorded, and for labels not given through the API.
+	Client string `json:"client,omitempty"`
 	// Time is when the verdict was given; Label fills it with the current
 	// time when it is zero. When several labels apply to a match, the one
 	// with the latest Time wins.

@@ -27,6 +27,17 @@ Redis and the audit database answer, without hostnames or errors, and
 which ruleset version runs, from which file path, with the ids of the
 rules the precision gate holds back.
 
+Give each API token only the [scopes](docs/api.md#conventions) its client
+needs. The send path's token sits on every app server, so give it
+`decide` alone: then an app server that leaks it cannot read the audit log
+(account ids, IPs, recipient domains, and addresses and links with
+`audit.event_detail: full`), read the review queue, label decisions or
+reload the rules. A token without the route's scope gets `403
+insufficient_scope`, logged with the token's name. A token configured
+without `scopes` has every scope, for configurations written before
+scopes; `catraca config check` warns about each. Labels record the name of
+the token that gave them as `client`, next to the free-form `by`.
+
 Every API token and shared secret can be rotated with an overlap, so a
 leaked one can be replaced without refusing valid traffic; see
 [rotating secrets](docs/rotation.md).

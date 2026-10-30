@@ -135,10 +135,18 @@ type Token struct {
 	Name  string `yaml:"name"`
 	Token Secret `yaml:"token"`
 	// PreviousTokens are tokens of the same client being rotated out. They
-	// are accepted like Token, under the same name, so the client can move
-	// to Token whenever it is ready.
+	// are accepted like Token, under the same name and with the same
+	// scopes, so the client can move to Token whenever it is ready.
 	PreviousTokens []Secret `yaml:"previous_tokens"`
+	// Scopes are what the token may do, from TokenScopes: decide, read,
+	// label, admin. Without the key the token has every scope, as tokens
+	// had before scopes existed; give the send path's token [decide] only.
+	Scopes []string `yaml:"scopes"`
 }
+
+// TokenScopes are the scopes a token may list, as api.Scopes names them.
+// The scopes paragraph of docs/api.md has the routes of each.
+var TokenScopes = []string{"decide", "read", "label", "admin"}
 
 // Rules configures the ruleset.
 type Rules struct {

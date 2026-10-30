@@ -42,13 +42,13 @@ catraca config check [-config catraca.yaml]
 ```
 
 Validates the configuration and loads the ruleset it names, then prints a
-summary without secrets. Ruleset lint findings and effects without a hook
-are printed as warnings.
+summary without secrets. Ruleset lint findings, effects without a hook and
+API tokens without [scopes](api.md#conventions) are printed as warnings.
 
 ```
 catraca.yaml is valid (1 warning(s))
   listen      :8080
-  api tokens  platform
+  api tokens  send-path (decide), ops (decide, read, label, admin)
   ruleset     rules/default.yaml (version 098086f42c27, 9 rules: 1 enforced, 8 shadow)
   reload      when the file changes (read every 5s), on SIGHUP and on POST /v1/rules/reload
   store       memory (one instance; counters are lost on restart)

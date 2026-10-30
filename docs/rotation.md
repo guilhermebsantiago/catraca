@@ -45,13 +45,17 @@ Clients send a token; Catraca checks it.
    ```yaml
    auth:
      tokens:
-       - name: platform
+       - name: send-path
          token: ${CATRACA_API_TOKEN}            # new
          previous_tokens: ["${CATRACA_API_TOKEN_OLD}"]
+         scopes: [decide]
    ```
 
    Both tokens authenticate the client, under the same name in the access
-   logs.
+   logs and with the same [scopes](api.md#conventions): a previous token
+   has the scopes of its entry, so a rotation never changes what the
+   client may do. To change a client's scopes at the same time, rotate to
+   a new entry instead (below).
 2. Move the client to the new token. Requests that still use the old one
    are logged with `"previous_token": true`.
 3. Once no request has been logged with `previous_token` for a while,
@@ -59,7 +63,10 @@ Clients send a token; Catraca checks it.
 
 Giving the client a second entry with a new name, adding it, moving the
 client and removing the old entry, works too; `previous_tokens` keeps the
-client's name in logs across the rotation.
+client's name in logs across the rotation. The second entry is the way to
+narrow a token's scopes, such as splitting an unscoped token into a
+`send-path` token with `[decide]` and an `ops` token: add the new entries,
+move each client, then remove the old one.
 
 ## Webhook secrets
 

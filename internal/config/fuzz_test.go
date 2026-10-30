@@ -27,6 +27,7 @@ func FuzzParse(f *testing.F) {
 		"auth:\n  tokens:\n    - &t {name: a, token: ${CATRACA_API_TOKEN}}\n    - *t\n",
 		"auth: {tokens: [{name: a, token: ${UNSET}}]}\n",
 		"auth: {tokens: [{name: a, token: '$${literal}${EMPTY:-fallback}'}]}\n",
+		"auth: {tokens: [{name: a, token: ${CATRACA_API_TOKEN}, scopes: [decide, admin, decide, x]}, {name: b, token: " + testSecret + ", scopes: []}]}\n",
 		"store: {redis: {url: 'redis://:p@localhost:6379/0', mode: cluster}}\n" + minimal,
 		"hooks:\n  - {name: revoke_key, url: 'https://x.example/h', secret: ${CATRACA_HOOK_SECRET}, headers: {Authorization: Bearer x, Authorization: y}}\n" + minimal,
 		"gate: {min_labeled: 9223372036854775808, min_precision: NaN}\n" + minimal,
