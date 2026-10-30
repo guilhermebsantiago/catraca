@@ -381,7 +381,7 @@ func scanLeakReports(rows *sql.Rows) ([]LeakReport, error) {
 	return rs, nil
 }
 
-// deleteLeakReports deletes up to pruneBatch done or dead reports last
+// deleteLeakReports deletes up to PruneBatch done or dead reports last
 // updated before before, oldest first. Pending ones are never deleted.
 func (db *DB) deleteLeakReports(ctx context.Context, before int64) (int, error) {
 	res, err := db.db.ExecContext(ctx, db.dialect.rebind(`DELETE FROM leak_reports WHERE id IN (
@@ -389,7 +389,7 @@ func (db *DB) deleteLeakReports(ctx context.Context, before int64) (int, error) 
     WHERE status IN ('done', 'dead') AND updated_at_us < ?
     ORDER BY updated_at_us
     LIMIT ?`+db.dialect.skipLocked+`
-)`), before, pruneBatch)
+)`), before, db.opts.PruneBatch)
 	if err != nil {
 		return 0, err
 	}

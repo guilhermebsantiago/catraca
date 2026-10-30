@@ -6,6 +6,7 @@ import (
 	"database/sql"
 	"fmt"
 	"log/slog"
+	"math"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -251,6 +252,11 @@ func TestOptionsValidation(t *testing.T) {
 		{"negative retention", Options{Retention: -day}, "cannot be negative"},
 		{"labeled without retention", Options{LabeledRetention: 30 * day}, "needs a retention"},
 		{"labeled shorter", Options{Retention: 30 * day, LabeledRetention: 7 * day}, "must be at least the retention"},
+		{"sample above 1", Options{SampleAllowed: 1.5}, "must be from 0 to 1"},
+		{"sample negative", Options{SampleAllowed: -0.1}, "must be from 0 to 1"},
+		{"sample NaN", Options{SampleAllowed: math.NaN()}, "must be from 0 to 1"},
+		{"negative prune batch", Options{PruneBatch: -1}, "cannot be negative"},
+		{"negative prune pause", Options{PrunePause: -time.Second}, "cannot be negative"},
 	} {
 		_, err := Open(context.Background(), ":memory:", tt.opts)
 		if err == nil || !strings.Contains(err.Error(), tt.want) {
@@ -262,6 +268,58 @@ func TestOptionsValidation(t *testing.T) {
 		t.Fatalf("equal retentions: %v", err)
 	}
 	db.Close(context.Background())
+}
+
+func TestRetentionDefaults(t *testing.T) {
+	db, err := Open(context.Background(), ":memory:", Options{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close(context.Background())
+	if db.opts.PruneBatch != 500 || db.opts.PrunePause != 0 {
+		t.Errorf("SQLite PruneBatch, PrunePause = %d, %v; want 500 and as long as each batch took", db.opts.PruneBatch, db.opts.PrunePause)
+	}
+	if postgresDialect.pruneBatch != 5000 || postgresDialect.prunePause != 10*time.Millisecond {
+		t.Errorf("Postgres PruneBatch, PrunePause = %d, %v; want 5000, 10ms", postgresDialect.pruneBatch, postgresDialect.prunePause)
+	}
+	if db.opts.SampleAllowed != 1 {
+		t.Errorf("SampleAllowed = %g, want 1", db.opts.SampleAllowed)
+	}
+}
+
+// TestKeepAllow checks that sampling keeps about the share asked for, the
+// same ids every time, even for ids that differ only at the end, as
+// decision ids made in the same millisecond do.
+func TestKeepAllow(t *testing.T) {
+	const n = 20000
+	for _, rate := range []float64{0.01, 0.1, 0.5, 0.9} {
+		kept := 0
+		for i := range n {
+			id := fmt.Sprintf("01JBX5Q8ZK7Y3M2N4P6R8T%04d", i)
+			keep := KeepAllow(id, rate)
+			if keep != KeepAllow(id, rate) {
+				t.Fatalf("KeepAllow(%s, %g) changed between calls", id, rate)
+			}
+			if keep {
+				kept++
+			}
+		}
+		// Five standard deviations of a binomial: never by chance.
+		want := rate * n
+		if tol := 5 * math.Sqrt(n*rate*(1-rate)); math.Abs(float64(kept)-want) > tol {
+			t.Errorf("KeepAllow at %g kept %d of %d, want %.0f ± %.0f", rate, kept, n, want, tol)
+		}
+	}
+	// A lower rate keeps a subset of what a higher one keeps.
+	for i := range 1000 {
+		id := fmt.Sprintf("id-%d", i)
+		if KeepAllow(id, 0.1) && !KeepAllow(id, 0.5) {
+			t.Fatalf("%s is kept at 0.1 but not at 0.5", id)
+		}
+	}
+	if !KeepAllow("anything", 1) || KeepAllow("anything", 0) {
+		t.Error("KeepAllow must keep everything at 1 and nothing at 0")
+	}
 }
 
 func TestPoolDefaults(t *testing.T) {

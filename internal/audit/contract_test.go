@@ -139,8 +139,15 @@ func runContract(t *testing.T, newDSN func(t *testing.T) string) {
 		}
 	})
 	t.Run("Retention", func(t *testing.T) {
-		db := open(t, newDSN(t), Options{Retention: 48 * time.Hour, LabeledRetention: 7 * 24 * time.Hour})
+		// The SQLite batch on both, so the test steps over several.
+		db := open(t, newDSN(t), Options{Retention: 48 * time.Hour, LabeledRetention: 7 * 24 * time.Hour, PruneBatch: pruneBatch})
 		testRetention(t, db)
+	})
+	t.Run("RetentionPause", func(t *testing.T) {
+		testRetentionPause(t, open(t, newDSN(t), Options{Retention: 48 * time.Hour, PruneBatch: 7, PrunePause: time.Millisecond}))
+	})
+	t.Run("SampleAllowed", func(t *testing.T) {
+		testSampleAllowed(t, open(t, newDSN(t), Options{SampleAllowed: 0.25}))
 	})
 	t.Run("LeakReports", func(t *testing.T) { testLeakReports(t, fresh(t)) })
 	t.Run("LeakReportsConcurrentClaims", func(t *testing.T) { testLeakReportsConcurrentClaims(t, fresh(t)) })
@@ -1429,6 +1436,104 @@ func testRetention(t *testing.T, db *DB) {
 	}
 	if s := db.RetentionStats(); s.Decisions != old+1 || s.Deliveries != 3 {
 		t.Errorf("RetentionStats = %+v, want %d decisions and 3 deliveries", s, old+1)
+	}
+}
+
+// testRetentionPause runs retention with a batch and a pause of its own,
+// on a DB that keeps unlabeled decisions for 48h and deletes at most 7 rows
+// per statement.
+func testRetentionPause(t *testing.T, db *DB) {
+	ctx := context.Background()
+	db.stopPruning()
+	<-db.pruned
+	if db.opts.PruneBatch != 7 || db.opts.PrunePause != time.Millisecond {
+		t.Fatalf("PruneBatch, PrunePause = %d, %v; want 7, 1ms", db.opts.PruneBatch, db.opts.PrunePause)
+	}
+	const old = 7*3 + 2
+	var ds []decision.Decision
+	for i := range old {
+		ds = append(ds, newDecision(fmt.Sprintf("old%02d", i), t0.Add(time.Duration(i)*time.Second), []string{"a"}, nil))
+	}
+	ds = append(ds, newDecision("recent", t0.Add(4*24*time.Hour), []string{"a"}, nil))
+	record(t, db, ds...)
+	if err := db.prune(ctx, t0.Add(5*24*time.Hour)); err != nil {
+		t.Fatalf("prune: %v", err)
+	}
+	if s := db.RetentionStats(); s.Decisions != old {
+		t.Errorf("RetentionStats = %+v, want %d decisions", s, old)
+	}
+	if _, err := db.Get(ctx, "recent"); err != nil {
+		t.Errorf("Get(recent): %v", err)
+	}
+}
+
+// testSampleAllowed records plain allows and every kind of decision that
+// is never sampled on a DB that keeps a quarter of the plain allows.
+func testSampleAllowed(t *testing.T, db *DB) {
+	ctx := context.Background()
+	const rate = 0.25
+	// Ids a quarter of plain allows would leave out, so a decision kept
+	// below is kept because of what it is, not by chance.
+	var out []string
+	for i := 0; len(out) < 7; i++ {
+		if id := fmt.Sprintf("never%03d", i); !KeepAllow(id, rate) {
+			out = append(out, id)
+		}
+	}
+	never := []decision.Decision{
+		newDecision(out[0], t0, []string{"enforced"}, nil),
+		newDecision(out[1], t0, nil, []string{"shadow"}),
+		newDecision(out[2], t0, nil, nil),
+		newDecision(out[3], t0, nil, nil),
+		newDecision(out[4], t0, nil, nil),
+		newDecision(out[5], t0, nil, nil),
+		newDecision(out[6], t0, nil, nil),
+	}
+	never[2].Degraded = true
+	never[3].Degraded, never[3].Uncounted = true, true
+	never[4].Duplicate = true
+	never[5].Errors = []decision.RuleError{{RuleID: "broken", Error: "boom"}}
+	never[6].Action = decision.Throttle
+	record(t, db, never...)
+	for _, d := range never {
+		if PlainAllow(d) {
+			t.Errorf("PlainAllow(%s) = true for %+v", d.ID, d)
+		}
+		if _, err := db.Get(ctx, d.ID); err != nil {
+			t.Errorf("Get(%s): %v; a decision that is not a plain allow is always recorded", d.ID, err)
+		}
+	}
+
+	const plain = 400
+	var plains []decision.Decision
+	kept := 0
+	for i := range plain {
+		d := newDecision(fmt.Sprintf("plain%03d", i), t0, nil, nil)
+		if !PlainAllow(d) {
+			t.Fatalf("PlainAllow(%s) = false", d.ID)
+		}
+		if KeepAllow(d.ID, rate) {
+			kept++
+		}
+		plains = append(plains, d)
+	}
+	record(t, db, plains...)
+	// 100 expected; the ids are fixed, so this is not flaky.
+	if kept < 70 || kept > 130 {
+		t.Errorf("KeepAllow kept %d of %d at %g", kept, plain, rate)
+	}
+	for _, d := range plains {
+		_, err := db.Get(ctx, d.ID)
+		switch keep := KeepAllow(d.ID, rate); {
+		case keep && err != nil:
+			t.Errorf("Get(%s) = %v, want it recorded", d.ID, err)
+		case !keep && !errors.Is(err, ErrNotFound):
+			t.Errorf("Get(%s) = %v, want ErrNotFound for a decision sampled out", d.ID, err)
+		}
+	}
+	s := db.RecorderStats()
+	if want := uint64(len(never) + kept); s.Recorded != want || s.SampledOut != uint64(plain-kept) || s.Dropped != 0 {
+		t.Errorf("RecorderStats = %+v, want %d recorded and %d sampled out", s, want, plain-kept)
 	}
 }
 

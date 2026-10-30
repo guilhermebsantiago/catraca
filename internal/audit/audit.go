@@ -157,11 +157,16 @@ type Options struct {
 	// EventMode is how much of each event to keep. Default EventMinimal.
 	EventMode EventMode
 	// BufferSize is how many decisions can wait to be written before Record
-	// starts dropping them. Default 8192.
+	// starts dropping them. Default DefaultBufferSize.
 	BufferSize int
 	// BatchSize is the most decisions written in one transaction.
-	// Default 256.
+	// Default DefaultBatchSize.
 	BatchSize int
+	// SampleAllowed is the fraction of plain allows Record keeps (see
+	// PlainAllow); every other decision is always kept. Which ones are kept
+	// depends only on the decision id (see KeepAllow). Zero or 1 keeps
+	// every decision; it must not be above 1.
+	SampleAllowed float64
 	// FlushInterval is the longest a decision waits in the buffer.
 	// Default 200ms.
 	FlushInterval time.Duration
@@ -175,6 +180,15 @@ type Options struct {
 	// labels. Zero keeps them forever: the precision gate and backtests
 	// need them. When set, it must be at least Retention.
 	LabeledRetention time.Duration
+	// PruneBatch is the most rows one retention DELETE removes. Default 500
+	// on SQLite, where every write waits for the DELETE, and 5000 on
+	// Postgres, where it only locks the rows it deletes.
+	PruneBatch int
+	// PrunePause is how long retention waits after each DELETE that left
+	// more to delete. Zero waits as long as the DELETE took, at least 10ms,
+	// on SQLite, so a backlog takes at most about half of the database's
+	// write time, and 10ms on Postgres.
+	PrunePause time.Duration
 	// Logger receives drop and write-failure reports. Default slog.Default().
 	Logger *slog.Logger
 	// OnBatchWrite, when set, is told about every attempt to write a batch
@@ -204,6 +218,12 @@ type Pool struct {
 	// MaxIdleTime closes connections idle this long. Default 5m.
 	MaxIdleTime time.Duration
 }
+
+// Defaults for Options.
+const (
+	DefaultBufferSize = 8192
+	DefaultBatchSize  = 256
+)
 
 // Defaults for Pool.
 const (
@@ -238,10 +258,13 @@ func (o Options) withDefaults() Options {
 		o.EventMode = EventMinimal
 	}
 	if o.BufferSize <= 0 {
-		o.BufferSize = 8192
+		o.BufferSize = DefaultBufferSize
 	}
 	if o.BatchSize <= 0 {
-		o.BatchSize = 256
+		o.BatchSize = DefaultBatchSize
+	}
+	if o.SampleAllowed <= 0 {
+		o.SampleAllowed = 1
 	}
 	if o.FlushInterval <= 0 {
 		o.FlushInterval = 200 * time.Millisecond
@@ -259,6 +282,13 @@ func (o Options) withDefaults() Options {
 func (o Options) validate() error {
 	if _, err := ParseEventMode(string(o.EventMode)); err != nil {
 		return err
+	}
+	// Written so that NaN fails too.
+	if !(o.SampleAllowed >= 0 && o.SampleAllowed <= 1) {
+		return fmt.Errorf("audit: the share of allowed decisions sampled must be from 0 to 1, got %g", o.SampleAllowed)
+	}
+	if o.PruneBatch < 0 || o.PrunePause < 0 {
+		return errors.New("audit: the retention batch and pause cannot be negative")
 	}
 	return validateRetention(o.Retention, o.LabeledRetention)
 }

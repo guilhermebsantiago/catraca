@@ -495,7 +495,10 @@ curl -s "$CATRACA/v1/decisions/01M50QGQP8YVGSY487W3YJ8J24" -H "Authorization: Be
 ```
 
 `404 not_found` when the decision is not in the log, `503 unavailable` with
-`Retry-After` when the audit database fails to answer.
+`Retry-After` when the audit database fails to answer. A decision is not
+in the log once [retention](audit.md#retention) deletes it, or when it is
+a plain allow that [`audit.sample_allowed`](audit.md#sampling-allowed-decisions)
+left out; labeling one then answers `404` too.
 
 ### POST /v1/decisions/{id}/labels
 
@@ -1072,6 +1075,7 @@ in each bucket.
 | `catraca_admission_limit{group}` | gauge | how many slots there are for `decisions` (adaptive unless `server.inflight_limit` is `static`) and for `feedback` |
 | `catraca_audit_recorded_total`, `_dropped_total`, `_failed_total` | counter | audit log writes |
 | `catraca_audit_rejected_total` | counter | decisions the audit database refused one at a time while it wrote the rest of their batch, also counted as failed ([details](audit.md#how-decisions-are-written)) |
+| `catraca_audit_sampled_out_total` | counter | allowed decisions no rule matched that [`audit.sample_allowed`](audit.md#sampling-allowed-decisions) left out of the log on purpose; not counted as dropped |
 | `catraca_audit_queued` | gauge | decisions waiting to be written |
 | `catraca_audit_write_duration_seconds{result}` | histogram | each attempt to write a batch of decisions, by `result`: `ok`, `refused` (a value was refused; the batch is then written a decision at a time) or `error` |
 | `catraca_audit_retention_deleted_total{table}` | counter | rows deleted by [retention](audit.md#retention): `decisions` (with their matches and labels), `outbox` and `leak_reports` |

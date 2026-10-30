@@ -57,6 +57,7 @@ type DB struct {
 	dropped         atomic.Uint64
 	failed          atomic.Uint64
 	rejected        atomic.Uint64
+	sampledOut      atomic.Uint64
 	droppedSinceLog atomic.Uint64
 	lastDropLog     atomic.Int64
 	rejectLog       limiter
@@ -142,6 +143,12 @@ func open(ctx context.Context, sqlDB *sql.DB, d dialect, opts Options) (*DB, err
 		return nil, err
 	}
 	opts = opts.withDefaults()
+	if opts.PruneBatch == 0 {
+		opts.PruneBatch = d.pruneBatch
+	}
+	if opts.PrunePause == 0 {
+		opts.PrunePause = d.prunePause
+	}
 	if err := sqlDB.PingContext(ctx); err != nil {
 		sqlDB.Close()
 		return nil, fmt.Errorf("audit: connect to %s: %w", d.name, err)
@@ -267,6 +274,10 @@ type dialect struct {
 	// refused reports whether a write failed because the database refused
 	// the values in it, rather than because it cannot take writes.
 	refused func(error) bool
+	// pruneBatch and prunePause are the defaults of Options.PruneBatch and
+	// Options.PrunePause.
+	pruneBatch int
+	prunePause time.Duration
 }
 
 var (
@@ -274,6 +285,9 @@ var (
 		name:       "sqlite",
 		migrations: "migrations/sqlite",
 		refused:    sqliteRefused,
+		// Every write waits for a DELETE, the decision writer's included:
+		// small batches, each followed by a pause as long as it took.
+		pruneBatch: pruneBatch,
 	}
 	postgresDialect = dialect{
 		name:       "postgres",
@@ -284,6 +298,10 @@ var (
 		lockMigrations: "SELECT pg_advisory_xact_lock(4708204391077625121)",
 		skipLocked:     " FOR UPDATE SKIP LOCKED",
 		refused:        postgresRefused,
+		// A DELETE locks only the old rows it deletes, which nothing else
+		// writes, so the decision writer does not wait for it.
+		pruneBatch: pruneBatchPostgres,
+		prunePause: pruneMinPause,
 	}
 )
 

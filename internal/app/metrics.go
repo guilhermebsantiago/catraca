@@ -37,6 +37,8 @@ func (a *App) registerStats() {
 			func() uint64 { return db.RecorderStats().Failed }),
 		counter("catraca_audit_rejected_total", "Decisions the audit database refused one at a time while it wrote the rest of their batch; also counted as failed.",
 			func() uint64 { return db.RecorderStats().Rejected }),
+		counter("catraca_audit_sampled_out_total", "Allowed decisions no rule matched that audit.sample_allowed left out of the audit log on purpose.",
+			func() uint64 { return db.RecorderStats().SampledOut }),
 		prometheus.NewGaugeFunc(prometheus.GaugeOpts{
 			Name: "catraca_audit_queued",
 			Help: "Decisions waiting to be written to the audit log.",

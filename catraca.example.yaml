@@ -96,6 +96,18 @@ audit:
   # Labeled decisions are kept forever, for the precision gate, unless this
   # is set; it must be at least retention.
   # labeled_retention: 17520h # 2 years
+  # Rows one retention DELETE removes, and the wait after each. Defaults:
+  # 500 and as long as the DELETE took on SQLite, 5000 and 10ms on Postgres.
+  # retention_batch: 5000
+  # retention_pause: 10ms
+  # Decisions waiting to be written (about 1 KB each), and the most written
+  # per transaction. When the buffer is full new decisions are dropped:
+  # size it as decisions recorded per second times the stall to ride out.
+  buffer_size: 8192
+  batch_size: 256
+  # Share of plain allows (no rule matched, enforced or shadow, every
+  # signal present) to record; every other decision is always recorded.
+  # sample_allowed: 0.1
   # Connections to the database from this process. With Postgres, keep
   # max_open_conns times the number of instances under max_connections.
   max_open_conns: 10
@@ -125,6 +137,10 @@ engine:
   # keeps an HMAC of each address, keyed with recipient_hash_key.
   recipient_memory: 720h
   # recipient_hash_key: ${CATRACA_RECIPIENT_HASH_KEY}
+  # Decisions waiting to be handed to the audit log, which holds them while
+  # its database has not opened yet. Size it as decisions per second times
+  # how long the database may take to open.
+  record_queue: 4096
   # When store calls keep failing or missing the deadline for
   # failure_window, none succeeding, and at least failure_threshold of them,
   # decide without the store for cooldown, then let probes through to see

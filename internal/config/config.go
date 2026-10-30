@@ -195,6 +195,22 @@ type Audit struct {
 	// them forever, since the precision gate counts labels over all time.
 	// It needs Retention and must be at least as long.
 	LabeledRetention time.Duration `yaml:"labeled_retention"`
+	// RetentionBatch is the most rows one retention DELETE removes. Unset:
+	// 500 on SQLite, 5000 on Postgres.
+	RetentionBatch int `yaml:"retention_batch"`
+	// RetentionPause is how long retention waits after each DELETE. Unset:
+	// as long as the DELETE took on SQLite, 10ms on Postgres.
+	RetentionPause time.Duration `yaml:"retention_pause"`
+	// BufferSize is how many decisions can wait to be written; past it new
+	// ones are dropped. Default 8192.
+	BufferSize int `yaml:"buffer_size"`
+	// BatchSize is the most decisions written in one transaction. Default
+	// 256.
+	BatchSize int `yaml:"batch_size"`
+	// SampleAllowed is the fraction of plain allows recorded: allows no
+	// rule matched, enforced or in shadow, made with every signal. Every
+	// other decision is always recorded. Default 1, every decision.
+	SampleAllowed float64 `yaml:"sample_allowed"`
 	// MaxOpenConns is the most connections to the database. Default 10.
 	MaxOpenConns int `yaml:"max_open_conns"`
 	// MaxIdleConns is the most idle connections kept open. Default
@@ -220,6 +236,11 @@ func (a Audit) Options() audit.Options {
 		},
 		Retention:        a.Retention,
 		LabeledRetention: a.LabeledRetention,
+		PruneBatch:       a.RetentionBatch,
+		PrunePause:       a.RetentionPause,
+		BufferSize:       a.BufferSize,
+		BatchSize:        a.BatchSize,
+		SampleAllowed:    a.SampleAllowed,
 	}
 }
 
@@ -254,6 +275,10 @@ type Engine struct {
 	RecipientHashKey Secret `yaml:"recipient_hash_key"`
 	// Breaker is the circuit breaker around the store calls of decisions.
 	Breaker Breaker `yaml:"breaker"`
+	// RecordQueue is how many decisions may wait to be handed to the audit
+	// log, which holds them while its database is not open yet. Default
+	// 4096.
+	RecordQueue int `yaml:"record_queue"`
 }
 
 // Breaker configures the store's circuit breaker; see
@@ -538,6 +563,18 @@ func (c *Config) applyDefaults(set func(path string) bool) {
 	}
 	if c.Audit.ConnMaxIdleTime == 0 {
 		c.Audit.ConnMaxIdleTime = audit.DefaultPoolMaxIdleTime
+	}
+	if c.Audit.BufferSize == 0 {
+		c.Audit.BufferSize = audit.DefaultBufferSize
+	}
+	if c.Audit.BatchSize == 0 {
+		c.Audit.BatchSize = audit.DefaultBatchSize
+	}
+	if c.Audit.SampleAllowed == 0 {
+		c.Audit.SampleAllowed = 1
+	}
+	if c.Engine.RecordQueue == 0 {
+		c.Engine.RecordQueue = engine.DefaultRecordQueue
 	}
 	if c.Engine.Deadline == 0 {
 		c.Engine.Deadline = engine.DefaultDeadline

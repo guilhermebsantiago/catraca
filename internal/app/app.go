@@ -186,6 +186,7 @@ func New(ctx context.Context, cfg *config.Config, opts Options) (_ *App, err err
 		Breaker:         cfg.Engine.Breaker.Options(),
 		MaxFutureSkew:   cfg.Engine.MaxFutureSkew,
 		MaxEventAge:     cfg.Engine.MaxEventAge,
+		RecordQueue:     cfg.Engine.RecordQueue,
 		Registerer:      a.registry,
 		Logger:          log.With("component", "engine"),
 		TracerProvider:  a.tracerProvider(),
