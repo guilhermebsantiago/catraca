@@ -21,6 +21,11 @@ the docs.
   `engine.dispatch_timeout` bounds how long a decision waits for its
   effects to be written. `catraca outbox list`, `retry` and `stats` show
   and redrive deliveries.
+- **Audit:** `GET /v1/decisions` and `catraca decisions` list decisions by
+  account, API key, IP, action and time, newest first, with a cursor;
+  migration 0006 adds their indexes (build them `CONCURRENTLY` first on a
+  large Postgres table). `catraca audit export` writes labeled decisions
+  as a replay file, so production labels feed `catraca replay`.
 - **Secret scanning:** leaked-key reports are stored in the audit database
   before GitHub is answered, and processed from there with leases and
   retries. `catraca secretscan list` and `retry` show and requeue them.

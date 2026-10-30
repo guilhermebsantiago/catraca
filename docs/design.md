@@ -370,6 +370,7 @@ scanning routes, which authenticate by signature.
 |---|---|
 | POST /v1/decide | decide an event (sends: synchronous) |
 | POST /v1/events | record an event (feedback, account, key leak): 202 + decision |
+| GET /v1/decisions | decisions by account, key, IP, action and time, newest first, paged |
 | GET /v1/decisions/{id} | a decision, its stored event and its labels |
 | POST /v1/decisions/{id}/labels | label a decision (reversal = false_positive) |
 | GET /v1/rules | the loaded ruleset and its version |

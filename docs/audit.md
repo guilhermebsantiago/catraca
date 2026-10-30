@@ -201,6 +201,77 @@ since a time:
 
 A rule that was promoted during the window appears twice, once per mode.
 
+## Listing decisions
+
+An analyst looking into an account, a leaked key or an IP needs its
+decisions, not one decision by id. `ListDecisions` returns the decisions
+that match a filter, newest first, a page at a time:
+
+```go
+page, err := db.ListDecisions(ctx, audit.DecisionFilter{AccountID: "acct_123", Action: decision.Block, Since: since}, 50)
+// page.Next, when not empty, continues the list: set it as Cursor.
+```
+
+The filter takes an account, an API key, a client IP, an action and a time
+window, `Since` inclusive and `Until` exclusive; empty fields match any.
+Each item is the decision and its stored event, without labels; `Get`
+returns those. The cursor is the time and id of the last decision on the
+page, so the next page starts after it even while new decisions are
+recorded, and a decision is never listed twice. A page holds at most 1000
+decisions. [`GET /v1/decisions`](api.md#get-v1decisions) and
+[`catraca decisions`](cli.md#decisions) run the same query.
+
+Each filter reads its own index, in order (migration
+`0006_decision_queries.sql`): `decisions (account_id, decided_at_us, id)`,
+`(api_key_id, ...)`, `(action, ...)`, and for the IP, which is only in the
+stored event, an index on the expression `event_json->>'ip'`. Combined
+filters use one of them and check the rest row by row.
+
+## Exporting labeled decisions for a backtest
+
+The labels people give in production are the ground truth a backtest needs.
+[`catraca audit export`](cli.md#audit-export) writes the decisions as a
+[replay](cli.md#replay) file, oldest first, one line per decision:
+
+```json
+{"event": {"id": "evt_1", "type": "send", "time": "2026-10-01T10:00:00Z", "account_id": "acct_123", "from": "@sender.example"}, "label": "abusive"}
+```
+
+A replay label says whether the event was abuse, while audit labels say
+whether a rule was right. The export reads the labels as the
+[rule stats](#rule-stats) do: for each rule that matched, the latest label
+that applies to it, whether it names the rule or covers the whole decision,
+and for a decision no rule matched, its latest whole-decision label. Then:
+
+| labels that apply | replay label |
+|---|---|
+| any `true_positive` | `abusive` |
+| all `false_positive` | `legit` |
+| none | no label: kept, so the replay's counters see the event, or left out with `--labeled-only` |
+
+So a reversal after an earlier true positive makes the event `legit`, and a
+decision where one rule was wrong and another right is `abusive`. A
+`false_positive` on a decision no rule matched means a reviewer found it
+fine: `legit`.
+
+**With `event_detail: minimal` the replay sees less than production did.**
+The log does not keep recipients, the subject, links, attributes or the
+sender's address, so the export rebuilds each event from what it kept: the
+ids, type, time, account, key and IP, the sender as `@` and its domain, and
+the feedback kind and account action. Rules that read `event.to`,
+`event.recipients`, recipient domains, links, the subject or attributes,
+and lists or signals keyed on them, cannot match as they did, so their
+recall and precision in the backtest mean little. The export says on
+stderr how many events were minimal. To backtest those rules from the log,
+run with `event_detail: full` for a while, within what your privacy policy
+allows (see [what is stored](#what-is-stored)). Rules on accounts, keys,
+IPs, the sender's domain, event types and feedback replay as they ran.
+
+The replay needs events in time order and the log is in decision order. An
+event whose time is before the one decided before it, as clients' clocks
+differ, gets that earlier event's time, and the export counts these on
+stderr.
+
 ## The precision gate
 
 A rule's precision is `TP / (TP + FP)` over its labeled matches. Measured on a
@@ -397,6 +468,21 @@ CREATE INDEX CONCURRENTLY IF NOT EXISTS outbox_effect_due ON outbox (effect, nex
 During a rolling upgrade, processes of the older release that are still
 running keep delivering, but one that restarts refuses the newer schema, so
 finish the rollout rather than roll back.
+
+**Upgrading to decision listing.** Migration `0006_decision_queries.sql`
+adds the four indexes [listing decisions](#listing-decisions) reads. Each
+covers the whole `decisions` table, so on a large Postgres database build
+them beforehand without blocking writes, and the migration skips them:
+
+```sql
+CREATE INDEX CONCURRENTLY IF NOT EXISTS decisions_account ON decisions (account_id, decided_at_us, id);
+CREATE INDEX CONCURRENTLY IF NOT EXISTS decisions_api_key ON decisions (api_key_id, decided_at_us, id);
+CREATE INDEX CONCURRENTLY IF NOT EXISTS decisions_ip ON decisions ((event_json->>'ip'), decided_at_us, id);
+CREATE INDEX CONCURRENTLY IF NOT EXISTS decisions_action ON decisions (action, decided_at_us, id);
+```
+
+They add to the cost of every decision written, about as much as the
+indexes already there.
 
 To delete decisions by hand instead of with [retention](#retention), delete
 from `decisions`; matches and labels go with them through `ON DELETE

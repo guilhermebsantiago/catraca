@@ -377,6 +377,76 @@ sent again; other events shed for load are decided without the store
 
 ## Decisions and labels
 
+### GET /v1/decisions
+
+The decisions that match a filter, newest first, a page at a time: what an
+analyst needs to look into an account, an API key or an IP. Each item is the
+decision and its stored event; [`GET /v1/decisions/{id}`](#get-v1decisionsid)
+adds the labels.
+
+| parameter | default | |
+|---|---|---|
+| `account_id` | any | the event's account |
+| `api_key_id` | any | the event's API key |
+| `ip` | any | the event's client IP, as the platform sent it |
+| `action` | any | `allow`, `flag`, `throttle`, `hold` or `block` |
+| `since` | all time | decided at or after: a duration back from now, such as `24h` or `7d`, an RFC 3339 time or a date |
+| `until` | now | decided before, in the same forms |
+| `limit` | 50 | 1 to 1000 |
+| `cursor` | | the `next_cursor` of the page before |
+
+```sh
+curl -s "$CATRACA/v1/decisions?account_id=acct_42&action=block&since=7d&limit=1" -H "Authorization: Bearer $TOKEN"
+```
+
+```json
+{
+  "decisions": [
+    {
+      "decision": {
+        "id": "01M50QGQP8YVGSY487W3YJ8J24",
+        "event_id": "01M50QGQP8YVGSY487W3YJ8J23",
+        "time": "2026-10-15T21:29:30.0567392Z",
+        "action": "block",
+        "matches": [
+          {
+            "rule_id": "leaked-key-send",
+            "reason": "This API key was found in public and must be rotated before it can send again",
+            "action": "block",
+            "mode": "enforce",
+            "effects": ["revoke_key"]
+          }
+        ],
+        "ruleset_version": "098086f42c27",
+        "latency_us": 240
+      },
+      "event": {
+        "id": "01M50QGQP8YVGSY487W3YJ8J23",
+        "type": "send",
+        "time": "2026-10-15T21:29:30.0567392Z",
+        "account_id": "acct_42",
+        "api_key_id": "key_7d3e",
+        "ip": "203.0.113.7",
+        "from_domain": "shop.example",
+        "recipients": 1,
+        "recipient_domains": ["mail.example"]
+      }
+    }
+  ],
+  "next_cursor": "MTc2MDU2Mzc3MDA1Njc0MC4wMU01MFFHUVA4WVZHU1k0ODdXM1lKOEoyNA"
+}
+```
+
+`next_cursor` is absent on the last page. Pass it back unchanged, with the
+same filters, for the next page: it marks where the page ended, so
+decisions recorded meanwhile do not shift the pages. Decisions still being
+written are written first, as for the other audit routes. `400
+invalid_parameter` for a malformed parameter or cursor, `503 unavailable`
+with `Retry-After` when the audit database fails to answer. Each filter
+reads its own index; see [listing decisions](audit.md#listing-decisions).
+[`catraca decisions`](cli.md#decisions) runs the same query on the audit
+database.
+
 ### GET /v1/decisions/{id}
 
 A decision as the audit log keeps it: the decision, the stored copy of the

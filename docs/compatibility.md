@@ -56,7 +56,7 @@ reshaped in a minor release.
 | Command line | [cli.md](cli.md) | commands and flags may be renamed. The output of `config check`, `report`, `outbox` and `secretscan` is for people: do not parse it |
 | Ruleset version | [rules.md](rules.md#versioning) | the hash of an unchanged file may change when the canonical form gains a field, so compare versions within one release only |
 | Log fields | [api.md](api.md#logs) | field names and messages of the JSON log |
-| Routes not listed above | [api.md](api.md) | query parameters and the bodies of `GET /v1/rules/{id}/review`, `GET /v1/stats/rules`, `POST /v1/rules/reload` and `/readyz?verbose` |
+| Routes not listed above | [api.md](api.md) | query parameters and the bodies of `GET /v1/decisions` (whose cursor is opaque), `GET /v1/rules/{id}/review`, `GET /v1/stats/rules`, `POST /v1/rules/reload` and `/readyz?verbose` |
 
 ## Not a public interface
 
