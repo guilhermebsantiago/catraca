@@ -86,9 +86,13 @@ audit:
   dsn: ${CATRACA_AUDIT_DSN:-sqlite:catraca.db}
   # minimal keeps no message content; full also keeps the whole event.
   event_detail: minimal
+  # The log holds personal data in both modes: account and key ids, client
+  # IPs, sender and recipient domains, reviewers' names; with full, also
+  # addresses, subjects and links. Left out, retention keeps it all forever:
+  # set one your privacy policy allows (docs/audit.md, "Personal data").
   # Delete decisions without a label, and webhook deliveries once delivered
   # or dead, after this long (at least 24h). Left out, nothing is deleted.
-  # retention: 2160h          # 90 days
+  # retention: 2160h          # 90 days; shorter, such as 720h, with full
   # Labeled decisions are kept forever, for the precision gate, unless this
   # is set; it must be at least retention.
   # labeled_retention: 17520h # 2 years

@@ -457,6 +457,12 @@ the enforced and shadow rules together, true and false positives and
 negatives, precision, recall and F1, treating a match as a prediction of
 "abusive", plus the effective action broken down by label.
 
+The labels given in production make such a file: `catraca audit export`
+writes the audit log's decisions in this format, labeled from them.
+With the default `audit.event_detail: minimal` the exported events lack
+recipients, subject and links, so rules that read them cannot be measured
+this way; see [exporting labeled decisions](audit.md#exporting-labeled-decisions-for-a-backtest).
+
 ## Checklist for a new rule
 
 - [ ] It starts in shadow mode.

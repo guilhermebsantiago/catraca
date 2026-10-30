@@ -88,6 +88,38 @@ The decision itself is kept whole: action, enforced matches and shadow
 matches with their reasons, rules that errored, the degraded flag, the
 ruleset version and the latency.
 
+### Personal data, and how long to keep it
+
+The audit database holds personal data in both modes. Plan for it as you
+would for any other store of your users' data, under the GDPR, the LGPD or
+whatever law applies to you:
+
+| data | where | mode |
+|---|---|---|
+| account ids and API key ids | every decision | both |
+| client IP addresses | every decision | both |
+| the sender's domain and recipients' domains, the number of recipients | sends | both |
+| a hash of the subject, which confirms a guessed subject | sends | both |
+| who labeled (`by`, often a reviewer's email), why (free text) and with which token | labels | both |
+| sender and recipient addresses, subject, links, platform attributes, the recipient of feedback | sends and feedback, under `full` | `full` only |
+| what each hook sends | webhook deliveries in the outbox | both |
+| where a leaked key was found | [leak reports](secret-scanning.md#privacy-of-tokens) | both |
+
+**Nothing is deleted by default**, so the database keeps all of it until
+you set a [retention](#retention). Set one when you deploy. A reasonable
+start is `retention: 2160h` (90 days) for decisions without a label, long
+enough to review and to cover the stats windows, and a `labeled_retention`
+no longer than your policy allows for evidence, such as one or two years.
+With `event_detail: full`, keep `retention` shorter, such as 30 days, and
+turn `full` on only for as long as you need it. To erase one person's data
+on request, delete their decisions by account id (see [schema](#schema));
+labels and matches go with them, webhook deliveries do not.
+
+Exports, listings and backups carry the same data: a file written by
+[`catraca audit export`](cli.md#audit-export) holds the stored events, and
+[`GET /v1/decisions`](api.md#get-v1decisions) returns them to any token
+with the `read` scope.
+
 ## How decisions are written
 
 The engine calls `Record` for every decision. Record never blocks and never
@@ -200,6 +232,87 @@ since a time:
 | `true_positives`, `false_positives` | how the labels split |
 
 A rule that was promoted during the window appears twice, once per mode.
+
+## Listing decisions
+
+An analyst looking into an account, a leaked key or an IP needs its
+decisions, not one decision by id. `ListDecisions` returns the decisions
+that match a filter, newest first, a page at a time:
+
+```go
+page, err := db.ListDecisions(ctx, audit.DecisionFilter{AccountID: "acct_123", Action: decision.Block, Since: since}, 50)
+// page.Next, when not empty, continues the list: set it as Cursor.
+```
+
+The filter takes an account, an API key, a client IP, an action and a time
+window, `Since` inclusive and `Until` exclusive; empty fields match any.
+Each item is the decision and its stored event, without labels; `Get`
+returns those. The cursor is the time and id of the last decision on the
+page, so the next page starts after it even while new decisions are
+recorded, and a decision is never listed twice. A page holds at most 1000
+decisions. [`GET /v1/decisions`](api.md#get-v1decisions) and
+[`catraca decisions`](cli.md#decisions) run the same query.
+
+Each filter reads its own index, in order (migration
+`0006_decision_queries.sql`): `decisions (account_id, decided_at_us, id)`,
+`(api_key_id, ...)`, `(action, ...)`, and for the IP, which is only in the
+stored event, an index on the expression `event_json->>'ip'`. Combined
+filters use one of them and check the rest row by row.
+
+## Exporting labeled decisions for a backtest
+
+The labels people give in production are the ground truth a backtest needs.
+[`catraca audit export`](cli.md#audit-export) writes the decisions as a
+[replay](cli.md#replay) file, oldest first, one line per decision:
+
+```json
+{"event": {"id": "evt_1", "type": "send", "time": "2026-10-01T10:00:00Z", "account_id": "acct_123", "from": "@sender.example"}, "label": "abusive"}
+```
+
+A replay label says whether the event was abuse, while audit labels say
+whether a rule was right. The export reads the labels as the
+[rule stats](#rule-stats) do: for each rule that matched, the latest label
+that applies to it, whether it names the rule or covers the whole decision,
+and for a decision no rule matched, its latest whole-decision label. Then:
+
+| labels that apply | replay label |
+|---|---|
+| any `true_positive` | `abusive` |
+| all `false_positive` | `legit` |
+| none | no label: kept, so the replay's counters see the event, or left out with `--labeled-only` |
+
+So a reversal after an earlier true positive makes the event `legit`, and a
+decision where one rule was wrong and another right is `abusive`. A
+`false_positive` on a decision no rule matched means a reviewer found it
+fine: `legit`.
+
+**With `event_detail: minimal` the replay sees less than production did.**
+The log does not keep recipients, the subject, links, attributes or the
+sender's address, so the export rebuilds each event from what it kept: the
+ids, type, time, account, key and IP, the sender as `@` and its domain, and
+the feedback kind and bounce type and the account action. Rules that read
+`event.to`, `event.recipients`, recipient domains, links, the subject or
+attributes, and lists or signals keyed on them, cannot match as they did,
+so their recall and precision in the backtest mean little. An account's
+creation time and plan are not kept either, so account age falls back to
+the first event the replay sees. The export says on stderr how many events
+were minimal. To backtest those rules from the log, run with
+`event_detail: full` for a while, within what your privacy policy allows
+(see [personal data](#personal-data-and-how-long-to-keep-it)). Rules on
+accounts, keys, IPs, the sender's domain, event types and feedback kinds
+replay closest to how they ran.
+
+The replay's counters only see the exported events. With `--labeled-only`
+they miss the unlabeled traffic between the labeled events, so rate and
+count rules match less than they did; leave it out for those, as unlabeled
+lines feed the counters without being scored. The first events of a file
+run on empty counters, and decisions [retention](#retention) deleted are
+gone from them too.
+
+The replay needs events in time order and the log is in decision order. An
+event whose time is before the one decided before it, as clients' clocks
+differ, gets that earlier event's time, and the export counts these on
+stderr.
 
 ## The precision gate
 
@@ -397,6 +510,21 @@ CREATE INDEX CONCURRENTLY IF NOT EXISTS outbox_effect_due ON outbox (effect, nex
 During a rolling upgrade, processes of the older release that are still
 running keep delivering, but one that restarts refuses the newer schema, so
 finish the rollout rather than roll back.
+
+**Upgrading to decision listing.** Migration `0006_decision_queries.sql`
+adds the four indexes [listing decisions](#listing-decisions) reads. Each
+covers the whole `decisions` table, so on a large Postgres database build
+them beforehand without blocking writes, and the migration skips them:
+
+```sql
+CREATE INDEX CONCURRENTLY IF NOT EXISTS decisions_account ON decisions (account_id, decided_at_us, id);
+CREATE INDEX CONCURRENTLY IF NOT EXISTS decisions_api_key ON decisions (api_key_id, decided_at_us, id);
+CREATE INDEX CONCURRENTLY IF NOT EXISTS decisions_ip ON decisions ((event_json->>'ip'), decided_at_us, id);
+CREATE INDEX CONCURRENTLY IF NOT EXISTS decisions_action ON decisions (action, decided_at_us, id);
+```
+
+They add to the cost of every decision written, about as much as the
+indexes already there.
 
 To delete decisions by hand instead of with [retention](#retention), delete
 from `decisions`; matches and labels go with them through `ON DELETE

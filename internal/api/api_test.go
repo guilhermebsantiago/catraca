@@ -47,6 +47,9 @@ func (f fakeAudit) RuleStats(context.Context, time.Time) ([]precision.RuleStats,
 func (f fakeAudit) ReviewQueue(context.Context, string, decision.Mode, int) ([]audit.ReviewItem, error) {
 	return nil, f.err
 }
+func (f fakeAudit) ListDecisions(context.Context, audit.DecisionFilter, int) (audit.DecisionPage, error) {
+	return audit.DecisionPage{}, f.err
+}
 func (f fakeAudit) Flush(context.Context) error { return f.err }
 
 func newTestServer(t *testing.T, d Decider, log *slog.Logger, mod ...func(*Options)) *Server {

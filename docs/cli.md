@@ -2,8 +2,8 @@
 
 `catraca` runs the server and the tools around rules: checking and testing a
 ruleset, the precision gate for CI, backtests and precision reports,
-labeling decisions, setting account states, listing and redriving webhook deliveries, and the queue
-of leaked-key reports. `catraca help` lists the commands and
+labeling, listing and exporting decisions, setting account states, listing
+and redriving webhook deliveries, and the queue of leaked-key reports. `catraca help` lists the commands and
 `catraca <command> -h` the flags of one. Flags may come before or after
 positional arguments, with one dash or two.
 
@@ -139,6 +139,52 @@ a server that cannot be reached or fails exits 3.
 CATRACA_TOKEN=... catraca label 01M50QGQP8YVGSY487W3YJ8J24 \
   --verdict false_positive --by support@platform.example --reason "appeal #4411"
 ```
+
+## decisions
+
+```sh
+catraca decisions --audit <dsn> [--account <id>] [--api-key <id>] [--ip <ip>] \
+  [--action allow|flag|throttle|hold|block] [--since 24h] [--until <time>] \
+  [--limit 50] [--cursor <c>] [--json]
+```
+
+Lists the decisions in the audit database that match, newest first, with
+their time, action, event type, account, key, IP and the rules that
+matched. `--since` takes a duration or an RFC 3339 time, `--until` an RFC
+3339 time or a date; `--limit` is at most 1000. When there are more, it
+prints the cursor to pass as `--cursor` for the next page. `--json` prints
+the page as [`GET /v1/decisions`](api.md#get-v1decisions) answers it, which
+runs the same query on a running server. See
+[listing decisions](audit.md#listing-decisions).
+
+## audit export
+
+```sh
+catraca audit export --audit <dsn> [--since 30d] [--labeled-only] [--out <file>]
+```
+
+Writes the decisions made since `--since` (default `30d`; `all` for all
+time) as a [replay](#replay) file, oldest first, to `--out` or stdout, and
+prints how many were abusive, legit and unlabeled on stderr. Each line is
+the stored event and a label mapped from the decision's labels: abusive
+when any label that applies is a `true_positive`, legit when all are
+`false_positive`; unlabeled decisions have no label, and `--labeled-only`
+leaves them out. Then backtest a ruleset on it:
+
+```sh
+catraca audit export --audit "$CATRACA_AUDIT_DSN" --since 90d --out events.jsonl
+catraca replay rules.yaml events.jsonl
+```
+
+Keep the unlabeled decisions for rules on rates and counts: the replay's
+counters only see the lines in the file.
+
+With `audit.event_detail: minimal`, the default, the log keeps no
+recipients, subject, links or attributes and only the sender's domain, so
+rules that read them cannot match the export as they did in production; the
+command warns how many events were minimal. See
+[exporting labeled decisions](audit.md#exporting-labeled-decisions-for-a-backtest)
+for the mapping and what a minimal event keeps.
 
 ## account state
 

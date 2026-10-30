@@ -1,7 +1,7 @@
 // Command catraca runs the Catraca server and the tools around its rules:
 // checking and testing rulesets, the precision gate, backtests, precision
-// reports, labeling decisions, redriving webhook deliveries and the queue
-// of leaked-key reports. Run
+// reports, labeling, listing and exporting decisions, redriving webhook
+// deliveries and the queue of leaked-key reports. Run
 // "catraca help" for the commands and docs/cli.md for details.
 package main
 
@@ -62,6 +62,8 @@ Commands:
   replay         backtest a ruleset on labeled events
   report         print the precision of every rule, with promote and retire candidates
   label          label a decision on a running server
+  decisions      list decisions by account, API key, IP, action or time
+  audit export   write labeled decisions as a replay file
   account state  print or set an account's state on a running server
   outbox list       list webhook deliveries
   outbox retry      requeue dead webhook deliveries
@@ -128,6 +130,10 @@ func run(ctx context.Context, args []string, stdout, stderr io.Writer, lookupEnv
 		return c.report(ctx, rest)
 	case "label":
 		return c.label(ctx, rest)
+	case "decisions":
+		return c.decisions(ctx, rest)
+	case "audit":
+		return c.group(ctx, "audit", rest, map[string]command{"export": c.auditExport})
 	case "account":
 		return c.group(ctx, "account", rest, map[string]command{"state": c.accountState})
 	case "outbox":
@@ -149,7 +155,7 @@ type command func(ctx context.Context, args []string) int
 // group runs a subcommand of a command with subcommands, such as rules.
 func (c *cli) group(ctx context.Context, name string, args []string, subs map[string]command) int {
 	var names []string
-	for _, n := range []string{"check", "test", "gate", "list", "retry", "stats", "state"} {
+	for _, n := range []string{"check", "test", "gate", "list", "retry", "stats", "state", "export"} {
 		if _, ok := subs[n]; ok {
 			names = append(names, n)
 		}
