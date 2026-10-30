@@ -50,7 +50,9 @@ standard error) for large ones.
 A rule that reads an absent signal fails, and its `on_error` policy decides:
 `open` skips the rule, `closed` counts it as matched.
 
-- `event` is always present, with every signal in it.
+- `event` is always present, with every signal in it but two:
+  `event.suppressed_recipients` and `event.suppressed_ratio` need the store,
+  and are absent when it fails or when `engine.recipient_memory` is `0s`.
 - `account` is present when the event has an `account_id`.
 - `key` is present when the event has an `api_key_id`.
 - `ip` is present when the event has an `ip`.
@@ -86,7 +88,7 @@ empty after a restart and fills as leaked keys are used.
 | event | records |
 |---|---|
 | `send` | account: sends, sends from the IP, recipients, recipient domains, IP and API key; key: sends and IP; ip: sends, account and API key; domain: sends and account; the IP as known to the account and to the key (`new_ip`) |
-| `feedback` | account: bounces, hard bounces, complaints or deliveries; domain: complaints |
+| `feedback` | account: bounces, hard bounces, complaints or deliveries; domain: complaints; the recipient memory: the recipient of a hard bounce or complaint |
 | `account` | ip: a signup, when `account.action` is `signup`; account: its creation time, when `account.created_at` is set |
 | `key_leak` | key: leaked |
 | every event | the first time its account and API key were seen |
@@ -110,7 +112,8 @@ same address, and so are `::ffff:203.0.113.7` and `203.0.113.7`.
 
 ## `event`
 
-Computed from the event alone.
+Computed from the event alone, but for the two `suppressed_` signals, which
+read the [recipient memory](#the-recipient-memory).
 
 | signal | type | meaning |
 |---|---|---|
@@ -128,6 +131,39 @@ Computed from the event alone.
 | `bounce_type` | string | as sent for bounces (`permanent`, `transient`), `""` otherwise |
 | `account_action` | string | `account.action` for account events, such as `signup`; `""` otherwise |
 | `attributes` | map(string, string) | the platform's attributes, empty when there are none |
+| `role_recipients` | int | number of `to` addresses whose local part, before any `+tag`, is a role: `abuse`, `admin`, `administrator`, `billing`, `contact`, `enquiries`, `help`, `hello`, `hostmaster`, `info`, `inquiries`, `marketing`, `no-reply`, `noc`, `noreply`, `office`, `postmaster`, `privacy`, `root`, `sales`, `security`, `support` or `webmaster` |
+| `suppressed_recipients` | int | for sends, how many of the `to` addresses checked hard-bounced or complained, for any account, within `engine.recipient_memory` (default 30 days); 0 for other events |
+| `suppressed_ratio` | double | `suppressed_recipients` over the addresses checked; 0 when none were |
+
+### The recipient memory
+
+A hard bounce (`bounce_type` `permanent`) or a complaint with a
+`feedback.recipient` makes Catraca remember that address for
+`engine.recipient_memory` after the latest one, platform-wide: the
+suppression list ESPs keep at the account level, shared across accounts, so
+a new account mailing a bought or stale list shows it on its first send
+rather than after the bounces come back.
+
+A send checks its distinct `to` addresses against it, up to 100 of them
+(`signal.MaxCheckedRecipients`). Past that, the 100 checked are those whose
+digests sort first: the same send always checks the same ones, in any order,
+and without the hash key a sender cannot pick which. `suppressed_ratio` is
+then an estimate over a sample, and `suppressed_recipients` counts at most
+100.
+
+Addresses are compared trimmed and lowercased, with the bare address taken
+out of `Name <user@example.com>`. Gmail's dots and `+tags` are not removed:
+other providers treat them as separate addresses.
+
+The store never holds an address. It holds the first 96 bits of an
+HMAC-SHA-256 of it, keyed with `engine.recipient_hash_key`, in 16 sets split
+by digest, with the time of the latest bounce or complaint. Without a key
+the digest is a plain hash with a fixed, public key: it cannot be read
+back, but anyone who can read the store can hash a list of addresses and
+see which are in it, and email addresses are easy to guess. With a secret
+key they cannot, short of the key. Either way the memory holds no account
+id: it says that an address bounced or complained, not for whom. Changing
+the key forgets every address remembered.
 
 ## `account`
 

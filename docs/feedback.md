@@ -5,7 +5,10 @@ mail people did not ask for. Catraca turns them into `feedback` events, one
 per affected recipient, so rules can read `account.bounce_rate_24h`,
 `account.hard_bounce_rate_24h`, `account.complaint_rate_24h`, their 7 day
 variants and `domain.complaints_24h`. The rates are per recipient, like the
-events ([feedback rates](signals.md#feedback-rates)).
+events ([feedback rates](signals.md#feedback-rates)). The recipient of a hard
+bounce or a complaint also goes into the
+[recipient memory](signals.md#the-recipient-memory), so a later send to it,
+from any account, counts in `event.suppressed_recipients`.
 
 | route | source | authentication |
 |---|---|---|
@@ -248,7 +251,8 @@ or complaint was about. A complaint comes from one person marking the email
 as spam, so Catraca records one complaint event per webhook, with the
 recipient only when `to` has a single address; one per address would count a
 complaint on an email to ten as ten. Bounces and deliveries are recorded once
-per address in `to`.
+per address in `to`, so for a bounce on an email to several addresses the
+recipient memory remembers every one of them, not only the one that bounced.
 
 **Account id.** By default it is the payload's `teamId`, which fits a
 self-hosted useSend whose teams are the platform's accounts: send your

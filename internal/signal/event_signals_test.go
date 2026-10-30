@@ -27,7 +27,7 @@ func TestEventSignals(t *testing.T) {
 				APIKeyID:  "key-1",
 				IP:        "2001:DB8::1",
 				From:      "News <news@Sender.Example>",
-				To:        []string{"a@x.example", "b@Y.example", "c@x.example", "no-domain"},
+				To:        []string{"a@x.example", "b@Y.example", "Sales+eu@x.example", "no-domain"},
 				Subject:   "Olá 👋",
 				Links: []string{
 					"https://Bit.ly/abc",
@@ -110,6 +110,11 @@ func TestEventSignals(t *testing.T) {
 	}
 	eachBackend(t, func(t *testing.T, c signal.Catalog) {
 		for _, tc := range cases {
+			// The recipient signals: Sales+eu@ is a role address, and the
+			// recipient memory is empty.
+			tc.want["role_recipients"] = int64(len(tc.ev.To) / 4)
+			tc.want["suppressed_recipients"] = int64(0)
+			tc.want["suppressed_ratio"] = 0.0
 			set := observe(t, c, tc.ev)
 			if !reflect.DeepEqual(set.Event, tc.want) {
 				t.Errorf("%s: event signals\n got %#v\nwant %#v", tc.name, set.Event, tc.want)

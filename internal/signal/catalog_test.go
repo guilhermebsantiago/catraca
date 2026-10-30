@@ -465,6 +465,10 @@ func TestObserveWhenTheStoreFails(t *testing.T) {
 	healthy := signal.NewCatalog(store.NewMemory(), signal.Options{})
 	defer healthy.Close()
 	wantEvent := observe(t, healthy, ev).Event
+	// The recipient memory needs the store: its signals are absent, so
+	// rules that read them follow on_error.
+	delete(wantEvent, "suppressed_recipients")
+	delete(wantEvent, "suppressed_ratio")
 
 	check := func(t *testing.T, set signal.Set, err, wantErr error) {
 		t.Helper()

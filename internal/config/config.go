@@ -244,6 +244,14 @@ type Engine struct {
 	// event with an id costs a store entry for this long. 0s turns it off.
 	// Default 10m.
 	DedupeTTL time.Duration `yaml:"dedupe_ttl"`
+	// RecipientMemory is how long an address that hard-bounced or
+	// complained is remembered, for every account, so sends to it show in
+	// event.suppressed_recipients. 0s turns it off. Default 720h.
+	RecipientMemory time.Duration `yaml:"recipient_memory"`
+	// RecipientHashKey keys the digest the store keeps instead of each
+	// remembered address. Without one, anyone who reads the store can test
+	// known addresses against it. Changing it forgets every address.
+	RecipientHashKey Secret `yaml:"recipient_hash_key"`
 	// Breaker is the circuit breaker around the store calls of decisions.
 	Breaker Breaker `yaml:"breaker"`
 }
@@ -545,6 +553,9 @@ func (c *Config) applyDefaults(set func(path string) bool) {
 	}
 	if !set("engine.dedupe_ttl") {
 		c.Engine.DedupeTTL = signal.DefaultDedupeTTL
+	}
+	if !set("engine.recipient_memory") {
+		c.Engine.RecipientMemory = signal.DefaultRecipientMemory
 	}
 	if c.Engine.Breaker.FailureThreshold == 0 {
 		c.Engine.Breaker.FailureThreshold = engine.DefaultBreakerFailures

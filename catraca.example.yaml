@@ -116,6 +116,11 @@ engine:
   # again meanwhile (a retry, a provider's redelivery) counts once. Each event
   # with an id costs a store entry for this long; 0s turns it off.
   dedupe_ttl: 10m
+  # How long an address that hard-bounced or complained is remembered, for
+  # every account (event.suppressed_recipients); 0s turns it off. The store
+  # keeps an HMAC of each address, keyed with recipient_hash_key.
+  recipient_memory: 720h
+  # recipient_hash_key: ${CATRACA_RECIPIENT_HASH_KEY}
   # When store calls keep failing or missing the deadline for
   # failure_window, none succeeding, and at least failure_threshold of them,
   # decide without the store for cooldown, then let probes through to see

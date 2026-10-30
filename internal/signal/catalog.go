@@ -6,6 +6,7 @@ import (
 	"encoding/base64"
 	"errors"
 	"fmt"
+	"slices"
 	"strconv"
 	"strings"
 	"time"
@@ -44,6 +45,17 @@ type Options struct {
 	// Zero means DefaultDedupeTTL. A negative value turns it off: every
 	// observation counts.
 	DedupeTTL time.Duration
+	// RecipientMemory is how long an address that hard-bounced or
+	// complained is remembered, for every account: a send to it within
+	// this long counts in event.suppressed_recipients. Zero means
+	// DefaultRecipientMemory. A negative value turns the memory off, and
+	// the suppressed signals with it.
+	RecipientMemory time.Duration
+	// RecipientHashKey keys the HMAC the recipient memory stores instead of
+	// addresses. Without one the digest is a plain hash, which anyone who
+	// reads the store can test known addresses against. Changing it
+	// forgets every address remembered.
+	RecipientHashKey []byte
 }
 
 // NewCatalog returns a Catalog that keeps its counters in s and computes the
@@ -55,7 +67,13 @@ func NewCatalog(s store.Store, opts Options) Catalog {
 	if opts.DedupeTTL == 0 {
 		opts.DedupeTTL = DefaultDedupeTTL
 	}
-	return &catalog{store: s, retention: opts.Retention, dedupeTTL: opts.DedupeTTL, leaked: newLeakedKeys(maxLeakedKeys)}
+	if opts.RecipientMemory == 0 {
+		opts.RecipientMemory = DefaultRecipientMemory
+	}
+	return &catalog{
+		store: s, retention: opts.Retention, dedupeTTL: opts.DedupeTTL, leaked: newLeakedKeys(maxLeakedKeys),
+		recipientMemoryTTL: opts.RecipientMemory, recipientHashKey: slices.Clone(opts.RecipientHashKey),
+	}
 }
 
 type catalog struct {
@@ -69,6 +87,10 @@ type catalog struct {
 	// closed on it blocks every send with a key, while one that fails open
 	// lets known leaked keys send.
 	leaked *leakedKeys
+	// recipientMemoryTTL is Options.RecipientMemory; the memory is off when
+	// it is negative.
+	recipientMemoryTTL time.Duration
+	recipientHashKey   []byte
 }
 
 // Store keys, before the store's own prefix and layout. Entity ids come last
@@ -121,6 +143,7 @@ func (c *catalog) Observe(ctx context.Context, ev event.Event) (Set, error) {
 	key := c.apiKey(&b, ev, f)
 	ip := ipSignals(&b, ev, f)
 	dom := domainSignals(&b, ev, f)
+	suppressed := c.recipientMemory(&b, ev)
 	// Marked last, so new_ip compares against the IPs seen before this event.
 	if ev.Type == event.Send && f.ip != "" {
 		if ev.AccountID != "" {
@@ -144,6 +167,7 @@ func (c *catalog) Observe(ctx context.Context, ev event.Event) (Set, error) {
 	set.Key = key.signals(ev.Time)
 	set.IP = ip.signals()
 	set.Domain = dom.signals()
+	suppressed.addTo(set.Event)
 	if key != nil && key.leaked.Found() {
 		// Keys reported to other replicas, or before a restart, are
 		// learned here when they are next used.

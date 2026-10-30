@@ -84,6 +84,9 @@ Rates are `float64` in [0, 1]; counts are `int64`; ages are hours as
 | feedback_kind, bounce_type | string | for feedback events |
 | account_action | string | for account events |
 | attributes | map(string,string) | platform attributes |
+| role_recipients | int | To addresses with a role local part (info@, sales@...) |
+| suppressed_recipients | int | checked To addresses in the recipient memory (needs the store) |
+| suppressed_ratio | double | suppressed_recipients / max(checked, 1) (needs the store) |
 
 `account`:
 
@@ -151,6 +154,19 @@ and distinct sets; feedback events increment bounces/complaints/deliveries on
 the account and sender domain of the original send (the feedback event
 carries account_id and, when known, from); account events increment
 `ip.signups_24h` for signups and record first-seen.
+
+The recipient memory is the one platform-wide record: a hard bounce or a
+complaint remembers its recipient for `engine.recipient_memory` (30 days),
+for every account, so a new account mailing a bought or stale list shows it
+on its first send, before its own bounces come back. It stores the first 96
+bits of an HMAC-SHA-256 of the trimmed, lowercased address, keyed with
+`engine.recipient_hash_key`, never the address, as members of 16 seen-sets
+(`MarkSeen`) split by digest, which spreads it over 16 hash slots on a
+cluster. A send looks up at most 100 distinct addresses (`SeenWithin`),
+those whose digests sort first, in the same batch as its other signals, so
+it adds no round trip, and its cost is bounded whatever the send's 1,000
+recipients. Like every store-backed signal, `suppressed_recipients` and
+`suppressed_ratio` are absent when the store fails.
 
 ## Rules
 

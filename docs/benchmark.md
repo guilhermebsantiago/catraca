@@ -156,6 +156,38 @@ CATRACA_TEST_REDIS_URL=redis://localhost:6379/0 \
   go test ./internal/signal -run '^$' -bench '^BenchmarkObserve(WithID|Retry)?$/^redis-server$' -benchtime 3000x
 ```
 
+### The recipient memory
+
+A send looks up at most 100 of its addresses in the
+[recipient memory](signals.md#the-recipient-memory), one `ZSCORE` each in
+the script it already runs, after hashing every address to pick them.
+`BenchmarkObserveRecipientMemory` sends the same event with the memory on
+and off, to 3, 100 and 1,000 recipients, half of them among 2,000
+remembered addresses. Medians of three runs of one second per case; Redis's
+time per event varied by a quarter between runs, as in the sections above:
+
+| recipients | memory store, off | memory store, on | Redis CPU, off | Redis CPU, on |
+|---|---|---|---|---|
+| 3 | 17 µs | 24 µs | 734 µs | 640 µs |
+| 100 | 36 µs | 66 µs | 677 µs | 1,034 µs |
+| 1,000 (100 checked) | 254 µs | 418 µs | 654 µs | 806 µs |
+
+With three recipients, the common case, the difference is within noise.
+A lookup costs about 1.5 to 3.5 µs of Redis time on this Redis build, about
+as much as the `SET NX` of an id, so the 100-address cap bounds a send to
+some 150 to 360 µs of it, against the 26 ms 1,000 domains may cost. On a
+three-node cluster the lookups go out as up to 16 more script calls, one per
+set of the memory, in the same pipeline: in two runs a send to 100
+addresses took 0.67 ms instead of 0.50 ms, and about 420 µs more Redis time
+over the primaries, and one to 1,000 took 1.05 ms instead of 0.70 ms. In Go
+the cost past 100 addresses is hashing: an HMAC-SHA-256 per address, about
+0.2 µs, to pick the 100 checked without letting the sender choose them.
+
+```sh
+CATRACA_TEST_REDIS_URL=redis://localhost:6379/0 \
+  go test ./internal/signal -run '^$' -bench '^BenchmarkObserveRecipientMemory$' -benchtime 1s -count 3
+```
+
 ## The Redis store
 
 Before, a send event's batch was about 90 pipelined commands, and every

@@ -35,6 +35,9 @@ var specs = []Spec{
 	{"event", "bounce_type", "string"},
 	{"event", "account_action", "string"},
 	{"event", "attributes", "map(string, string)"},
+	{"event", "role_recipients", "int"},
+	{"event", "suppressed_recipients", "int"},
+	{"event", "suppressed_ratio", "double"},
 
 	{"account", "sends_1m", "int"},
 	{"account", "sends_1h", "int"},
