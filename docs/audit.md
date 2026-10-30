@@ -521,7 +521,7 @@ defaults and the [audit benchmarks](benchmark.md#the-audit-log):
 | | default | at 2,000 decisions/s | setting |
 |---|---|---|---|
 | rows | a decision row per decision, a match row per rule that matched | 2,000 decision rows a second, 173 million a day | `audit.sample_allowed` |
-| writer | a transaction per 256 decisions, or every 200 ms | about 8 transactions a second, each with 128 ms to commit before the next batch is full | `audit.batch_size` |
+| writer | a transaction per 256 decisions, or every 200 ms | about 8 transactions a second; to keep up, each has to commit in under 128 ms, the time the next batch takes to fill | `audit.batch_size` |
 | audit buffer | 8192 decisions | rides out a database stall of about 4 s; a longer one drops decisions | `audit.buffer_size` |
 | engine queue | 4096 decisions | holds about 2 s of decisions while the database has not opened yet | `engine.record_queue` |
 | retention | 500 rows a statement on SQLite, 5000 on Postgres | has to delete 2,000 decisions a second on average: 1.2 million a run | `audit.retention_batch`, `audit.retention_pause` |
