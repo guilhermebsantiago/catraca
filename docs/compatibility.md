@@ -9,6 +9,8 @@ is marked as able to change; a patch release (0.1.1) never breaks anything
 it lists. Every break is listed under **Changed** or **Removed** in
 [CHANGELOG.md](../CHANGELOG.md), with what to do about it, and `catraca
 config check` and `catraca rules check` catch the breaks that are in files.
+[upgrading.md](upgrading.md) says how to move a running deployment to a
+new release: migrations, rolling upgrades, downgrades and Redis keys.
 
 ## Stable
 
@@ -69,7 +71,7 @@ reshaped in a minor release.
 
 - **The audit database schema.** Catraca migrates it forward when it
   opens it, and an older binary refuses a newer schema
-  ([audit](audit.md#choosing-a-database)). Ad-hoc SQL against it works,
+  ([audit](audit.md#choosing-a-database), [downgrades](upgrading.md#downgrades)). Ad-hoc SQL against it works,
   but its tables and columns may change in any minor release.
 - **The store's keys** in Redis, and what they hold. A release that
   changes them says whether counters start over.

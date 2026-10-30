@@ -163,7 +163,7 @@ caveats: [docs/benchmark.md](docs/benchmark.md).
 - [Feedback: SES, useSend](docs/feedback.md) · [GitHub secret scanning](docs/secret-scanning.md)
 - [Faults: what happens when a dependency fails](docs/faults.md) · [Objectives and alerts](docs/slo.md) · [Tracing](docs/tracing.md)
 - [Benchmarks](docs/benchmark.md) · [Brand](docs/brand.md)
-- [Compatibility: what is stable before 1.0](docs/compatibility.md) · [Changelog](CHANGELOG.md)
+- [Compatibility: what is stable before 1.0](docs/compatibility.md) · [Upgrading](docs/upgrading.md) · [Changelog](CHANGELOG.md)
 
 ## Examples
 

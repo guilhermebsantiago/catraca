@@ -5,6 +5,8 @@ Notable changes to Catraca. The format follows
 follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html) from the
 first tagged release. What may change before 1.0, and how a change is
 announced, is in [docs/compatibility.md](docs/compatibility.md).
+[docs/upgrading.md](docs/upgrading.md) covers migrations, rolling upgrades
+and downgrades, and what an upgrade from the launch has to act on.
 
 ## [Unreleased]
 

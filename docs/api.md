@@ -319,6 +319,15 @@ Identifiers become store keys and audit columns: Postgres cannot store NUL,
 and a control character in an id can rewrite a terminal that shows it. Send
 a larger batch as several events.
 
+Within the limits, wide sends still cost latency. Each distinct recipient
+domain is about 25 µs of Redis time, so a send at the 1,000-address limit
+with a domain per address holds Redis for about 26 ms
+([benchmark](benchmark.md#a-send-to-many-domains)), while other decisions
+on that Redis wait. Some 400 domains use up the default `engine.deadline` of
+10 ms on their own, so a wider send is often answered `degraded`. Split
+batches into events of at most 50 recipients; see
+[wide sends](rules.md#wide-sends).
+
 **Time.** Counters slide on event time and first-seen times keep the
 earliest one, so unbounded, one send dated a month ahead would empty its
 account's windows until the clock caught up, and one event dated 1970 would
