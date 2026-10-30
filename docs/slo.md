@@ -212,6 +212,11 @@ written and those lost: dropped because the engine's queue
 )
 ```
 
+Plain allows that [`audit.sample_allowed`](audit.md#sampling-allowed-decisions)
+leaves out on purpose (`catraca_audit_sampled_out_total`) are in neither
+part: with sampling on, the SLI measures the decisions meant to be written,
+so the same number of losses weighs more against it.
+
 **Why 99.9%:** decisions go on without the audit log, but a lost one cannot
 be read, labeled or reverted, and the precision gate counts labels: losing
 decisions biases the numbers rules are promoted on. The two buffers hold

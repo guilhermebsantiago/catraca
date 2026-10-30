@@ -91,9 +91,12 @@ ruleset version and the latency.
 ## How decisions are written
 
 The engine calls `Record` for every decision. Record never blocks and never
-fails: it puts the decision in an in-memory buffer (8192 by default) and a
-background writer inserts the buffer in batches (256 decisions or every
-200 ms, whichever comes first), one transaction per batch.
+fails: it puts the decision in an in-memory buffer (`audit.buffer_size`,
+8192 by default) and a background writer inserts the buffer in batches
+(`audit.batch_size`, 256 decisions, or every 200 ms, whichever comes
+first), one transaction per batch. With
+[`audit.sample_allowed`](#sampling-allowed-decisions) below 1, Record
+leaves out part of the plain allows before they reach the buffer.
 
 When the buffer is full, because the database is slow or down, new decisions
 are dropped rather than slowing down every send. Drops are counted and logged
@@ -139,6 +142,62 @@ as failed, and reported in one error line, `closed before every queued
 decision was written`, with their number as `unwritten`. The platform
 already has their answers; only the audit records are missing. Close then
 closes the database and returns an error wrapping ctx's.
+
+## Sampling allowed decisions
+
+Most decisions are plain allows: an `allow` that no rule matched, enforced
+or in shadow. They hold nothing to review and nothing for the precision gate
+to count, yet each costs a row. `audit.sample_allowed` records only that
+share of them:
+
+```yaml
+audit:
+  sample_allowed: 0.1   # one plain allow in ten; the default 1 records every one
+```
+
+A decision is a plain allow, and can be left out, only when all of these
+hold; every other decision is always recorded:
+
+- its action is `allow`;
+- no rule matched it, enforced or in shadow, so it has no match rows and
+  the [rule stats](#rule-stats), the [review queue](#review-queue) and the
+  [precision gate](#the-precision-gate) see every match as before;
+- no rule failed on it (`errors` is empty);
+- it is not `degraded` (nor `uncounted`): every signal was there;
+- it is not a `duplicate` of an event that had counted already.
+
+Which plain allows are kept depends only on the decision id: a hash of the
+id, compared with the share. Every process keeps the same ones, a lower
+share keeps a subset of what a higher one keeps, and `KeepAllow` in
+`internal/audit` tells whether a given id would be kept. The ones left out are
+counted in `catraca_audit_sampled_out_total`, not as dropped, so they do not
+burn the [audit completeness objective](slo.md#audit-completeness), which
+then measures the decisions meant to be written. A decision the engine
+could not hand over (`catraca_records_dropped_total`) is counted before
+sampling, whatever it was.
+
+What changes for a decision left out:
+
+- `GET /v1/decisions/{id}` answers `404 not_found`, as for a decision
+  retention deleted, and so does labeling it. A false negative found later,
+  abuse that a plain allow let through, can only be labeled when its
+  decision was kept; to label one, find a later decision of the same
+  account that a rule matched, or lower the sampling while you investigate.
+- Counts of decisions read from the log, such as allows per account or
+  per day, count about `sample_allowed` times the plain allows: divide the
+  plain allows counted by the share to estimate the total. Blocks,
+  throttles, reviews, matched and degraded decisions are complete. The
+  same goes for any listing or export of decisions with an `action=allow`
+  filter.
+- The events of the plain allows left out are not in the log, so events
+  exported from the log to [`catraca replay`](cli.md#replay) a new rule
+  against hold fewer of them, and the rule looks like it would match less
+  legitimate traffic than it will. Keep `sample_allowed` at 1 while you
+  collect events for a backtest, or take them from your own records.
+
+Use it when the log's size or write rate is the problem: at 2,000
+decisions a second and 90% plain allows, `0.1` writes 380 decisions a
+second instead of 2,000 ([sizing](#sizing-at-10-volume)).
 
 ## Labels
 
@@ -331,12 +390,26 @@ least as long as the windows you look at (`/v1/stats/rules` defaults to
 720h). It cannot be under 24h, so decisions stay long enough to be reviewed.
 
 Each process looks for expired rows a minute after it starts and then every
-ten minutes. It deletes at most 500 rows per statement, oldest first, and
-after each statement waits at least as long as the statement took, so no
-statement holds locks for long and working through a backlog takes at most
-about half of the database's write time. That matters most on SQLite, where
-the decision writer waits for each delete. On Postgres, processes deleting at
-the same time skip each other's rows (`FOR UPDATE SKIP LOCKED`). Deleted rows
+ten minutes, and deletes until nothing expired is left, a statement at a
+time, oldest first. How much each statement deletes and how long it waits
+after it depend on the database:
+
+| | rows per statement (`audit.retention_batch`) | wait after each (`audit.retention_pause`) |
+|---|---|---|
+| SQLite | 500 | as long as the statement took, at least 10 ms |
+| Postgres | 5000 | 10 ms |
+
+On SQLite every write waits for a delete, the decision writer's included,
+so statements stay small and working through a backlog takes at most about
+half of the database's write time. On Postgres a delete locks only the old
+rows it deletes, which nothing else writes, so the writer does not wait for
+it, and larger statements with short pauses keep up with a higher volume;
+what they still compete for is the disk and the WAL. Processes deleting at
+the same time skip each other's rows (`FOR UPDATE SKIP LOCKED`). Set
+`retention_pause` higher when retention slows the decision writes
+(`catraca_audit_write_duration_seconds` climbing while it runs), and
+`retention_batch` lower when its statements outlast what your database
+allows one to hold its locks. Deleted rows
 are counted in `catraca_audit_retention_deleted_total{table}`, with `table`
 `decisions`, `outbox` or `leak_reports`, and logged once per run. A run that fails is logged,
 counted in `catraca_audit_retention_errors_total` and tried again on the next
@@ -362,6 +435,145 @@ CREATE INDEX CONCURRENTLY IF NOT EXISTS outbox_finished ON outbox (updated_at_us
 
 A concurrent build that fails leaves an invalid index behind (`\d decisions`
 marks it `INVALID`); drop it and build it again before upgrading.
+
+### Partitioning on Postgres
+
+Past a few hundred million decisions, deleting them row by row costs more
+than it should: every deleted row goes through the WAL, and autovacuum then
+has to reclaim it. Postgres can instead drop a whole month at once when
+`decisions` and `matches` are partitioned by `decided_at_us`. Catraca does
+not set this up. What follows is a recipe to adapt, and to rehearse on a
+copy of the database first.
+
+What partitioning changes:
+
+- A partitioned table's primary key must include the partition key, so
+  `decisions` gets `PRIMARY KEY (id, decided_at_us)` and `matches`
+  `PRIMARY KEY (decision_id, rule_id, decided_at_us)`. Decision ids stay
+  unique (they are ULIDs), and Catraca's insert, `ON CONFLICT DO NOTHING`,
+  still skips a decision written twice: the copy has the same time, so it
+  lands in the same partition.
+- The foreign key from `matches` becomes `(decision_id, decided_at_us)
+  REFERENCES decisions (id, decided_at_us) ON DELETE CASCADE`. `labels`
+  has no decision time, so it stays a plain table without its foreign key,
+  and the labels of dropped decisions are deleted by hand (below).
+- Labeled decisions are kept longer than the others (`labeled_retention`,
+  forever by default), so a month is not simply dropped: its labeled
+  decisions are copied out first and put back.
+- Leave `audit.retention` set, for the outbox and the leaked-key reports,
+  and make it longer than the months you keep, so Catraca's own retention
+  finds no unlabeled decision old enough to delete. `labeled_retention`
+  still deletes labeled decisions row by row; they are few.
+- Catraca's migrations are written for the stock schema. Read each
+  release's new migrations, and apply them to the partitioned tables
+  yourself when they change `decisions` or `matches`.
+
+Create the partitioned tables with the columns and indexes of
+`internal/audit/migrations/postgres`, move the rows over and swap the names
+while Catraca is stopped, and create each month's partitions ahead of time,
+with a cron job or `pg_partman`. Bounds are unix microseconds, UTC:
+
+```sql
+CREATE TABLE decisions_2026_07 PARTITION OF decisions
+    FOR VALUES FROM (1782864000000000) TO (1785542400000000); -- July 2026
+CREATE TABLE matches_2026_07 PARTITION OF matches
+    FOR VALUES FROM (1782864000000000) TO (1785542400000000);
+```
+
+Then once a month, for the month that has aged out, keep its labeled
+decisions and drop the rest, in one transaction:
+
+```sql
+BEGIN;
+CREATE TEMP TABLE kept_decisions ON COMMIT DROP AS
+    SELECT d.* FROM decisions_2026_07 d
+    WHERE EXISTS (SELECT 1 FROM labels l WHERE l.decision_id = d.id);
+CREATE TEMP TABLE kept_matches ON COMMIT DROP AS
+    SELECT m.* FROM matches_2026_07 m
+    WHERE EXISTS (SELECT 1 FROM kept_decisions k WHERE k.id = m.decision_id);
+ALTER TABLE matches DETACH PARTITION matches_2026_07;
+ALTER TABLE decisions DETACH PARTITION decisions_2026_07;
+DROP TABLE matches_2026_07, decisions_2026_07;
+CREATE TABLE decisions_2026_07 PARTITION OF decisions
+    FOR VALUES FROM (1782864000000000) TO (1785542400000000);
+CREATE TABLE matches_2026_07 PARTITION OF matches
+    FOR VALUES FROM (1782864000000000) TO (1785542400000000);
+INSERT INTO decisions SELECT * FROM kept_decisions;
+INSERT INTO matches SELECT * FROM kept_matches;
+COMMIT;
+```
+
+`DETACH PARTITION` locks the parent table, so the decision writer waits
+until the transaction commits; copying the few labeled decisions keeps that
+short, and the writer's [buffer](#how-decisions-are-written) holds the
+decisions meanwhile. When `labeled_retention` deletes labeled decisions, or
+you drop a month whole, delete the labels left without a decision:
+
+```sql
+DELETE FROM labels l WHERE NOT EXISTS (SELECT 1 FROM decisions d WHERE d.id = l.decision_id);
+```
+
+## Sizing at 10× volume
+
+What the log has to absorb at 2,000 decisions a second, from the code's
+defaults and the [audit benchmarks](benchmark.md#the-audit-log):
+
+| | default | at 2,000 decisions/s | setting |
+|---|---|---|---|
+| rows | a decision row per decision, a match row per rule that matched | 2,000 decision rows a second, 173 million a day | `audit.sample_allowed` |
+| writer | a transaction per 256 decisions, or every 200 ms | about 8 transactions a second, each with 128 ms to commit before the next batch is full | `audit.batch_size` |
+| audit buffer | 8192 decisions | rides out a database stall of about 4 s; a longer one drops decisions | `audit.buffer_size` |
+| engine queue | 4096 decisions | holds about 2 s of decisions while the database has not opened yet | `engine.record_queue` |
+| retention | 500 rows a statement on SQLite, 5000 on Postgres | has to delete 2,000 decisions a second on average: 1.2 million a run | `audit.retention_batch`, `audit.retention_pause` |
+
+**The buffers.** Once the database is open, a decision goes from the
+engine's queue to the audit buffer in about 3 µs (it is encoded to JSON on
+the way), so a slow database fills the audit buffer, not the engine's
+queue. While the database stalls, the writer retries the batch in hand, up
+to three attempts of up to 10 s each, and the buffer fills at the rate
+decisions are recorded. Size it as
+
+    buffer_size = decisions recorded a second × the longest stall to ride out
+
+where the decisions recorded are all of them minus the plain allows left
+out: `decisions/s × (1 − plain share × (1 − sample_allowed))`. Riding out
+a 30 s failover at 2,000 recorded a second takes `buffer_size: 60000`,
+about 60 MB, since each waiting decision holds about 1 KB with
+`event_detail: minimal`. With `sample_allowed: 0.1` and 90% plain allows,
+380 decisions a second are recorded and the default 8192 rides out about
+21 s. `engine.record_queue` only matters while the database has not opened
+yet, after a start with Postgres unreachable: size it the same way, with
+how long the database may take to come up.
+
+**The writer.** On the [benchmark machine](benchmark.md#machine) one writer
+puts about 126,000 decisions a second into a SQLite file, sixty times what
+2,000 a second needs, and the HTTP runs at 8,000 decisions a second dropped
+none. Postgres was not measured; at 2,000 a second a batch of 256 has 128 ms
+to commit. Watch `catraca_audit_write_duration_seconds` and
+`catraca_audit_queued`: a queue that keeps climbing means the writer is
+behind, and raising `batch_size` (fewer, larger transactions) helps more
+than a larger buffer, which only buys time.
+
+**Storage.** A plain allow encodes to about 430 bytes of JSON with
+`event_detail: minimal` (170 for the decision, 270 for the event); a block
+with one enforced and one shadow match, about 700, plus a row per match.
+With the other columns, the indexes and each row's overhead, plan on
+roughly 1 KB a decision on disk; this is an estimate, not a measurement.
+At 2,000 decisions a second that is about 170 GB a day, 15 TB over a 90-day
+`retention`. With `sample_allowed: 0.1` and 90% plain allows, 19% of the
+decisions are written: about 33 GB a day, 3 TB over 90 days. At this
+volume, sample, use Postgres, and consider [partitioning](#partitioning-on-postgres).
+
+**Retention.** It has to delete, on average, as many decisions as are
+written. With its defaults on SQLite it deletes about 35,000 decisions a
+second, pauses included, and about 74,000 with 5,000 rows a statement, so a
+run clears 10 minutes of decisions at 2,000 a second (1.2 million) in about
+35 s. Those numbers come from a table that fits in memory; on a table many
+times larger than RAM each statement reads from disk and is much slower.
+Check that `catraca_audit_retention_deleted_total{table="decisions"}`
+rises as fast as `catraca_audit_recorded_total` once the log is a
+`retention` old; when it does not, give retention larger batches and
+shorter pauses on Postgres, or partition.
 
 ## Schema
 

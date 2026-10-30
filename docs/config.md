@@ -328,6 +328,11 @@ The decision log, labels and the webhook outbox. See [audit](audit.md).
 | `max_idle_conns` | `max_open_conns` | most idle connections kept open for reuse; at most `max_open_conns` |
 | `conn_max_lifetime` | `30m` | close connections this long after they opened, so they follow a failover or a DNS change |
 | `conn_max_idle_time` | `5m` | close connections idle this long |
+| `buffer_size` | `8192` | decisions that can wait to be written. When the database is slow or down and it fills, new decisions are dropped and counted in `catraca_audit_dropped_total`. Each waiting decision holds about 1 KB with `event_detail: minimal`. Size it as the decisions recorded per second times the longest database stall to ride out ([sizing](audit.md#sizing-at-10-volume)) |
+| `batch_size` | `256` | most decisions written in one transaction; at most `buffer_size` |
+| `sample_allowed` | `1` | share of plain allows to record: allows that no rule matched, enforced or in shadow, made with every signal, from an event that counted. Every other decision is always recorded. Greater than 0 and at most 1; `0.1` keeps one in ten ([details](audit.md#sampling-allowed-decisions)) |
+| `retention_batch` | `500` on SQLite, `5000` on Postgres | most rows one retention `DELETE` removes; at most `100000` ([retention](audit.md#retention)) |
+| `retention_pause` | as long as each `DELETE` took on SQLite, `10ms` on Postgres | how long retention waits after a `DELETE` before the next one |
 
 Use SQLite for one instance and Postgres for several. Opening the database
 applies migrations.
@@ -347,9 +352,10 @@ any other instance: decisions do not depend on the audit log, and this is
 what happens anyway when Postgres fails after the server started. Until the
 database opens:
 
-- the decisions made meanwhile wait in the engine's queue (4096 of them)
-  and are written once it opens; those beyond it are dropped and counted
-  in `catraca_records_dropped_total`;
+- the decisions made meanwhile wait in the engine's queue
+  (`engine.record_queue`, 4096 by default) and are written once it opens;
+  those beyond it are dropped and counted in
+  `catraca_records_dropped_total`;
 - the effects of enforced rules are written to the outbox if it opens
   within 5 seconds, and are otherwise logged and counted in
   `catraca_hooks_enqueue_errors_total`; their decisions do not wait for
@@ -394,6 +400,7 @@ them and keeps its one connection.
 | `breaker.failure_window` | `500ms` | how long they must keep failing, with none succeeding, for it to open |
 | `breaker.cooldown` | `2s` | how long the breaker stays open, deciding without the store, before it probes the store |
 | `breaker.probes` | `5` | decisions the half-open breaker lets reach the store: when they all succeed it closes, and when one fails it opens for another `cooldown` |
+| `record_queue` | `4096` | decisions waiting to be handed to the audit log after they are answered. Once the audit database is open, handing one over takes microseconds and its own `audit.buffer_size` absorbs a slow database; this queue fills while the database has not opened yet, such as a Postgres unreachable at start. Those beyond it are dropped and counted in `catraca_records_dropped_total`. Size it as decisions per second times how long the database may take to open; each queued decision holds about 1 KB ([sizing](audit.md#sizing-at-10-volume)) |
 
 Both bounds apply to every route that brings events in. `catraca replay`
 ignores them, since it decides historical events. See

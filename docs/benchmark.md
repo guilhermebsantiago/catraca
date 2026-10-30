@@ -188,6 +188,33 @@ CATRACA_TEST_REDIS_URL=redis://localhost:6379/0 \
   go test ./internal/signal -run '^$' -bench '^BenchmarkObserveRecipientMemory$' -benchtime 1s -count 3
 ```
 
+### The audit log
+
+`BenchmarkRecordSQLite` records 20,000 decisions, a tenth of them matched
+by a rule, into a SQLite file in the temp directory and waits until they
+are written. `BenchmarkPruneSQLite` has retention delete 50,000 expired
+ones, pauses included, with the SQLite default of 500 rows a statement and
+with the Postgres default of 5,000. Three runs each:
+
+| | decisions a second |
+|---|---|
+| written, batches of 256 | 126,000 |
+| deleted, 500 a statement, pause as long as each took | 35,000 |
+| deleted, 5,000 a statement | 74,000 |
+
+The writer has sixty times the headroom 2,000 decisions a second need.
+Retention is held back by its pause: a 500-row statement takes a few
+milliseconds and then waits at least 10 ms. Both tables fit in memory
+here; on a database much larger than RAM, deletes read from disk and slow
+down most. Encoding a decision for the buffer takes about 3 µs, and
+deciding whether to keep a plain allow under `audit.sample_allowed` about
+5 ns. What these numbers mean for a deployment is in
+[sizing at 10× volume](audit.md#sizing-at-10-volume).
+
+```sh
+go test ./internal/audit -run '^$' -bench 'SQLite$' -benchtime 3x
+```
+
 ## The Redis store
 
 Before, a send event's batch was about 90 pipelined commands, and every
