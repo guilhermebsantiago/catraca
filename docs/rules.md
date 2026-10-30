@@ -402,6 +402,50 @@ if err := rules.RunFixtures(rs, cases).Err(); err != nil {
 Give every rule at least one case where it matches and one, close to the
 threshold, where it does not.
 
+## Explaining a decision
+
+To see the signals a real event has, and what each rule made of them, send
+the event to [`POST /v1/rules/explain`](api.md#post-v1rulesexplain). It
+answers every signal by map and, for every rule, whether it matched, its
+action and mode, and why it could not be evaluated, without deciding the
+event. Without `?observe=true` only the `event` signals are present, and
+nothing counts; with it the signals come from the store, which counts the
+event unless it is sent with the `id` of a decision made within
+`engine.dedupe_ttl`. The answer's `counted` says which.
+
+Its `signals` object is written as a fixture case's `signals`, so it can be
+saved, edited and explained again offline, with no server or store:
+
+```sh
+curl -s -X POST "$CATRACA/v1/rules/explain?observe=true" -H "Authorization: Bearer $TOKEN" \
+  -d @event.json > explained.json
+catraca rules explain rules/default.yaml explained.json
+```
+
+A signals file can also be written by hand, in YAML or JSON. Signals it
+leaves out are absent, which the output makes plain:
+
+```yaml
+event: {type: send, recipients: 40, link_domains: [bit.ly]}
+account: {sends_1m: 150, age_hours: 5}
+key: null    # absent, as for an event without an API key
+```
+
+```
+RULE                               MATCHED  MODE     ACTION    ERROR
+leaked-key-send                    no       enforce  block     signal event.api_key_id is absent (on_error: open)
+account-suspended                  no       enforce  block     signal event.account_id is absent (on_error: open)
+new-account-burst                  no       shadow   throttle  signal account.state is absent (on_error: open)
+account-takeover-volume            no       shadow   hold      -
+...
+
+action: allow, ruleset version 257a38fdadb5
+```
+
+A rule that could not be evaluated shows as matched when its `on_error` is
+`closed`, as it counts in a decision. Turn a case worth keeping into a
+fixture by copying its signals into one.
+
 ## Versioning
 
 The ruleset version is the first 12 hex characters of a SHA-256 over the

@@ -13,6 +13,7 @@ keys; probes and Prometheus read health and metrics.
 | [`POST /v1/decisions/{id}/labels`](#post-v1decisionsidlabels) | token | label a decision (a reversal is a `false_positive`) |
 | [`GET /v1/rules`](#get-v1rules) | token | the loaded ruleset and its version |
 | [`POST /v1/rules/reload`](#post-v1rulesreload) | token | reload the ruleset from disk |
+| [`POST /v1/rules/explain`](#post-v1rulesexplain) | token | every signal of an event and each rule's result, without deciding it |
 | [`GET /v1/rules/{id}/review`](#get-v1rulesidreview) | token | unlabeled matches of a rule, for reviewers |
 | [`GET /v1/stats/rules`](#get-v1statsrules) | token | precision per rule against the gate |
 | [`GET /v1/accounts/{id}/state`](#account-states) | token | an account's state: active, review, suspended or trusted |
@@ -568,6 +569,69 @@ A file that does not load leaves the current ruleset serving and answers
   }
 }
 ```
+
+### POST /v1/rules/explain
+
+Takes an event, as `POST /v1/decide` does, and answers every signal it has
+and each rule's result against the current ruleset, without deciding it:
+nothing is written to the audit log, no hook is called and no decision is
+counted in the metrics. It is how to learn the [signal](signals.md)
+vocabulary on real traffic, and to see why an event was decided as it was.
+
+By default the store is not called, so the event counts nowhere, and only
+the signals that need no store are present: `event`, and `key.leaked` for a
+key the server knows leaked. The other maps are `null`, and rules that read
+them show the absent signal, as in a decision made without the store.
+
+With `?observe=true` the signals are read from the store as a decision
+reads them. That counts the event, as deciding it would, unless its `id`
+counted already: to explain an event that was decided without counting it
+again, send it with the `id` it was decided with, within
+[`engine.dedupe_ttl`](config.md#engine) (10 minutes by default) of the
+decision. `counted` says what happened. A `key_leak` event is refused with
+`400 invalid_event`: observing one marks its key leaked.
+
+```sh
+curl -s -X POST "$CATRACA/v1/rules/explain?observe=true" -H "Authorization: Bearer $TOKEN" \
+  -d '{"type": "send", "id": "msg_8f2a", "account_id": "acct_42", "ip": "203.0.113.7", "from": "news@shop.example", "to": ["ana@example.org"]}'
+```
+
+```json
+{
+  "ruleset_version": "5b1e0c7d9a42",
+  "signals": {
+    "event": {"type": "send", "account_id": "acct_42", "recipients": 1, "to_domains": ["example.org"], "...": "..."},
+    "account": {"sends_1m": 3, "sends_1h": 41, "age_hours": 2.5, "new_ip": false, "state": "active", "...": "..."},
+    "key": null,
+    "ip": {"sends_1m": 3, "sends_1h": 41, "distinct_accounts_24h": 1, "distinct_keys_24h": 0, "signups_24h": 0},
+    "domain": {"sends_1h": 41, "distinct_accounts_24h": 1, "complaints_24h": 0}
+  },
+  "action": "allow",
+  "rules": [
+    {"id": "new-account-burst", "matched": false, "action": "throttle", "mode": "enforce", "on_error": "open"},
+    {"id": "leaked-key", "matched": false, "action": "block", "mode": "enforce", "on_error": "open", "error": "signal key.leaked is absent"}
+  ],
+  "observed": true,
+  "counted": false,
+  "duplicate": true
+}
+```
+
+| field | |
+|---|---|
+| `signals` | every signal, by map; a map is `null` when it has none, such as `key` for an event without an API key |
+| `action` | what a decision with these signals would be, and `retry_after` its retry in seconds for a throttle |
+| `rules` | every rule in file order: `matched`, its `action`, `mode` and `on_error`, and `error` when it could not be evaluated. A rule that could not be evaluated matches when its `on_error` is `closed`, as in a decision |
+| `observed` | true when the signals were read from the store |
+| `counted` | true when observing counted the event, as deciding it would have |
+| `duplicate` | true when the event's `id` had counted already, so it counted nothing again |
+| `degraded` | true when `observe` was asked for and the store failed or was skipped: its signals are absent |
+
+The `signals` object is what [`catraca rules explain`](cli.md#rules-explain)
+and [fixtures](rules.md#fixtures) take, so a real event's
+signals can be saved, edited and explained again offline. Explanations take
+no [admission](config.md#admission) slot; with `observe` each costs one
+store round trip, as a decision does.
 
 ### GET /v1/rules/{id}/review
 

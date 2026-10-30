@@ -79,6 +79,26 @@ and the differences of the cases that fail. Exits 1 when a case fails.
 catraca rules test rules/default.yaml rules/default.test.yaml
 ```
 
+## rules explain
+
+```sh
+catraca rules explain <ruleset> <signals> [--json]
+```
+
+Evaluates a ruleset against the signals in a file, with no server and no
+store, and prints each rule's result (matched, mode, action, and why it
+could not be evaluated) and the action a decision with those signals would
+take. The signals are written as a [fixture case's](rules.md#fixtures), in
+YAML or JSON; a response of
+[`POST /v1/rules/explain`](api.md#post-v1rulesexplain) is read too, so a
+real event's signals can be edited and explained again. `--json` prints the
+explanation as the API does. It exits 0 whatever the rules conclude, and 1
+when the ruleset or the signals do not load.
+
+```sh
+catraca rules explain rules/default.yaml signals.yaml
+```
+
 ## rules gate
 
 ```sh
