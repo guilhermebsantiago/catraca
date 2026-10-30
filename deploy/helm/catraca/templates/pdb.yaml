@@ -1,0 +1,13 @@
+{{- if and .Values.podDisruptionBudget.enabled (include "catraca.multiReplica" .) }}
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: {{ include "catraca.fullname" . }}
+  labels:
+    {{- include "catraca.labels" . | nindent 4 }}
+spec:
+  maxUnavailable: {{ .Values.podDisruptionBudget.maxUnavailable }}
+  selector:
+    matchLabels:
+      {{- include "catraca.selectorLabels" . | nindent 6 }}
+{{- end }}

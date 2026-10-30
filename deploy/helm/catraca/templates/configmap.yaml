@@ -1,0 +1,11 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ include "catraca.fullname" . }}
+  labels:
+    {{- include "catraca.labels" . | nindent 4 }}
+data:
+  # The server's configuration (docs/config.md). Secrets stay ${NAME}
+  # references, filled from the Secret through the environment.
+  catraca.yaml: |
+    {{- include "catraca.config" . | nindent 4 }}

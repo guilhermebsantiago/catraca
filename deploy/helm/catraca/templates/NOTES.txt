@@ -1,0 +1,24 @@
+Catraca {{ .Chart.AppVersion }} is installed as {{ include "catraca.fullname" . }} in {{ .Release.Namespace }}.
+
+The pods read their tokens and secrets from the Secret {{ include "catraca.secretName" . }},
+which the chart does not create. If it does not exist yet:
+
+  kubectl -n {{ .Release.Namespace }} create secret generic {{ include "catraca.secretName" . }} \
+{{- range $name, $key := .Values.secret.env }}
+    --from-literal={{ $key }}="$(openssl rand -hex 32)" \
+{{- end }}
+    --dry-run=client -o yaml | kubectl apply -f -
+
+Check that the pods are ready, then ask for a decision through the API's Service:
+
+  kubectl -n {{ .Release.Namespace }} rollout status deployment/{{ include "catraca.fullname" . }}
+  kubectl -n {{ .Release.Namespace }} port-forward service/{{ include "catraca.fullname" . }} {{ .Values.service.port }}:{{ .Values.service.port }}
+
+/healthz, /readyz and /metrics are on the admin port ({{ .Values.ports.admin }}), not on that Service.
+The ruleset is the ConfigMap {{ include "catraca.rulesConfigMapName" . }}: each pod reloads it
+within a minute or two of an update, with no restart. See /readyz?verbose for the version each runs.
+{{- if not .Values.image.digest }}{{ if not .Values.image.tag }}
+
+The image tag defaults to v{{ .Chart.AppVersion }}. Until a release is published, set image.repository
+and image.tag to an image you built from the repository's Dockerfile.
+{{- end }}{{ end }}

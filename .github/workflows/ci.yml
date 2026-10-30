@@ -110,6 +110,96 @@ jobs:
       - name: Grafana dashboard
         run: jq empty deploy/grafana/*.json
 
+  helm:
+    name: Helm chart (lint, template, kubeconform)
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    env:
+      # Pinned, with each archive's SHA-256 from the release's checksums
+      # (get.helm.sh/<archive>.sha256sum, kubeconform's CHECKSUMS). Dependabot
+      # does not update them.
+      HELM_VERSION: "3.19.0"
+      HELM_SHA256: a7f81ce08007091b86d8bd696eb4d86b8d0f2e1b9f6c714be62f82f96a594496
+      KUBECONFORM_VERSION: "0.7.0"
+      KUBECONFORM_SHA256: c31518ddd122663b3f3aa874cfe8178cb0988de944f29c74a0b9260920d115d3
+      # The Kubernetes release whose schemas the manifests are checked
+      # against, and a commit of datreeio/CRDs-catalog for the Prometheus
+      # Operator's ServiceMonitor and PrometheusRule.
+      KUBERNETES_VERSION: "1.31.0"
+      CRDS_CATALOG_COMMIT: 3eb90d47aba8d61919d4419dd38301536e32a94b
+      CHART: deploy/helm/catraca
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: go.mod
+      - name: Install helm and kubeconform
+        run: |
+          mkdir -p "$RUNNER_TEMP/bin"
+          archive="helm-v${HELM_VERSION}-linux-amd64.tar.gz"
+          curl -fsSL --retry 3 -o "$archive" "https://get.helm.sh/${archive}"
+          echo "${HELM_SHA256}  ${archive}" | sha256sum --check --strict
+          tar -xzf "$archive" -C "$RUNNER_TEMP/bin" --strip-components=1 linux-amd64/helm
+          archive="kubeconform-linux-amd64.tar.gz"
+          curl -fsSL --retry 3 -o "$archive" \
+            "https://github.com/yannh/kubeconform/releases/download/v${KUBECONFORM_VERSION}/${archive}"
+          echo "${KUBECONFORM_SHA256}  ${archive}" | sha256sum --check --strict
+          tar -xzf "$archive" -C "$RUNNER_TEMP/bin" kubeconform
+          rm -f helm-*.tar.gz kubeconform-*.tar.gz
+          echo "$RUNNER_TEMP/bin" >> "$GITHUB_PATH"
+      - name: Versions
+        run: |
+          helm version
+          kubeconform -v
+      # The chart carries copies of the starter ruleset and the Prometheus
+      # rules, since a chart cannot read files outside its directory.
+      - name: Chart copies in step
+        run: |
+          cmp rules/default.yaml "$CHART/files/rules.yaml"
+          cmp deploy/prometheus/rules.yaml "$CHART/files/prometheus-rules.yaml"
+      - name: helm lint
+        run: |
+          helm lint --strict "$CHART"
+          helm lint --strict "$CHART" -f "$CHART/ci/production-values.yaml"
+      - name: helm template
+        run: |
+          mkdir -p rendered
+          helm template catraca "$CHART" > rendered/default.yaml
+          helm template catraca "$CHART" -f "$CHART/ci/production-values.yaml" > rendered/production.yaml
+          # Several pods without Redis and Postgres must refuse to render.
+          if helm template catraca "$CHART" --set replicaCount=3 > /dev/null 2>&1; then
+            echo "::error::the chart rendered 3 replicas with the memory store and SQLite"
+            exit 1
+          fi
+      - name: kubeconform
+        run: |
+          kubeconform -strict -summary \
+            -kubernetes-version "$KUBERNETES_VERSION" \
+            -schema-location default \
+            -schema-location "https://raw.githubusercontent.com/datreeio/CRDs-catalog/${CRDS_CATALOG_COMMIT}/{{.Group}}/{{.ResourceKind}}_{{.ResourceAPIVersion}}.json" \
+            rendered/default.yaml rendered/production.yaml
+      # The configuration the chart renders must be one the server accepts:
+      # catraca config check, with the ruleset path pointed at the copy here.
+      - name: catraca config check
+        env:
+          CATRACA_API_TOKEN: ci-token-0123456789abcdef
+          CATRACA_OPS_TOKEN: ci-ops-0123456789abcdef
+          CATRACA_FEEDBACK_SECRET: ci-feedback-0123456789abcdef
+          CATRACA_AUDIT_DSN: postgres://catraca:catraca@localhost:5432/catraca?sslmode=disable
+          CATRACA_REDIS_URL: redis://localhost:6379/0
+          RULES: ${{ github.workspace }}/deploy/helm/catraca/files/rules.yaml
+        run: |
+          go build -o "$RUNNER_TEMP/catraca" ./cmd/catraca
+          for values in default production; do
+            echo "::group::$values"
+            yq 'select(.kind == "ConfigMap" and .data["catraca.yaml"]) | .data["catraca.yaml"]' "rendered/$values.yaml" \
+              | yq '.rules.path = strenv(RULES)' > "rendered/$values-config.yaml"
+            "$RUNNER_TEMP/catraca" config check -config "rendered/$values-config.yaml"
+            echo "::endgroup::"
+          done
+
   test:
     name: Test (Linux, Redis, Postgres)
     runs-on: ubuntu-latest

@@ -1,0 +1,277 @@
+# Values for the Catraca chart. The defaults run one instance with counters
+# in memory and the audit log in SQLite on an emptyDir: enough to try it.
+# For more than one replica use Redis and Postgres; ci/production-values.yaml
+# is an example. README.md explains each part, docs/config.md each field of
+# the configuration.
+
+# -- Overrides the chart name in object names and the app.kubernetes.io/name label.
+nameOverride: ""
+# -- Overrides the full name of the release's objects (<release>-catraca by default).
+fullnameOverride: ""
+# -- Labels added to every object the chart renders.
+commonLabels: {}
+
+image:
+  # -- The release image GoReleaser publishes. No release is published yet:
+  # until one is, build and push your own (the repository's Dockerfile) and
+  # point repository and tag at it.
+  repository: ghcr.io/guilhermebsantiago/catraca
+  # -- The tag. Empty means "v" + the chart's appVersion, such as v0.1.0.
+  tag: ""
+  # -- A digest (sha256:...) to pin the image by; it takes precedence over tag.
+  digest: ""
+  pullPolicy: IfNotPresent
+
+# -- Secrets to pull the image with, as [{name: ...}].
+imagePullSecrets: []
+
+# -- Pods to run. More than one needs counters in Redis (config.store) and
+# the audit log in Postgres (config.audit.dsn, sqlite.enabled: false): the
+# chart refuses to render otherwise, since each pod would count on its own.
+replicaCount: 1
+
+# Secrets come from a Secret you create, never from these values: the chart
+# renders no Secret. The configuration reads them from the environment
+# (${NAME}), and these maps say which variable comes from which key.
+#
+#   kubectl create secret generic catraca \
+#     --from-literal=api-token="$(openssl rand -hex 32)" \
+#     --from-literal=ops-token="$(openssl rand -hex 32)" \
+#     --from-literal=feedback-secret="$(openssl rand -hex 32)"
+#
+# docs/rotation.md says how to rotate each one without refusing requests.
+secret:
+  # -- The Secret's name. Empty means the release's full name (catraca for a
+  # release named catraca).
+  name: ""
+  # -- Variables read from keys the Secret must have: the pod does not start
+  # without them. The defaults are the send path's token (scope decide), the
+  # ops token (decide, read, label, admin) and the generic feedback secret,
+  # which config below reads.
+  env:
+    CATRACA_API_TOKEN: api-token
+    CATRACA_OPS_TOKEN: ops-token
+    CATRACA_FEEDBACK_SECRET: feedback-secret
+  # -- Variables read from keys the Secret may have: unset when the key is
+  # missing. Point config at one with ${NAME} (required) or ${NAME:-default}.
+  # Add others here, such as useSend's secret or a previous token during a
+  # rotation.
+  optionalEnv:
+    CATRACA_AUDIT_DSN: audit-dsn
+    CATRACA_REDIS_URL: redis-url
+
+# The configuration file, catraca.yaml, rendered into a ConfigMap. Every
+# field is in docs/config.md; the file is strict, so a typo stops the pod
+# with the line at fault. Write secrets as ${NAME} with NAME from secret
+# above. The chart sets server.listen, server.admin_addr and rules.path
+# itself, from ports and rules below. A change rolls the pods (the server
+# reads the file at start); the ruleset reloads in place instead.
+config:
+  server:
+    # -- After SIGTERM, keep serving this long while /readyz reports not
+    # ready, so the Service and load balancers stop sending first.
+    drain_delay: 5s
+    # -- How long a graceful shutdown may take, writing queued decisions.
+    # terminationGracePeriodSeconds must cover drain_delay plus this.
+    shutdown_timeout: 30s
+  auth:
+    # -- The bearer tokens. The send path's token decides and nothing else;
+    # reading the audit log, labeling and reloading the rules take the ops
+    # token (docs/api.md, scopes).
+    tokens:
+      - name: send-path
+        token: ${CATRACA_API_TOKEN}
+        scopes: [decide]
+      - name: ops
+        token: ${CATRACA_OPS_TOKEN}
+        scopes: [decide, read, label, admin]
+  rules:
+    # -- How often each pod reads the ruleset file; a ConfigMap update
+    # reaches every pod by itself, without a restart.
+    watch_interval: 5s
+  gate:
+    # -- A rule the ruleset newly enforces stays in shadow mode until its
+    # labels pass the precision gate; warn or off to relax it.
+    on_load: enforce
+  store:
+    # -- memory for one instance; redis to share counters between pods
+    # (store.redis.url, say ${CATRACA_REDIS_URL}).
+    backend: memory
+  audit:
+    # -- SQLite on the volume below for one instance; for several, a
+    # Postgres DSN from the Secret: ${CATRACA_AUDIT_DSN}.
+    dsn: sqlite:/var/lib/catraca/catraca.db
+  feedback:
+    generic:
+      # -- The shared secret /v1/feedback requests are signed with.
+      secret: ${CATRACA_FEEDBACK_SECRET}
+  logging:
+    level: info
+    format: json
+
+# The ruleset, in a ConfigMap of its own mounted as a directory (not with
+# subPath), so the kubelet updates the file in place and each pod reloads it
+# within rules.watch_interval of the update, with no restart. The pod
+# template carries no checksum of it, on purpose.
+rules:
+  # -- The ruleset's YAML (docs/rules.md). Empty uses the starter ruleset,
+  # files/rules.yaml, a copy of rules/default.yaml.
+  content: ""
+  # -- A ConfigMap you manage to read the ruleset from instead, for example
+  # from GitOps; the chart then renders none. It must have the key below.
+  existingConfigMap: ""
+  # -- The key of the ruleset in the ConfigMap, and its file name.
+  key: default.yaml
+
+# Container ports. The admin port serves /healthz, /readyz and /metrics,
+# which take no token: probes and Prometheus use it, and the API's Service
+# leaves it out.
+ports:
+  # -- The API, server.listen.
+  http: 8080
+  # -- Health and metrics, server.admin_addr.
+  admin: 9090
+
+# The Service for the API's clients: the admin port is not on it.
+service:
+  type: ClusterIP
+  port: 8080
+  annotations: {}
+
+# A Service for the admin port only, for Prometheus and in-cluster checks.
+# The ServiceMonitor turns it on by itself.
+adminService:
+  enabled: false
+  port: 9090
+  annotations: {}
+
+# The audit log's directory, /var/lib/catraca, writable for a SQLite
+# audit.dsn. The root filesystem is otherwise read-only. Turn it off with a
+# Postgres audit DSN: the pod then writes nothing to disk.
+sqlite:
+  # -- Mount a writable volume at /var/lib/catraca.
+  enabled: true
+  # -- A PersistentVolumeClaim to keep the log across pods. Empty uses an
+  # emptyDir, which loses it when the pod goes. A ReadWriteOnce claim
+  # switches the strategy to Recreate.
+  existingClaim: ""
+  # -- The emptyDir's size limit.
+  sizeLimit: 1Gi
+
+# -- At least server.drain_delay + server.shutdown_timeout (5s + 30s by
+# default), or the pod is killed before it writes its queued decisions.
+terminationGracePeriodSeconds: 40
+
+# -- The Deployment's strategy. Empty is a rolling update that keeps every
+# pod until its replacement is ready (Recreate with sqlite.existingClaim).
+strategy: {}
+
+# -- Liveness: /healthz on the admin port answers while the process serves
+# HTTP. Merged over the chart's httpGet.
+livenessProbe:
+  periodSeconds: 10
+  timeoutSeconds: 2
+  failureThreshold: 3
+
+# -- Readiness: /readyz on the admin port, ready once a ruleset is loaded and
+# not while draining. It ignores Redis and Postgres on purpose (docs/api.md).
+readinessProbe:
+  periodSeconds: 5
+  timeoutSeconds: 2
+  failureThreshold: 2
+
+# -- Requests and limits. No CPU limit, so a burst is not throttled into
+# missed decision deadlines; set one if your cluster requires it.
+resources:
+  requests:
+    cpu: 100m
+    memory: 128Mi
+  limits:
+    memory: 256Mi
+
+# The image runs as distroless nonroot (65532).
+podSecurityContext:
+  runAsNonRoot: true
+  runAsUser: 65532
+  runAsGroup: 65532
+  # -- Makes the SQLite volume writable by nonroot.
+  fsGroup: 65532
+  seccompProfile:
+    type: RuntimeDefault
+
+securityContext:
+  allowPrivilegeEscalation: false
+  readOnlyRootFilesystem: true
+  capabilities:
+    drop: [ALL]
+
+serviceAccount:
+  # -- Create a ServiceAccount. Catraca does not call the Kubernetes API, so
+  # its token is not mounted.
+  create: true
+  # -- Its name; empty means the release's full name.
+  name: ""
+  annotations: {}
+
+# -- Keeps all but one pod up through voluntary disruptions such as node
+# drains. Rendered only with more than one replica.
+podDisruptionBudget:
+  enabled: true
+  maxUnavailable: 1
+
+# A HorizontalPodAutoscaler on CPU. It needs Redis and Postgres, like any
+# setup with more than one pod.
+autoscaling:
+  enabled: false
+  minReplicas: 2
+  maxReplicas: 10
+  targetCPUUtilizationPercentage: 70
+
+# A Prometheus Operator ServiceMonitor that scrapes /metrics on the admin
+# port. Needs the operator's CRDs.
+serviceMonitor:
+  enabled: false
+  interval: 30s
+  scrapeTimeout: 10s
+  # -- Labels your Prometheus selects ServiceMonitors by, such as release.
+  labels: {}
+  # -- The job label. Every rule in the PrometheusRule aggregates by job,
+  # one job per Catraca deployment; empty uses the admin Service's name.
+  jobLabel: ""
+
+# The recording and alerting rules of deploy/prometheus/rules.yaml
+# (docs/slo.md) as a PrometheusRule. Needs the operator's CRDs.
+prometheusRule:
+  enabled: false
+  # -- Labels your Prometheus selects rules by.
+  labels: {}
+
+# A NetworkPolicy for ingress: the API port from apiFrom, the admin port from
+# adminFrom. Egress is left open: Catraca calls Redis, Postgres, hooks,
+# GitHub and the OTLP collector.
+networkPolicy:
+  enabled: false
+  # -- Peers allowed on the API port; empty allows any.
+  apiFrom: []
+  # -- Peers allowed on the admin port, such as Prometheus's namespace;
+  # empty allows none but the kubelet's probes (which most network plugins
+  # let through whatever the policy).
+  adminFrom: []
+
+# -- Variables added to the container, as in a pod spec, such as
+# OTEL_EXPORTER_OTLP_ENDPOINT for tracing (docs/tracing.md).
+extraEnv: []
+# -- envFrom sources added to the container.
+extraEnvFrom: []
+# -- Volumes added to the pod, and mounts added to the container.
+extraVolumes: []
+extraVolumeMounts: []
+
+podAnnotations: {}
+podLabels: {}
+nodeSelector: {}
+tolerations: []
+affinity: {}
+# -- Spreads pods across nodes or zones, as in a pod spec.
+topologySpreadConstraints: []
+priorityClassName: ""

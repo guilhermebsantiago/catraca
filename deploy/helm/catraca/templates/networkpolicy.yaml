@@ -1,0 +1,31 @@
+{{- if .Values.networkPolicy.enabled }}
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: {{ include "catraca.fullname" . }}
+  labels:
+    {{- include "catraca.labels" . | nindent 4 }}
+spec:
+  podSelector:
+    matchLabels:
+      {{- include "catraca.selectorLabels" . | nindent 6 }}
+  # Ingress only: Catraca calls Redis, Postgres, hooks, GitHub and the OTLP
+  # collector, wherever they run.
+  policyTypes:
+    - Ingress
+  ingress:
+    - ports:
+        - port: http
+          protocol: TCP
+      {{- with .Values.networkPolicy.apiFrom }}
+      from:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+    {{- with .Values.networkPolicy.adminFrom }}
+    - ports:
+        - port: admin
+          protocol: TCP
+      from:
+        {{- toYaml . | nindent 8 }}
+    {{- end }}
+{{- end }}

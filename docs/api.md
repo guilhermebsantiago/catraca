@@ -973,7 +973,8 @@ spec:
 No `preStop` hook is needed: on SIGTERM the server drains for
 `server.drain_delay` by itself, still serving while the endpoint is
 removed. Health checks of a load balancer outside the cluster should use
-`/readyz` too, so they see the drain.
+`/readyz` too, so they see the drain. The [Helm chart](kubernetes.md) sets
+all of this up.
 
 ### GET /metrics
 

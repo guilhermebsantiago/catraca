@@ -1,0 +1,684 @@
+# Prometheus recording and alerting rules for Catraca's service level
+# objectives, and alerts on the causes behind them. docs/slo.md explains each
+# objective, why it is what it is, and what to do when an alert fires.
+#
+#   rule_files: [/etc/prometheus/catraca/rules.yaml]
+#
+# Every rule aggregates by job: one job is one Catraca deployment, however
+# many instances it runs. Keep job if you relabel, or change "by (job)"
+# throughout. The burn-rate alerts follow the Google SRE workbook
+# ("Alerting on SLOs", multiwindow, multi-burn-rate alerts) for a 30-day
+# objective:
+#
+#   severity  long window  short window  burn rate  budget spent
+#   page      1h           5m            14.4       2%
+#   page      6h           30m           6          5%
+#   ticket    3d           6h            1          10%
+#
+# Check and test with promtool (deploy/prometheus/rules.test.yaml):
+#
+#   promtool check rules deploy/prometheus/rules.yaml
+#   promtool test rules deploy/prometheus/rules.test.yaml
+
+groups:
+  # The error ratio of each SLI over the windows the alerts read:
+  # catraca:slo_errors:ratio_rate<window>{job, slo}, from 0 (no errors) to 1.
+  # A ratio with no events to measure, say no feedback in the window, is
+  # NaN, and no alert fires on it.
+  - name: catraca-slo-errors
+    rules:
+      # decide-availability: POST /v1/decide and POST /v1/events answered
+      # with a status below 500. A degraded decision is an answer.
+      - record: catraca:slo_errors:ratio_rate5m
+        labels: {slo: decide-availability}
+        expr: |
+          (
+            sum by (job) (rate(catraca_http_request_duration_seconds_count{route=~"POST /v1/(decide|events)", status=~"5.."}[5m]))
+            or 0 * sum by (job) (rate(catraca_http_request_duration_seconds_count{route=~"POST /v1/(decide|events)"}[5m]))
+          )
+          / sum by (job) (rate(catraca_http_request_duration_seconds_count{route=~"POST /v1/(decide|events)"}[5m]))
+      - record: catraca:slo_errors:ratio_rate30m
+        labels: {slo: decide-availability}
+        expr: |
+          (
+            sum by (job) (rate(catraca_http_request_duration_seconds_count{route=~"POST /v1/(decide|events)", status=~"5.."}[30m]))
+            or 0 * sum by (job) (rate(catraca_http_request_duration_seconds_count{route=~"POST /v1/(decide|events)"}[30m]))
+          )
+          / sum by (job) (rate(catraca_http_request_duration_seconds_count{route=~"POST /v1/(decide|events)"}[30m]))
+      - record: catraca:slo_errors:ratio_rate1h
+        labels: {slo: decide-availability}
+        expr: |
+          (
+            sum by (job) (rate(catraca_http_request_duration_seconds_count{route=~"POST /v1/(decide|events)", status=~"5.."}[1h]))
+            or 0 * sum by (job) (rate(catraca_http_request_duration_seconds_count{route=~"POST /v1/(decide|events)"}[1h]))
+          )
+          / sum by (job) (rate(catraca_http_request_duration_seconds_count{route=~"POST /v1/(decide|events)"}[1h]))
+      - record: catraca:slo_errors:ratio_rate6h
+        labels: {slo: decide-availability}
+        expr: |
+          (
+            sum by (job) (rate(catraca_http_request_duration_seconds_count{route=~"POST /v1/(decide|events)", status=~"5.."}[6h]))
+            or 0 * sum by (job) (rate(catraca_http_request_duration_seconds_count{route=~"POST /v1/(decide|events)"}[6h]))
+          )
+          / sum by (job) (rate(catraca_http_request_duration_seconds_count{route=~"POST /v1/(decide|events)"}[6h]))
+      - record: catraca:slo_errors:ratio_rate3d
+        labels: {slo: decide-availability}
+        expr: |
+          (
+            sum by (job) (rate(catraca_http_request_duration_seconds_count{route=~"POST /v1/(decide|events)", status=~"5.."}[3d]))
+            or 0 * sum by (job) (rate(catraca_http_request_duration_seconds_count{route=~"POST /v1/(decide|events)"}[3d]))
+          )
+          / sum by (job) (rate(catraca_http_request_duration_seconds_count{route=~"POST /v1/(decide|events)"}[3d]))
+
+      # decide-latency: POST /v1/decide served within 25 ms, a bucket of
+      # catraca_http_request_duration_seconds. Change le if you change
+      # engine.deadline (docs/slo.md).
+      - record: catraca:slo_errors:ratio_rate5m
+        labels: {slo: decide-latency}
+        expr: |
+          1 - (
+            sum by (job) (rate(catraca_http_request_duration_seconds_bucket{route="POST /v1/decide", le="0.025"}[5m]))
+            / sum by (job) (rate(catraca_http_request_duration_seconds_count{route="POST /v1/decide"}[5m]))
+          )
+      - record: catraca:slo_errors:ratio_rate30m
+        labels: {slo: decide-latency}
+        expr: |
+          1 - (
+            sum by (job) (rate(catraca_http_request_duration_seconds_bucket{route="POST /v1/decide", le="0.025"}[30m]))
+            / sum by (job) (rate(catraca_http_request_duration_seconds_count{route="POST /v1/decide"}[30m]))
+          )
+      - record: catraca:slo_errors:ratio_rate1h
+        labels: {slo: decide-latency}
+        expr: |
+          1 - (
+            sum by (job) (rate(catraca_http_request_duration_seconds_bucket{route="POST /v1/decide", le="0.025"}[1h]))
+            / sum by (job) (rate(catraca_http_request_duration_seconds_count{route="POST /v1/decide"}[1h]))
+          )
+      - record: catraca:slo_errors:ratio_rate6h
+        labels: {slo: decide-latency}
+        expr: |
+          1 - (
+            sum by (job) (rate(catraca_http_request_duration_seconds_bucket{route="POST /v1/decide", le="0.025"}[6h]))
+            / sum by (job) (rate(catraca_http_request_duration_seconds_count{route="POST /v1/decide"}[6h]))
+          )
+      - record: catraca:slo_errors:ratio_rate3d
+        labels: {slo: decide-latency}
+        expr: |
+          1 - (
+            sum by (job) (rate(catraca_http_request_duration_seconds_bucket{route="POST /v1/decide", le="0.025"}[3d]))
+            / sum by (job) (rate(catraca_http_request_duration_seconds_count{route="POST /v1/decide"}[3d]))
+          )
+
+      # decide-completeness: decisions made with every signal, not
+      # degraded by a store that failed, timed out, or was skipped by the
+      # breaker or by shedding.
+      - record: catraca:slo_errors:ratio_rate5m
+        labels: {slo: decide-completeness}
+        expr: |
+          sum by (job) (rate(catraca_degraded_decisions_total[5m]))
+          / sum by (job) (rate(catraca_decisions_total[5m]))
+      - record: catraca:slo_errors:ratio_rate30m
+        labels: {slo: decide-completeness}
+        expr: |
+          sum by (job) (rate(catraca_degraded_decisions_total[30m]))
+          / sum by (job) (rate(catraca_decisions_total[30m]))
+      - record: catraca:slo_errors:ratio_rate1h
+        labels: {slo: decide-completeness}
+        expr: |
+          sum by (job) (rate(catraca_degraded_decisions_total[1h]))
+          / sum by (job) (rate(catraca_decisions_total[1h]))
+      - record: catraca:slo_errors:ratio_rate6h
+        labels: {slo: decide-completeness}
+        expr: |
+          sum by (job) (rate(catraca_degraded_decisions_total[6h]))
+          / sum by (job) (rate(catraca_decisions_total[6h]))
+      - record: catraca:slo_errors:ratio_rate3d
+        labels: {slo: decide-completeness}
+        expr: |
+          sum by (job) (rate(catraca_degraded_decisions_total[3d]))
+          / sum by (job) (rate(catraca_decisions_total[3d]))
+
+      # feedback-acceptance: feedback events counted, out of those counted,
+      # failed, uncounted (answered 503) and shed by admission control. A
+      # bad signature or a malformed body is the sender's problem, not one
+      # of Catraca's errors.
+      - record: catraca:slo_errors:ratio_rate5m
+        labels: {slo: feedback-acceptance}
+        expr: |
+          (
+            sum by (job) (rate(catraca_feedback_outcomes_total{outcome=~"decide_failed|uncounted"}[5m]))
+            + sum by (job) (rate(catraca_admission_shed_total{route=~"POST /v1/feedback.*"}[5m]))
+          )
+          / (
+            sum by (job) (rate(catraca_feedback_outcomes_total{outcome=~"decided|decide_failed|uncounted"}[5m]))
+            + sum by (job) (rate(catraca_admission_shed_total{route=~"POST /v1/feedback.*"}[5m]))
+          )
+      - record: catraca:slo_errors:ratio_rate30m
+        labels: {slo: feedback-acceptance}
+        expr: |
+          (
+            sum by (job) (rate(catraca_feedback_outcomes_total{outcome=~"decide_failed|uncounted"}[30m]))
+            + sum by (job) (rate(catraca_admission_shed_total{route=~"POST /v1/feedback.*"}[30m]))
+          )
+          / (
+            sum by (job) (rate(catraca_feedback_outcomes_total{outcome=~"decided|decide_failed|uncounted"}[30m]))
+            + sum by (job) (rate(catraca_admission_shed_total{route=~"POST /v1/feedback.*"}[30m]))
+          )
+      - record: catraca:slo_errors:ratio_rate1h
+        labels: {slo: feedback-acceptance}
+        expr: |
+          (
+            sum by (job) (rate(catraca_feedback_outcomes_total{outcome=~"decide_failed|uncounted"}[1h]))
+            + sum by (job) (rate(catraca_admission_shed_total{route=~"POST /v1/feedback.*"}[1h]))
+          )
+          / (
+            sum by (job) (rate(catraca_feedback_outcomes_total{outcome=~"decided|decide_failed|uncounted"}[1h]))
+            + sum by (job) (rate(catraca_admission_shed_total{route=~"POST /v1/feedback.*"}[1h]))
+          )
+      - record: catraca:slo_errors:ratio_rate6h
+        labels: {slo: feedback-acceptance}
+        expr: |
+          (
+            sum by (job) (rate(catraca_feedback_outcomes_total{outcome=~"decide_failed|uncounted"}[6h]))
+            + sum by (job) (rate(catraca_admission_shed_total{route=~"POST /v1/feedback.*"}[6h]))
+          )
+          / (
+            sum by (job) (rate(catraca_feedback_outcomes_total{outcome=~"decided|decide_failed|uncounted"}[6h]))
+            + sum by (job) (rate(catraca_admission_shed_total{route=~"POST /v1/feedback.*"}[6h]))
+          )
+      - record: catraca:slo_errors:ratio_rate3d
+        labels: {slo: feedback-acceptance}
+        expr: |
+          (
+            sum by (job) (rate(catraca_feedback_outcomes_total{outcome=~"decide_failed|uncounted"}[3d]))
+            + sum by (job) (rate(catraca_admission_shed_total{route=~"POST /v1/feedback.*"}[3d]))
+          )
+          / (
+            sum by (job) (rate(catraca_feedback_outcomes_total{outcome=~"decided|decide_failed|uncounted"}[3d]))
+            + sum by (job) (rate(catraca_admission_shed_total{route=~"POST /v1/feedback.*"}[3d]))
+          )
+
+      # webhook-freshness: effect webhook deliveries answered with a 2xx
+      # within 60 s of being queued, out of those delivered and those given
+      # up. le matches 60 as Prometheus 2 and 3 store it.
+      - record: catraca:slo_errors:ratio_rate5m
+        labels: {slo: webhook-freshness}
+        expr: |
+          1 - (
+            sum by (job) (rate(catraca_hooks_delivery_latency_seconds_bucket{le=~`60(\.0)?`}[5m]))
+            / (
+              sum by (job) (rate(catraca_hooks_delivery_latency_seconds_count[5m]))
+              + sum by (job) (rate(catraca_hooks_dead_total[5m]))
+            )
+          )
+      - record: catraca:slo_errors:ratio_rate30m
+        labels: {slo: webhook-freshness}
+        expr: |
+          1 - (
+            sum by (job) (rate(catraca_hooks_delivery_latency_seconds_bucket{le=~`60(\.0)?`}[30m]))
+            / (
+              sum by (job) (rate(catraca_hooks_delivery_latency_seconds_count[30m]))
+              + sum by (job) (rate(catraca_hooks_dead_total[30m]))
+            )
+          )
+      - record: catraca:slo_errors:ratio_rate1h
+        labels: {slo: webhook-freshness}
+        expr: |
+          1 - (
+            sum by (job) (rate(catraca_hooks_delivery_latency_seconds_bucket{le=~`60(\.0)?`}[1h]))
+            / (
+              sum by (job) (rate(catraca_hooks_delivery_latency_seconds_count[1h]))
+              + sum by (job) (rate(catraca_hooks_dead_total[1h]))
+            )
+          )
+      - record: catraca:slo_errors:ratio_rate6h
+        labels: {slo: webhook-freshness}
+        expr: |
+          1 - (
+            sum by (job) (rate(catraca_hooks_delivery_latency_seconds_bucket{le=~`60(\.0)?`}[6h]))
+            / (
+              sum by (job) (rate(catraca_hooks_delivery_latency_seconds_count[6h]))
+              + sum by (job) (rate(catraca_hooks_dead_total[6h]))
+            )
+          )
+      - record: catraca:slo_errors:ratio_rate3d
+        labels: {slo: webhook-freshness}
+        expr: |
+          1 - (
+            sum by (job) (rate(catraca_hooks_delivery_latency_seconds_bucket{le=~`60(\.0)?`}[3d]))
+            / (
+              sum by (job) (rate(catraca_hooks_delivery_latency_seconds_count[3d]))
+              + sum by (job) (rate(catraca_hooks_dead_total[3d]))
+            )
+          )
+
+      # audit-completeness: decisions written to the audit log, out of
+      # those written and those lost: dropped by the engine's queue or the
+      # audit buffer, or failed to write.
+      - record: catraca:slo_errors:ratio_rate5m
+        labels: {slo: audit-completeness}
+        expr: |
+          (
+            sum by (job) (rate(catraca_audit_dropped_total[5m]))
+            + sum by (job) (rate(catraca_audit_failed_total[5m]))
+            + sum by (job) (rate(catraca_records_dropped_total[5m]))
+          )
+          / (
+            sum by (job) (rate(catraca_audit_recorded_total[5m]))
+            + sum by (job) (rate(catraca_audit_dropped_total[5m]))
+            + sum by (job) (rate(catraca_audit_failed_total[5m]))
+            + sum by (job) (rate(catraca_records_dropped_total[5m]))
+          )
+      - record: catraca:slo_errors:ratio_rate30m
+        labels: {slo: audit-completeness}
+        expr: |
+          (
+            sum by (job) (rate(catraca_audit_dropped_total[30m]))
+            + sum by (job) (rate(catraca_audit_failed_total[30m]))
+            + sum by (job) (rate(catraca_records_dropped_total[30m]))
+          )
+          / (
+            sum by (job) (rate(catraca_audit_recorded_total[30m]))
+            + sum by (job) (rate(catraca_audit_dropped_total[30m]))
+            + sum by (job) (rate(catraca_audit_failed_total[30m]))
+            + sum by (job) (rate(catraca_records_dropped_total[30m]))
+          )
+      - record: catraca:slo_errors:ratio_rate1h
+        labels: {slo: audit-completeness}
+        expr: |
+          (
+            sum by (job) (rate(catraca_audit_dropped_total[1h]))
+            + sum by (job) (rate(catraca_audit_failed_total[1h]))
+            + sum by (job) (rate(catraca_records_dropped_total[1h]))
+          )
+          / (
+            sum by (job) (rate(catraca_audit_recorded_total[1h]))
+            + sum by (job) (rate(catraca_audit_dropped_total[1h]))
+            + sum by (job) (rate(catraca_audit_failed_total[1h]))
+            + sum by (job) (rate(catraca_records_dropped_total[1h]))
+          )
+      - record: catraca:slo_errors:ratio_rate6h
+        labels: {slo: audit-completeness}
+        expr: |
+          (
+            sum by (job) (rate(catraca_audit_dropped_total[6h]))
+            + sum by (job) (rate(catraca_audit_failed_total[6h]))
+            + sum by (job) (rate(catraca_records_dropped_total[6h]))
+          )
+          / (
+            sum by (job) (rate(catraca_audit_recorded_total[6h]))
+            + sum by (job) (rate(catraca_audit_dropped_total[6h]))
+            + sum by (job) (rate(catraca_audit_failed_total[6h]))
+            + sum by (job) (rate(catraca_records_dropped_total[6h]))
+          )
+      - record: catraca:slo_errors:ratio_rate3d
+        labels: {slo: audit-completeness}
+        expr: |
+          (
+            sum by (job) (rate(catraca_audit_dropped_total[3d]))
+            + sum by (job) (rate(catraca_audit_failed_total[3d]))
+            + sum by (job) (rate(catraca_records_dropped_total[3d]))
+          )
+          / (
+            sum by (job) (rate(catraca_audit_recorded_total[3d]))
+            + sum by (job) (rate(catraca_audit_dropped_total[3d]))
+            + sum by (job) (rate(catraca_audit_failed_total[3d]))
+            + sum by (job) (rate(catraca_records_dropped_total[3d]))
+          )
+
+  # Each objective, its error ratio over the 30-day period and the share of
+  # its error budget left, for dashboards and reports. The 30-day ratios
+  # need 30 days of retention to cover the whole period; they are
+  # evaluated every 5 minutes, since they move slowly.
+  - name: catraca-slo-budget
+    interval: 5m
+    rules:
+      - record: catraca:slo_objective:ratio
+        labels: {slo: decide-availability}
+        expr: vector(0.999)
+      - record: catraca:slo_objective:ratio
+        labels: {slo: decide-latency}
+        expr: vector(0.99)
+      - record: catraca:slo_objective:ratio
+        labels: {slo: decide-completeness}
+        expr: vector(0.995)
+      - record: catraca:slo_objective:ratio
+        labels: {slo: feedback-acceptance}
+        expr: vector(0.995)
+      - record: catraca:slo_objective:ratio
+        labels: {slo: webhook-freshness}
+        expr: vector(0.99)
+      - record: catraca:slo_objective:ratio
+        labels: {slo: audit-completeness}
+        expr: vector(0.999)
+      - record: catraca:slo_objective:ratio
+        labels: {slo: leak-processing}
+        expr: vector(0.99)
+
+      - record: catraca:slo_errors:ratio_rate30d
+        labels: {slo: decide-availability}
+        expr: |
+          (
+            sum by (job) (rate(catraca_http_request_duration_seconds_count{route=~"POST /v1/(decide|events)", status=~"5.."}[30d]))
+            or 0 * sum by (job) (rate(catraca_http_request_duration_seconds_count{route=~"POST /v1/(decide|events)"}[30d]))
+          )
+          / sum by (job) (rate(catraca_http_request_duration_seconds_count{route=~"POST /v1/(decide|events)"}[30d]))
+      - record: catraca:slo_errors:ratio_rate30d
+        labels: {slo: decide-latency}
+        expr: |
+          1 - (
+            sum by (job) (rate(catraca_http_request_duration_seconds_bucket{route="POST /v1/decide", le="0.025"}[30d]))
+            / sum by (job) (rate(catraca_http_request_duration_seconds_count{route="POST /v1/decide"}[30d]))
+          )
+      - record: catraca:slo_errors:ratio_rate30d
+        labels: {slo: decide-completeness}
+        expr: |
+          sum by (job) (rate(catraca_degraded_decisions_total[30d]))
+          / sum by (job) (rate(catraca_decisions_total[30d]))
+      - record: catraca:slo_errors:ratio_rate30d
+        labels: {slo: feedback-acceptance}
+        expr: |
+          (
+            sum by (job) (rate(catraca_feedback_outcomes_total{outcome=~"decide_failed|uncounted"}[30d]))
+            + sum by (job) (rate(catraca_admission_shed_total{route=~"POST /v1/feedback.*"}[30d]))
+          )
+          / (
+            sum by (job) (rate(catraca_feedback_outcomes_total{outcome=~"decided|decide_failed|uncounted"}[30d]))
+            + sum by (job) (rate(catraca_admission_shed_total{route=~"POST /v1/feedback.*"}[30d]))
+          )
+      - record: catraca:slo_errors:ratio_rate30d
+        labels: {slo: webhook-freshness}
+        expr: |
+          1 - (
+            sum by (job) (rate(catraca_hooks_delivery_latency_seconds_bucket{le=~`60(\.0)?`}[30d]))
+            / (
+              sum by (job) (rate(catraca_hooks_delivery_latency_seconds_count[30d]))
+              + sum by (job) (rate(catraca_hooks_dead_total[30d]))
+            )
+          )
+      - record: catraca:slo_errors:ratio_rate30d
+        labels: {slo: audit-completeness}
+        expr: |
+          (
+            sum by (job) (rate(catraca_audit_dropped_total[30d]))
+            + sum by (job) (rate(catraca_audit_failed_total[30d]))
+            + sum by (job) (rate(catraca_records_dropped_total[30d]))
+          )
+          / (
+            sum by (job) (rate(catraca_audit_recorded_total[30d]))
+            + sum by (job) (rate(catraca_audit_dropped_total[30d]))
+            + sum by (job) (rate(catraca_audit_failed_total[30d]))
+            + sum by (job) (rate(catraca_records_dropped_total[30d]))
+          )
+      # leak-processing: leaked-key reports done (the key was found and its
+      # key_leak decided, or the token is not a key) within 5 minutes of
+      # being queued, out of those done and those given up. A few reports a
+      # month are too few for a burn rate; the alerts below watch the queue.
+      - record: catraca:slo_errors:ratio_rate30d
+        labels: {slo: leak-processing}
+        expr: |
+          1 - (
+            sum by (job) (rate(catraca_secret_scanning_report_latency_seconds_bucket{outcome=~"leaked|not_found", le=~`300(\.0)?`}[30d]))
+            / sum by (job) (rate(catraca_secret_scanning_report_latency_seconds_count[30d]))
+          )
+
+      - record: catraca:slo_error_budget_remaining:ratio30d
+        expr: |
+          1 - catraca:slo_errors:ratio_rate30d / on (slo) group_left () (1 - catraca:slo_objective:ratio)
+
+  # Latency percentiles for dashboards: what the slow requests, decisions
+  # and store calls take.
+  - name: catraca-latency
+    rules:
+      - record: job_route:catraca_http_request_duration_seconds:p99_rate5m
+        expr: |
+          histogram_quantile(0.99, sum by (job, route, le) (rate(catraca_http_request_duration_seconds_bucket{route=~"POST /v1/.*"}[5m])))
+      - record: job:catraca_decision_duration_seconds:p99_rate5m
+        expr: |
+          histogram_quantile(0.99, sum by (job, le) (rate(catraca_decision_duration_seconds_bucket[5m])))
+      - record: job_call:catraca_store_call_duration_seconds:p99_rate5m
+        expr: |
+          histogram_quantile(0.99, sum by (job, call, le) (rate(catraca_store_call_duration_seconds_bucket{result="ok"}[5m])))
+
+  # Burn-rate alerts, one name for every objective: slo says which, and
+  # long_window which pair of windows. An objective whose budget burns
+  # fast pages; one that burns slowly opens a ticket.
+  - name: catraca-slo-alerts
+    rules:
+      - alert: CatracaErrorBudgetBurn
+        expr: |
+          catraca:slo_errors:ratio_rate1h{slo="decide-availability"} > (14.4 * 0.001)
+          and catraca:slo_errors:ratio_rate5m{slo="decide-availability"} > (14.4 * 0.001)
+        labels: {severity: page, long_window: 1h, slo: decide-availability}
+        annotations: &availability
+          summary: "Catraca is failing decisions: more than {{ $value | humanizePercentage }} of POST /v1/decide and /v1/events answered 5xx"
+          description: "The decide-availability error budget (99.9% over 30 days) is burning. Look for 503 no_ruleset (a ruleset that does not load), unavailable (key_leak events the store did not take) and panics in the log."
+          runbook_url: https://github.com/guilhermebsantiago/catraca/blob/main/docs/slo.md#decide-availability
+      - alert: CatracaErrorBudgetBurn
+        expr: |
+          catraca:slo_errors:ratio_rate6h{slo="decide-availability"} > (6 * 0.001)
+          and catraca:slo_errors:ratio_rate30m{slo="decide-availability"} > (6 * 0.001)
+        labels: {severity: page, long_window: 6h, slo: decide-availability}
+        annotations: *availability
+      - alert: CatracaErrorBudgetBurn
+        expr: |
+          catraca:slo_errors:ratio_rate3d{slo="decide-availability"} > 0.001
+          and catraca:slo_errors:ratio_rate6h{slo="decide-availability"} > 0.001
+        labels: {severity: ticket, long_window: 3d, slo: decide-availability}
+        annotations: *availability
+
+      - alert: CatracaErrorBudgetBurn
+        expr: |
+          catraca:slo_errors:ratio_rate1h{slo="decide-latency"} > (14.4 * 0.01)
+          and catraca:slo_errors:ratio_rate5m{slo="decide-latency"} > (14.4 * 0.01)
+        labels: {severity: page, long_window: 1h, slo: decide-latency}
+        annotations: &latency
+          summary: "Catraca is slow to decide: {{ $value | humanizePercentage }} of POST /v1/decide took more than 25 ms"
+          description: "The decide-latency error budget (99% within 25 ms over 30 days) is burning. The store is bounded by engine.deadline, so look at CPU, GC and the outbox (engine.dispatch_timeout): job_call:catraca_store_call_duration_seconds:p99_rate5m and job:catraca_decision_duration_seconds:p99_rate5m."
+          runbook_url: https://github.com/guilhermebsantiago/catraca/blob/main/docs/slo.md#decide-latency
+      - alert: CatracaErrorBudgetBurn
+        expr: |
+          catraca:slo_errors:ratio_rate6h{slo="decide-latency"} > (6 * 0.01)
+          and catraca:slo_errors:ratio_rate30m{slo="decide-latency"} > (6 * 0.01)
+        labels: {severity: page, long_window: 6h, slo: decide-latency}
+        annotations: *latency
+      - alert: CatracaErrorBudgetBurn
+        expr: |
+          catraca:slo_errors:ratio_rate3d{slo="decide-latency"} > 0.01
+          and catraca:slo_errors:ratio_rate6h{slo="decide-latency"} > 0.01
+        labels: {severity: ticket, long_window: 3d, slo: decide-latency}
+        annotations: *latency
+
+      - alert: CatracaErrorBudgetBurn
+        expr: |
+          catraca:slo_errors:ratio_rate1h{slo="decide-completeness"} > (14.4 * 0.005)
+          and catraca:slo_errors:ratio_rate5m{slo="decide-completeness"} > (14.4 * 0.005)
+        labels: {severity: page, long_window: 1h, slo: decide-completeness}
+        annotations: &completeness
+          summary: "Catraca is deciding without its signals: {{ $value | humanizePercentage }} of decisions are degraded"
+          description: "The decide-completeness error budget (99.5% over 30 days) is burning: detection is down while sends go on. Redis is down (CatracaDependencyDown, CatracaStoreBreakerOpen), slower than engine.deadline, or past its capacity (catraca_admission_shed_total)."
+          runbook_url: https://github.com/guilhermebsantiago/catraca/blob/main/docs/slo.md#decide-completeness
+      - alert: CatracaErrorBudgetBurn
+        expr: |
+          catraca:slo_errors:ratio_rate6h{slo="decide-completeness"} > (6 * 0.005)
+          and catraca:slo_errors:ratio_rate30m{slo="decide-completeness"} > (6 * 0.005)
+        labels: {severity: page, long_window: 6h, slo: decide-completeness}
+        annotations: *completeness
+      - alert: CatracaErrorBudgetBurn
+        expr: |
+          catraca:slo_errors:ratio_rate3d{slo="decide-completeness"} > 0.005
+          and catraca:slo_errors:ratio_rate6h{slo="decide-completeness"} > 0.005
+        labels: {severity: ticket, long_window: 3d, slo: decide-completeness}
+        annotations: *completeness
+
+      - alert: CatracaErrorBudgetBurn
+        expr: |
+          catraca:slo_errors:ratio_rate1h{slo="feedback-acceptance"} > (14.4 * 0.005)
+          and catraca:slo_errors:ratio_rate5m{slo="feedback-acceptance"} > (14.4 * 0.005)
+        labels: {severity: page, long_window: 1h, slo: feedback-acceptance}
+        annotations: &feedback
+          summary: "Catraca is turning feedback away: {{ $value | humanizePercentage }} of feedback events were not counted"
+          description: "The feedback-acceptance error budget (99.5% over 30 days) is burning. Providers retry, but not forever: bounces and complaints that never count hide abuse. Look at catraca_feedback_outcomes_total (uncounted means the store failed) and catraca_admission_shed_total on the feedback routes."
+          runbook_url: https://github.com/guilhermebsantiago/catraca/blob/main/docs/slo.md#feedback-acceptance
+      - alert: CatracaErrorBudgetBurn
+        expr: |
+          catraca:slo_errors:ratio_rate6h{slo="feedback-acceptance"} > (6 * 0.005)
+          and catraca:slo_errors:ratio_rate30m{slo="feedback-acceptance"} > (6 * 0.005)
+        labels: {severity: page, long_window: 6h, slo: feedback-acceptance}
+        annotations: *feedback
+      - alert: CatracaErrorBudgetBurn
+        expr: |
+          catraca:slo_errors:ratio_rate3d{slo="feedback-acceptance"} > 0.005
+          and catraca:slo_errors:ratio_rate6h{slo="feedback-acceptance"} > 0.005
+        labels: {severity: ticket, long_window: 3d, slo: feedback-acceptance}
+        annotations: *feedback
+
+      # Effects are few, a handful an hour, so an hour holds too few for a
+      # fast burn rate to mean much; the backlog alerts below page instead.
+      - alert: CatracaErrorBudgetBurn
+        expr: |
+          catraca:slo_errors:ratio_rate3d{slo="webhook-freshness"} > 0.01
+          and catraca:slo_errors:ratio_rate6h{slo="webhook-freshness"} > 0.01
+        labels: {severity: ticket, long_window: 3d, slo: webhook-freshness}
+        annotations:
+          summary: "Catraca's effects are late: {{ $value | humanizePercentage }} of webhook deliveries took more than a minute or were given up"
+          description: "The webhook-freshness error budget (99% within 60 s over 30 days) is burning. Look at catraca_hooks_attempts_total by hook and outcome, and at the receivers' status codes in the log."
+          runbook_url: https://github.com/guilhermebsantiago/catraca/blob/main/docs/slo.md#webhook-freshness
+
+      - alert: CatracaErrorBudgetBurn
+        expr: |
+          catraca:slo_errors:ratio_rate1h{slo="audit-completeness"} > (14.4 * 0.001)
+          and catraca:slo_errors:ratio_rate5m{slo="audit-completeness"} > (14.4 * 0.001)
+        labels: {severity: page, long_window: 1h, slo: audit-completeness}
+        annotations: &audit
+          summary: "Catraca is losing audit records: {{ $value | humanizePercentage }} of decisions were not written"
+          description: "The audit-completeness error budget (99.9% over 30 days) is burning. Decisions go on, but they cannot be read, labeled or counted by the precision gate. Look at catraca_dependency_up{dependency=\"audit\"}, catraca_audit_write_duration_seconds and catraca_audit_queued."
+          runbook_url: https://github.com/guilhermebsantiago/catraca/blob/main/docs/slo.md#audit-completeness
+      - alert: CatracaErrorBudgetBurn
+        expr: |
+          catraca:slo_errors:ratio_rate6h{slo="audit-completeness"} > (6 * 0.001)
+          and catraca:slo_errors:ratio_rate30m{slo="audit-completeness"} > (6 * 0.001)
+        labels: {severity: page, long_window: 6h, slo: audit-completeness}
+        annotations: *audit
+      - alert: CatracaErrorBudgetBurn
+        expr: |
+          catraca:slo_errors:ratio_rate3d{slo="audit-completeness"} > 0.001
+          and catraca:slo_errors:ratio_rate6h{slo="audit-completeness"} > 0.001
+        labels: {severity: ticket, long_window: 3d, slo: audit-completeness}
+        annotations: *audit
+
+  # Alerts on the causes: what is wrong, whichever objective it costs.
+  - name: catraca-cause-alerts
+    rules:
+      # The closed state stays 0 while the breaker cycles between open and
+      # half-open, so a scrape in between does not reset the wait.
+      - alert: CatracaStoreBreakerOpen
+        expr: catraca_store_breaker_state{state="closed"} == 0
+        for: 1m
+        labels: {severity: ticket}
+        annotations:
+          summary: "The store breaker of {{ $labels.instance }} has been open for a minute: it decides without Redis"
+          description: "Store calls kept failing or missing engine.deadline, so decisions skip the store and are degraded (rules follow on_error; known leaked keys stay blocked). It closes by itself once probes succeed."
+          runbook_url: https://github.com/guilhermebsantiago/catraca/blob/main/docs/slo.md#cause-alerts
+
+      - alert: CatracaDependencyDown
+        expr: min by (job, dependency) (catraca_dependency_up) == 0
+        for: 2m
+        labels: {severity: ticket}
+        annotations:
+          summary: "Catraca cannot reach its {{ $labels.dependency }} for 2 minutes"
+          description: "store is Redis: decisions are degraded. audit is the audit database: decisions are not written, reads and labels fail. The log says why, once when it went down."
+          runbook_url: https://github.com/guilhermebsantiago/catraca/blob/main/docs/slo.md#cause-alerts
+
+      # Every instance counts the whole outbox: max, not sum.
+      - alert: CatracaHooksBacklogStale
+        expr: max by (job, hook) (catraca_hooks_oldest_pending_age_seconds) > 600
+        for: 5m
+        labels: {severity: page}
+        annotations:
+          summary: "The oldest {{ $labels.hook }} delivery has waited {{ $value | humanizeDuration }}"
+          description: "An effect such as revoking a key is late. The receiver is failing (catraca_hooks_attempts_total{outcome=\"retry\"}) or the workers cannot keep up (catraca_hooks_pending_due). catraca outbox list shows the deliveries."
+          runbook_url: https://github.com/guilhermebsantiago/catraca/blob/main/docs/slo.md#cause-alerts
+
+      - alert: CatracaHooksDeadDeliveries
+        expr: sum by (job) (increase(catraca_hooks_dead_total[15m])) > 0
+        labels: {severity: ticket}
+        annotations:
+          summary: "Effect webhook deliveries were given up"
+          description: "Their effects were not carried out. Fix the receiver, then requeue them with catraca outbox retry."
+          runbook_url: https://github.com/guilhermebsantiago/catraca/blob/main/docs/slo.md#cause-alerts
+
+      - alert: CatracaHooksEffectsLost
+        expr: sum by (job) (increase(catraca_hooks_enqueue_errors_total[15m])) > 0
+        labels: {severity: page}
+        annotations:
+          summary: "Effects could not be written to the outbox and are lost"
+          description: "Nothing will retry them. The log names each one (effects lost); carry them out by hand. The audit database is failing or too slow."
+          runbook_url: https://github.com/guilhermebsantiago/catraca/blob/main/docs/slo.md#cause-alerts
+
+      # The queue is shared: every instance reads the same numbers.
+      - alert: CatracaLeakReportsDead
+        expr: max by (job) (catraca_secret_scanning_reports{status="dead"}) > 0
+        labels: {severity: page}
+        annotations:
+          summary: "{{ $value }} leaked-key reports were given up: their keys may still work"
+          description: "Fix the resolver or the store, then requeue them with catraca secretscan retry --dead."
+          runbook_url: https://github.com/guilhermebsantiago/catraca/blob/main/docs/slo.md#leak-processing
+
+      - alert: CatracaLeakReportsStale
+        expr: max by (job) (catraca_secret_scanning_oldest_pending_seconds) > 600
+        for: 2m
+        labels: {severity: page}
+        annotations:
+          summary: "A leaked-key report has waited {{ $value | humanizeDuration }}"
+          description: "Leaked keys are not being revoked. The resolver or the store keeps failing: see the retry outcome of catraca_secret_scanning_outcomes_total and the log."
+          runbook_url: https://github.com/guilhermebsantiago/catraca/blob/main/docs/slo.md#leak-processing
+
+      - alert: CatracaAuditDecisionsLost
+        expr: |
+          sum by (job) (
+            increase(catraca_audit_dropped_total[10m])
+            + increase(catraca_audit_failed_total[10m])
+            + increase(catraca_records_dropped_total[10m])
+          ) > 0
+        labels: {severity: ticket}
+        annotations:
+          summary: "Decisions were left out of the audit log"
+          description: "Dropped (the queue or the buffer was full) or failed (the database was down or refused them). The log says which, with the count."
+          runbook_url: https://github.com/guilhermebsantiago/catraca/blob/main/docs/slo.md#audit-completeness
+
+      - alert: CatracaAuditRetentionFailing
+        expr: sum by (job) (increase(catraca_audit_retention_errors_total[1h])) > 0
+        labels: {severity: ticket}
+        annotations:
+          summary: "Audit retention runs are failing; the audit database keeps growing"
+          runbook_url: https://github.com/guilhermebsantiago/catraca/blob/main/docs/audit.md#retention
+
+      - alert: CatracaRulesetLoadFailed
+        expr: sum by (job, instance) (increase(catraca_ruleset_loads_total{result="error"}[10m])) > 0
+        labels: {severity: ticket}
+        annotations:
+          summary: "A ruleset failed to load on {{ $labels.instance }}; it still decides with the previous one"
+          runbook_url: https://github.com/guilhermebsantiago/catraca/blob/main/docs/rules.md
+
+      # A server whose ruleset never loaded is not ready and answers 503.
+      - alert: CatracaNoRuleset
+        expr: catraca_build_info unless on (job, instance) catraca_ruleset_info
+        for: 5m
+        labels: {severity: ticket}
+        annotations:
+          summary: "{{ $labels.instance }} has had no ruleset for 5 minutes"
+          description: "Fix the ruleset file, then POST /v1/rules/reload or send SIGHUP."
+          runbook_url: https://github.com/guilhermebsantiago/catraca/blob/main/docs/slo.md#cause-alerts
+
+      # Rules the ruleset newly enforces that have not passed the precision
+      # gate: in shadow mode with gate.on_load: enforce, enforcing unproven
+      # with warn. A rule waiting for labels may take a while, hence the for.
+      - alert: CatracaRulesHeldByGate
+        expr: sum by (job, instance) (catraca_ruleset_gate_failures) > 0
+        for: 10m
+        labels: {severity: ticket}
+        annotations:
+          summary: "Rules newly enforced on {{ $labels.instance }} have not passed the precision gate"
+          description: "/readyz?verbose lists them and why. Label their matches until they pass, or give them an override, then reload."
+          runbook_url: https://github.com/guilhermebsantiago/catraca/blob/main/docs/config.md#gate
