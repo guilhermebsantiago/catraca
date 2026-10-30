@@ -200,24 +200,25 @@ type Server struct {
 	mux *http.ServeMux
 	// admin serves health and metrics, which mux serves too unless
 	// Options.SeparateAdmin is set.
-	admin     *http.ServeMux
-	decider   Decider
-	rules     RuleSource
-	reloadFn  func() (*rules.Ruleset, error)
-	rulesetFn func() RulesetStatus
-	audit     AuditLog
-	// accountStates is nil when the account state routes are off.
-	accountStates AccountStates
-	gate          precision.Gate
-	tokens        []tokenHash
-	checks        []Check
-	dependencies  func() map[string]DependencyStatus
-	log           *slog.Logger
-	maxBody       int64
-	now           func() time.Time
-	duration      *prometheus.HistogramVec
+	admin        *http.ServeMux
+	decider      Decider
+	rules        RuleSource
+	reloadFn     func() (*rules.Ruleset, error)
+	rulesetFn    func() RulesetStatus
+	audit        AuditLog
+	gate         precision.Gate
+	tokens       []tokenHash
+	checks       []Check
+	dependencies func() map[string]DependencyStatus
+	log          *slog.Logger
+	maxBody      int64
+	now          func() time.Time
+	duration     *prometheus.HistogramVec
 	// tracer is nil with tracing off.
 	tracer trace.Tracer
+
+	// accountStates serves the account state routes; nil turns them off.
+	accountStates AccountStates
 
 	// decisions and feedback hold the admission slots; see Admission.
 	decisions, feedback *limiter
@@ -244,20 +245,21 @@ func New(opts Options) (*Server, error) {
 		return nil, errors.New("api: at least one API token is required")
 	}
 	s := &Server{
-		mux:           http.NewServeMux(),
-		admin:         http.NewServeMux(),
-		decider:       opts.Decider,
-		rules:         opts.Rules,
-		reloadFn:      opts.Reload,
-		rulesetFn:     opts.Ruleset,
-		audit:         opts.Audit,
+		mux:          http.NewServeMux(),
+		admin:        http.NewServeMux(),
+		decider:      opts.Decider,
+		rules:        opts.Rules,
+		reloadFn:     opts.Reload,
+		rulesetFn:    opts.Ruleset,
+		audit:        opts.Audit,
+		gate:         opts.Gate,
+		checks:       opts.Checks,
+		dependencies: opts.Dependencies,
+		log:          opts.Logger,
+		maxBody:      opts.MaxBodyBytes,
+		now:          opts.Now,
+
 		accountStates: opts.AccountStates,
-		gate:          opts.Gate,
-		checks:        opts.Checks,
-		dependencies:  opts.Dependencies,
-		log:           opts.Logger,
-		maxBody:       opts.MaxBodyBytes,
-		now:           opts.Now,
 	}
 	for _, t := range opts.Tokens {
 		if t.Value == "" {
