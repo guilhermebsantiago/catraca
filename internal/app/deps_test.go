@@ -103,7 +103,9 @@ func TestDependencyMonitor(t *testing.T) {
 		return s["fast"].Status == "ok" && s["flaky"].Status == "unavailable" && s["hung"].Status == "timeout"
 	})
 	s := m.statuses()
-	if d := s["hung"].DurationMS; d < 200 || d > 10_000 {
+	// A little under the timeout is fine: the wall clock of some systems
+	// ticks every few milliseconds, and it measured 199.88ms once.
+	if d := s["hung"].DurationMS; d < 190 || d > 10_000 {
 		t.Errorf("hung reported after %vms, want about the 200ms timeout", d)
 	}
 	if strings.Contains(s["flaky"].Status, "10.0.0.7") {
