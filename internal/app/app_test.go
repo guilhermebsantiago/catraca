@@ -32,6 +32,7 @@ import (
 	"github.com/guilhermebsantiago/catraca/internal/audit"
 	"github.com/guilhermebsantiago/catraca/internal/config"
 	"github.com/guilhermebsantiago/catraca/internal/decision"
+	"github.com/guilhermebsantiago/catraca/internal/engine"
 	"github.com/guilhermebsantiago/catraca/internal/event"
 	"github.com/guilhermebsantiago/catraca/internal/store/storetest"
 	"github.com/guilhermebsantiago/catraca/signature"
@@ -391,6 +392,34 @@ func TestDecideActions(t *testing.T) {
 	}
 	if r := h.do("GET", "/v1/decisions/nope", token, nil); r.status != http.StatusNotFound || r.errorCode(t) != "not_found" {
 		t.Errorf("unknown decision: %d %s", r.status, r.body)
+	}
+}
+
+// TestExplainCountsNothingAgain explains through the whole server: the
+// signals of a decided event, sent again with its id, without counting it
+// again.
+func TestExplainCountsNothingAgain(t *testing.T) {
+	t.Parallel()
+	h := newHarness(t, options{})
+	for _, id := range []string{"m1", "m2", "m3"} {
+		if d, _ := h.decide(send("acct_explain", "hi@explain.example", "id", id)); d.Action != decision.Allow {
+			t.Fatalf("send %s: %+v", id, d)
+		}
+	}
+	for range 3 {
+		r := h.do("POST", "/v1/rules/explain?observe=true", token, send("acct_explain", "hi@explain.example", "id", "m3"))
+		if r.status != http.StatusOK {
+			t.Fatalf("explain: %d %s", r.status, r.body)
+		}
+		var x engine.Explanation
+		r.json(t, &x)
+		if !x.Observed || x.Counted || !x.Duplicate || x.Signals.Account["sends_1m"] != 3.0 || x.Action != decision.Allow {
+			t.Errorf("explanation of a decided send: %s", r.body)
+		}
+	}
+	// Three sends counted, not six: the fourth is the first over the limit.
+	if d, _ := h.decide(send("acct_explain", "hi@explain.example", "id", "m4")); d.Action != decision.Throttle {
+		t.Errorf("fourth send after the explanations: %+v", d)
 	}
 }
 

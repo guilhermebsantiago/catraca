@@ -18,6 +18,8 @@ type Explainer interface {
 	Explain(ctx context.Context, ev event.Event, observe bool) (engine.Explanation, error)
 }
 
+var _ Explainer = (*engine.Engine)(nil)
+
 // explain answers POST /v1/rules/explain?observe=: the event's signals and
 // every rule's result. It takes no admission slot: without observe it costs
 // no store call, and with it one, as a decision does.
