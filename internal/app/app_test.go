@@ -1599,3 +1599,78 @@ func (b *syncBuffer) String() string {
 	defer b.mu.Unlock()
 	return b.buf.String()
 }
+
+const accountStateRules = `version: 1
+defaults:
+  mode: enforce
+  on_error: open
+rules:
+  - id: account-suspended
+    when: event.type == "send" && event.account_id != "" && account.state == "suspended"
+    action: block
+    reason: The account is suspended
+  - id: account-review
+    when: event.type == "send" && event.account_id != "" && account.state == "review"
+    action: hold
+    reason: The account is under review
+  - id: burst
+    when: event.type == "send" && account.sends_1m > 3 && account.state != "trusted"
+    action: throttle
+    retry_after: 30s
+    reason: Sending too fast
+`
+
+// TestAccountStateChangesDecisions checks that a state set through the API
+// decides the account's next sends, on every replica sharing the store and
+// after a restart, until it is reset.
+func TestAccountStateChangesDecisions(t *testing.T) {
+	t.Parallel()
+	mr := storetest.Miniredis(t)
+	url := "redis://" + mr.Addr() + "/0?read_timeout=1m"
+	h := newHarness(t, options{rules: accountStateRules, redisURL: url})
+	if d, _ := h.decide(send("acct_st", "news@st.example")); d.Action != decision.Allow {
+		t.Fatalf("send before any state: %+v", d)
+	}
+	r := h.do("PUT", "/v1/accounts/acct_st/state", token, map[string]any{"state": "suspended", "reason": "fraud"})
+	if r.status != http.StatusOK {
+		t.Fatalf("PUT suspended: %d %s", r.status, r.body)
+	}
+	if d, _ := h.decide(send("acct_st", "news@st.example")); d.Action != decision.Block {
+		t.Errorf("send from a suspended account: %+v", d)
+	}
+	// Another replica, or this one restarted, reads the state from Redis.
+	other := newHarness(t, options{rules: accountStateRules, redisURL: url})
+	if d, _ := other.decide(send("acct_st", "news@st.example")); d.Action != decision.Block {
+		t.Errorf("send from a suspended account on another replica: %+v", d)
+	}
+	r = other.do("GET", "/v1/accounts/acct_st/state", token, nil)
+	var st api.AccountStateResponse
+	r.json(t, &st)
+	if r.status != http.StatusOK || st.State != "suspended" || st.Reason != "fraud" || st.SetBy == "" {
+		t.Errorf("GET on another replica: %d %s", r.status, r.body)
+	}
+
+	if r := h.do("PUT", "/v1/accounts/acct_st/state", token, map[string]any{"state": "review"}); r.status != http.StatusOK {
+		t.Fatalf("PUT review: %d %s", r.status, r.body)
+	}
+	if d, _ := h.decide(send("acct_st", "news@st.example")); d.Action != decision.Hold {
+		t.Errorf("send from an account under review: %+v", d)
+	}
+	if r := h.do("PUT", "/v1/accounts/acct_st/state", token, map[string]any{"state": "trusted"}); r.status != http.StatusOK {
+		t.Fatalf("PUT trusted: %d %s", r.status, r.body)
+	}
+	for range 3 {
+		if d, _ := h.decide(send("acct_st", "news@st.example")); d.Action != decision.Allow {
+			t.Errorf("send from a trusted account bursting: %+v", d)
+		}
+	}
+	if r := h.do("DELETE", "/v1/accounts/acct_st/state", token, nil); r.status != http.StatusOK {
+		t.Fatalf("DELETE: %d %s", r.status, r.body)
+	}
+	if d, _ := h.decide(send("acct_st", "news@st.example")); d.Action != decision.Throttle {
+		t.Errorf("burst after the state was reset: %+v", d)
+	}
+	if !strings.Contains(h.logs.String(), `"msg":"account state changed"`) {
+		t.Errorf("no log of the change:\n%s", h.logs.String())
+	}
+}

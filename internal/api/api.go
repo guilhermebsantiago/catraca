@@ -152,6 +152,9 @@ type Options struct {
 	// error the current ruleset must stay in place. Nil disables the route.
 	Reload func() (*rules.Ruleset, error)
 	Audit  AuditLog
+	// AccountStates serves the /v1/accounts/{id}/state routes. Nil
+	// answers them 404 not_configured.
+	AccountStates AccountStates
 	// Gate is the precision gate GET /v1/stats/rules evaluates rules
 	// against. Zero fields take the defaults.
 	Gate   precision.Gate
@@ -220,6 +223,9 @@ type Server struct {
 	// tracer is nil with tracing off.
 	tracer trace.Tracer
 
+	// accountStates serves the account state routes; nil turns them off.
+	accountStates AccountStates
+
 	// decisions and feedback hold the admission slots; see Admission.
 	decisions, feedback *limiter
 	admission           admissionMetrics
@@ -260,6 +266,8 @@ func New(opts Options) (*Server, error) {
 		maxBody:      opts.MaxBodyBytes,
 		now:          opts.Now,
 		routeScopes:  map[string]Scope{},
+
+		accountStates: opts.AccountStates,
 	}
 	for _, t := range opts.Tokens {
 		if t.Value == "" {
@@ -303,6 +311,11 @@ func New(opts Options) (*Server, error) {
 	s.v1("POST /v1/rules/reload", ScopeAdmin, s.reload)
 	s.v1("GET /v1/rules/{id}/review", ScopeRead, s.review)
 	s.v1("GET /v1/stats/rules", ScopeRead, s.ruleStats)
+	// Setting an account's state changes how every later send of it is
+	// decided, as a ruleset reload does, so it takes the admin scope.
+	s.v1("GET /v1/accounts/{id}/state", ScopeRead, s.withAccountStates(s.getAccountState))
+	s.v1("PUT /v1/accounts/{id}/state", ScopeAdmin, s.withAccountStates(s.putAccountState))
+	s.v1("DELETE /v1/accounts/{id}/state", ScopeAdmin, s.withAccountStates(s.deleteAccountState))
 
 	s.handle(s.mux, routeFeedback, provider("generic feedback", "feedback.generic", s.admitFeedback(routeFeedback, opts.GenericFeedback)))
 	s.handle(s.mux, routeFeedbackSES, provider("SES feedback", "feedback.ses", s.admitFeedback(routeFeedbackSES, opts.SESFeedback)))
@@ -373,7 +386,7 @@ func provider(name, section string, h http.Handler) http.Handler {
 func (s *Server) fallback(mux *http.ServeMux) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		var allowed []string
-		for _, m := range []string{http.MethodGet, http.MethodPost} {
+		for _, m := range []string{http.MethodGet, http.MethodPost, http.MethodPut, http.MethodDelete} {
 			if m == r.Method {
 				continue
 			}

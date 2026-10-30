@@ -392,6 +392,41 @@ var contractCases = []struct {
 		}
 	}},
 
+	{"delete", func(t *testing.T, s backend) {
+		// Deleting a missing key is not an error.
+		run(t, s, func(b *Batch) { b.Delete("v") })
+		var before, after *StringResult
+		run(t, s, func(b *Batch) {
+			b.Set("v", "one", time.Hour)
+			b.Set("other", "two", 0)
+			before = b.Get("v")
+			b.Delete("v")
+			after = b.Get("v")
+		})
+		if !before.Found() || before.Val() != "one" {
+			t.Errorf("Get before Delete = %q, %v; want \"one\", true", before.Val(), before.Found())
+		}
+		if after.Found() || after.Val() != "" {
+			t.Errorf("Get after Delete in the batch = %q, %v; want \"\", false", after.Val(), after.Found())
+		}
+		if v, ok := get(t, s, "v"); ok {
+			t.Errorf("Get after Delete = %q, true; want not found", v)
+		}
+		if v, ok := get(t, s, "other"); !ok || v != "two" {
+			t.Errorf("Get of another key = %q, %v; want \"two\", true", v, ok)
+		}
+		// A value set again after a delete is found, with its new ttl.
+		run(t, s, func(b *Batch) {
+			b.Set("v", "three", time.Minute)
+			b.Delete("v")
+			b.Set("v", "four", 0)
+		})
+		s.advance(time.Hour)
+		if v, ok := get(t, s, "v"); !ok || v != "four" {
+			t.Errorf("Get after Delete and Set = %q, %v; want \"four\", true", v, ok)
+		}
+	}},
+
 	{"seen within", func(t *testing.T, s backend) {
 		const lookback = 30 * 24 * time.Hour
 		if seenWithin(t, s, "s", "1.2.3.4", lookback, t0) {
@@ -612,6 +647,7 @@ var contractCases = []struct {
 			{"negative ttl", func(b *Batch) { b.Set("k", "v", -time.Second) }, "ttl"},
 			{"tiny ttl", func(b *Batch) { b.FirstSeen("k", t0, time.Microsecond) }, "ttl"},
 			{"empty get key", func(b *Batch) { b.Get("") }, "empty key"},
+			{"empty delete key", func(b *Batch) { b.Delete("") }, "empty key"},
 			{"empty dedupe id", func(b *Batch) { b.Dedupe("", t0, time.Hour) }, "empty key"},
 			{"zero dedupe ttl", func(b *Batch) { b.Dedupe("id", t0, 0) }, "ttl"},
 			{"two dedupe ids", func(b *Batch) {

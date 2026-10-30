@@ -22,6 +22,7 @@ import (
 //	F key ms ttl                      first seen: keep the smaller of ms and the record
 //	V key value ttl                   value: set
 //	G key                             value: get, or nil
+//	X key                             value: delete
 //
 // It returns the result of each C, D, S, F and G, in order, then 1 when the
 // Dedupe key existed, so the I operations were skipped, and 0 otherwise. A
@@ -230,6 +231,9 @@ while i <= n do
       i = i + 4
     elseif op == 'G' then
       out[#out + 1] = call('GET', k)
+      i = i + 2
+    elseif op == 'X' then
+      call('DEL', k)
       i = i + 2
     else
       error('unknown operation ' .. tostring(op))

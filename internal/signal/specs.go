@@ -67,6 +67,7 @@ var specs = []Spec{
 	{"account", "ip_sends_24h", "int"},
 	{"account", "ip_sends_7d", "int"},
 	{"account", "recent_ip", "bool"},
+	{"account", "state", "string"},
 
 	{"key", "sends_1m", "int"},
 	{"key", "sends_1h", "int"},

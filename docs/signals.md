@@ -57,6 +57,7 @@ A rule that reads an absent signal fails, and its `on_error` policy decides:
 - `domain` is present when `from` has a domain.
 - `account.new_ip`, `account.ip_sends_24h`, `account.ip_sends_7d`,
   `account.recent_ip` and `key.new_ip` are absent when the event has no `ip`.
+- `account.state` is absent when the stored state cannot be read.
 - When the counter store fails or does not answer within the deadline, only
   `event` is present and the decision is marked degraded, with one
   exception: for a key this Catraca process knows was leaked, `key` holds
@@ -165,6 +166,7 @@ The account that sent the event.
 | `ip_sends_24h` | int | 24 h | send events of the account from this IP |
 | `ip_sends_7d` | int | 7 d | send events of the account from this IP |
 | `recent_ip` | bool | 24 h, 7 d | true when no send event of the account came from this IP between 24 hours and 7 days ago: `ip_sends_7d == ip_sends_24h` |
+| `state` | string | | the state an operator set for the account: `active` (the default), `review`, `suspended` or `trusted`; see Account states below |
 
 ### Feedback rates
 
@@ -224,6 +226,28 @@ The edges follow the buckets of the two windows (see Windows above):
   looks recent every week.
 - A login or other non-send event reads the counts without adding to them,
   so an IP the account has never sent from reads 0, 0 and recent.
+
+### Account states
+
+`account.state` is what an operator decided about the account, not something
+Catraca measures. It is set with `PUT /v1/accounts/{id}/state` and reset with
+`DELETE` on the same route (see [api.md](api.md#account-states)); no event
+changes it. A state set with `until` reverts to `active` at that time, by the
+wall clock, since the store forgets it then.
+
+| state | meaning | default ruleset |
+|---|---|---|
+| `active` | no state is set, it expired or it was reset | |
+| `review` | a person should look at the account's sends before they go out | `account-review` holds every send |
+| `suspended` | the account must not send | `account-suspended` blocks every send |
+| `trusted` | the operator vouches for the account, such as an enterprise tenant whose volume looks like abuse | the volume and reputation heuristics skip it |
+
+The state is read in the same store round trip as every other account
+signal, so it costs no extra call. It is the state now, not as of the
+event's time: `catraca replay` reads today's states for old events. While
+the store is down `account` is absent, so the state rules follow their
+`on_error`, which is `open` in the default ruleset: a suspended account can
+send during a store outage, as a burst can.
 
 ## `key`
 
@@ -286,9 +310,15 @@ rules:
   - id: complaint-rate
     when: >
       (account.recipients_24h >= 1000 || account.sends_24h >= 1000) &&
-      account.complaint_rate_24h > 0.003
+      account.complaint_rate_24h > 0.003 &&
+      account.state != "trusted"
     action: flag
     reason: Complaint rate above 0.3% over the last day
+
+  - id: suspended-account
+    when: event.type == "send" && account.state == "suspended"
+    action: block
+    reason: The account is suspended
 
   - id: signup-farm
     when: event.type == "account" && event.account_action == "signup" && ip.signups_24h > 5

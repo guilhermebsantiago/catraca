@@ -65,9 +65,9 @@ Catraca sits in the send path and is built on a few principles:
   Velocity, recipient spread, bounce and complaint rates, new and recent IPs,
   keys used from many places, leaked keys. [All signals](docs/signals.md).
 - **A starter ruleset** for email senders: new-account bursts, complaint and
-  hard-bounce rates, leaked keys, keys used from many IPs, account takeover
-  volume spikes, shortener links from new accounts, signup farms, recipient
-  spraying. [rules/default.yaml](rules/default.yaml)
+  hard-bounce rates, leaked keys, suspended and under-review accounts, keys
+  used from many IPs, account takeover volume spikes, shortener links from
+  new accounts, signup farms, recipient spraying. [rules/default.yaml](rules/default.yaml)
 - **Backtesting**: `catraca replay` runs a ruleset over labeled events and
   reports precision and recall per rule before anything ships.
 - **Feedback** from Amazon SES (through SNS, signature verified) and useSend,
@@ -76,6 +76,9 @@ Catraca sits in the send path and is built on a few principles:
   endpoint verifies GitHub's signature and stores each report before it
   answers, then resolves the key with your platform, blocks it and fires
   your `revoke_key` hook, retrying through outages and restarts.
+- **Account states** set through the API: suspend an account, put it
+  under review until a date, or trust an enterprise tenant past the volume
+  heuristics, without touching the ruleset. Rules read `account.state`.
 - **Audit log** in SQLite or Postgres, a review queue, labels, and
   `catraca report` / `catraca rules gate` to promote and retire rules.
 

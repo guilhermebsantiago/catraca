@@ -34,6 +34,9 @@ var scopedRoutes = []struct {
 	{"POST /v1/rules/reload", "/v1/rules/reload", "", ScopeAdmin},
 	{"GET /v1/rules/{id}/review", "/v1/rules/r1/review", "", ScopeRead},
 	{"GET /v1/stats/rules", "/v1/stats/rules", "", ScopeRead},
+	{"GET /v1/accounts/{id}/state", "/v1/accounts/a/state", "", ScopeRead},
+	{"PUT /v1/accounts/{id}/state", "/v1/accounts/a/state", `{"state":"review"}`, ScopeAdmin},
+	{"DELETE /v1/accounts/{id}/state", "/v1/accounts/a/state", "", ScopeAdmin},
 }
 
 // scopedTokens are one client per scope, one with every scope, and a token

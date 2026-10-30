@@ -105,6 +105,7 @@ Rates are `float64` in [0, 1]; counts are `int64`; ages are hours as
 | new_ip | IP not used by the account in the last 30 days |
 | ip_sends_24h, ip_sends_7d | send events of the account from this IP |
 | recent_ip | no send from this IP between 24h and 7d ago: ip_sends_7d == ip_sends_24h, so it stays true for the account's first day on the IP |
+| state | the state an operator set: active (default), review, suspended or trusted |
 
 `key` (present when the event has api_key_id):
 
@@ -121,6 +122,22 @@ key this process knows was leaked, `key` holds `leaked: true`. The catalog
 keeps a bounded in-memory set of leaked key ids, filled by `MarkLeaked`,
 `key_leak` events and store reads that see a leaked key, so a rule that
 fails open still blocks known leaked keys through an outage.
+
+Besides `key.leaked`, `account.state` is the one signal a person sets rather
+than an event: `PUT /v1/accounts/{id}/state` stores `review`, `suspended` or
+`trusted`, with an optional expiry, a reason, and the time and API token that
+set it, as one JSON value under the account's key in the counter store
+(`signal.AccountStates`). Observe reads it with a Get in the batch it already
+sends, so it costs no extra round trip: on a single Redis server it is one
+more GET inside the same script call, and on a cluster one more script call
+in the same pipeline, for the account's slot. An expiry is the value's TTL,
+so the store forgets the state when it ends, and `DELETE` removes it.
+Unlike leaked keys, states are not cached in memory: while the store is down
+`account` is absent and the state rules follow `on_error`. The starter
+ruleset blocks suspended accounts and holds those under review, enforcing
+from the start with an override, since they carry out an operator's
+decision; trusted accounts skip its volume heuristics. Changes are logged,
+not written to the audit log.
 
 `ip` (present when the event has an IP): `sends_1m`, `sends_1h`,
 `distinct_accounts_24h`, `distinct_keys_24h`, `signups_24h` (account events
@@ -343,6 +360,7 @@ scanning routes, which authenticate by signature.
 | POST /v1/rules/reload | reload the ruleset from disk |
 | GET /v1/rules/{id}/review | unlabeled matches of a rule, for reviewers |
 | GET /v1/stats/rules?since=720h | precision per rule |
+| GET, PUT, DELETE /v1/accounts/{id}/state | an account's state: read, set (optionally until a time), reset |
 | POST /v1/feedback, /v1/feedback/ses, /v1/feedback/usesend | feedback |
 | POST /v1/secret-scanning/github | GitHub partner endpoint |
 | GET /healthz, /readyz, /metrics | health and Prometheus metrics, on `server.admin_addr` when it is set |

@@ -62,6 +62,7 @@ Commands:
   replay         backtest a ruleset on labeled events
   report         print the precision of every rule, with promote and retire candidates
   label          label a decision on a running server
+  account state  print or set an account's state on a running server
   outbox list       list webhook deliveries
   outbox retry      requeue dead webhook deliveries
   outbox stats      count webhook deliveries per hook
@@ -74,8 +75,9 @@ Run "catraca <command> -h" for the arguments of a command.
 Exit codes:
   0  success
   1  a check failed: an invalid configuration or ruleset, failing fixtures,
-     rules below the gate, a label the server refused, deliveries
-     outbox retry left alone, or reports to requeue that are not dead
+     rules below the gate, a label or account state the server refused,
+     deliveries outbox retry left alone, or reports to requeue that are not
+     dead
   2  the command line is wrong
   3  the command could not run: a file, the audit database or the server
      was unavailable
@@ -126,6 +128,8 @@ func run(ctx context.Context, args []string, stdout, stderr io.Writer, lookupEnv
 		return c.report(ctx, rest)
 	case "label":
 		return c.label(ctx, rest)
+	case "account":
+		return c.group(ctx, "account", rest, map[string]command{"state": c.accountState})
 	case "outbox":
 		return c.group(ctx, "outbox", rest, map[string]command{"list": c.outboxList, "retry": c.outboxRetry, "stats": c.outboxStats})
 	case "secretscan":
@@ -145,7 +149,7 @@ type command func(ctx context.Context, args []string) int
 // group runs a subcommand of a command with subcommands, such as rules.
 func (c *cli) group(ctx context.Context, name string, args []string, subs map[string]command) int {
 	var names []string
-	for _, n := range []string{"check", "test", "gate", "list", "retry", "stats"} {
+	for _, n := range []string{"check", "test", "gate", "list", "retry", "stats", "state"} {
 		if _, ok := subs[n]; ok {
 			names = append(names, n)
 		}
