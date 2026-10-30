@@ -1,0 +1,1523 @@
+openapi: 3.1.0
+info:
+  title: Catraca HTTP API
+  version: v1
+  summary: Self-hosted anti-abuse engine for platforms that send email.
+  description: |
+    The machine-readable contract of Catraca's HTTP API. docs/api.md is the
+    source of truth for behavior; this file describes the same routes, their
+    bodies, scopes and status codes, for generating clients and checking
+    them. `internal/api/openapi_test.go` fails when a route or an error code
+    is added to the server or docs/api.md and not here, or the other way
+    round.
+
+    Every `/v1` route takes a bearer token, except the feedback and secret
+    scanning routes, which authenticate each request by its signature. Each
+    route that takes a token needs one scope, named by `x-catraca-scope` on
+    the operation. `/healthz`, `/readyz` and `/metrics` take no token.
+
+    Times are RFC 3339 strings. `retry_after` is whole seconds, rounded up,
+    the same number as the `Retry-After` header.
+  license:
+    name: Apache-2.0
+    identifier: Apache-2.0
+servers:
+  - url: http://localhost:8080
+    description: A local server on the default address.
+security:
+  - bearerToken: []
+tags:
+  - name: deciding
+    description: The send path. Scope `decide`.
+  - name: decisions
+    description: The audit log of decisions and their labels.
+  - name: rules
+    description: The ruleset, its review queue and explanations.
+  - name: stats
+    description: Precision per rule against the gate.
+  - name: accounts
+    description: Operator-set account states.
+  - name: providers
+    description: Feedback and secret scanning, authenticated by signature.
+  - name: operations
+    description: Health, readiness and metrics. No token; keep them off the public internet.
+paths:
+  /v1/decide:
+    post:
+      operationId: decide
+      summary: Decide an event, synchronously
+      description: |
+        Decides an event and answers `200` with the decision for any valid
+        event, whatever the action. Call it before each send. A throttle
+        carries `Retry-After`. When Catraca is unreachable or answers `5xx`,
+        send anyway.
+
+        Scope: `decide`.
+      tags: [deciding]
+      x-catraca-scope: decide
+      requestBody:
+        $ref: '#/components/requestBodies/Event'
+      responses:
+        '200':
+          description: The decision.
+          headers:
+            Retry-After:
+              $ref: '#/components/headers/RetryAfterThrottle'
+            X-Request-Id:
+              $ref: '#/components/headers/RequestId'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/DecisionResponse'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/InsufficientScope'
+        '413':
+          $ref: '#/components/responses/BodyTooLarge'
+        '500':
+          $ref: '#/components/responses/Internal'
+        '503':
+          $ref: '#/components/responses/Unavailable'
+  /v1/events:
+    post:
+      operationId: recordEvent
+      summary: Record an event that is not a send decision
+      description: |
+        Records account activity, feedback the platform collects itself, or
+        a key leak, through the same engine as `/v1/decide`, and answers
+        `202` with the decision. A `key_leak` or `feedback` event that could
+        not be recorded gets `503 unavailable` or `503 overloaded`: send it
+        again, with the same `id`, after `Retry-After`.
+
+        Scope: `decide`.
+      tags: [deciding]
+      x-catraca-scope: decide
+      requestBody:
+        $ref: '#/components/requestBodies/Event'
+      responses:
+        '202':
+          description: The event was recorded; the decision.
+          headers:
+            X-Request-Id:
+              $ref: '#/components/headers/RequestId'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/DecisionResponse'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/InsufficientScope'
+        '413':
+          $ref: '#/components/responses/BodyTooLarge'
+        '500':
+          $ref: '#/components/responses/Internal'
+        '503':
+          $ref: '#/components/responses/Unavailable'
+  /v1/decisions:
+    get:
+      operationId: listDecisions
+      summary: List decisions that match a filter
+      description: |
+        The decisions that match a filter, newest first, a page at a time,
+        each with its stored event. Pass `next_cursor` back unchanged, with
+        the same filters, for the next page; it is absent on the last page.
+
+        Scope: `read`.
+      tags: [decisions]
+      x-catraca-scope: read
+      parameters:
+        - name: account_id
+          in: query
+          description: The event's account.
+          schema: {type: string}
+        - name: api_key_id
+          in: query
+          description: The event's API key.
+          schema: {type: string}
+        - name: ip
+          in: query
+          description: The event's client IP, as the platform sent it.
+          schema: {type: string}
+        - name: action
+          in: query
+          description: The decision's action.
+          schema:
+            $ref: '#/components/schemas/Action'
+        - name: since
+          in: query
+          description: Decided at or after this point. A duration back from now (`24h`, `7d`), an RFC 3339 time or a date. Default all time.
+          schema: {type: string}
+          example: 7d
+        - name: until
+          in: query
+          description: Decided before this point, in the same forms as `since`. Default now.
+          schema: {type: string}
+        - name: limit
+          in: query
+          description: Page size.
+          schema: {type: integer, minimum: 1, maximum: 1000, default: 50}
+        - name: cursor
+          in: query
+          description: The `next_cursor` of the page before.
+          schema: {type: string}
+      responses:
+        '200':
+          description: A page of decisions.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/DecisionPage'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/InsufficientScope'
+        '500':
+          $ref: '#/components/responses/Internal'
+        '503':
+          $ref: '#/components/responses/Unavailable'
+  /v1/decisions/{id}:
+    get:
+      operationId: getDecision
+      summary: Get a decision, its stored event and its labels
+      description: |
+        A decision as the audit log keeps it, with its labels oldest first.
+        `404 not_found` when it is not in the log: never recorded, deleted by
+        retention, or a plain allow that sampling left out.
+
+        Scope: `read`.
+      tags: [decisions]
+      x-catraca-scope: read
+      parameters:
+        - $ref: '#/components/parameters/DecisionID'
+      responses:
+        '200':
+          description: The decision.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/DecisionEntry'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/InsufficientScope'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '500':
+          $ref: '#/components/responses/Internal'
+        '503':
+          $ref: '#/components/responses/Unavailable'
+  /v1/decisions/{id}/labels:
+    post:
+      operationId: labelDecision
+      summary: Label a decision
+      description: |
+        Labels a decision and answers `201` with the decision and all its
+        labels. A reversal of an enforced decision is a `false_positive`.
+        Catraca sets `client` to the name of the token that sent the label.
+        Sending a label again after a `503` is safe.
+
+        Scope: `label`.
+      tags: [decisions]
+      x-catraca-scope: label
+      parameters:
+        - $ref: '#/components/parameters/DecisionID'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/LabelRequest'
+            example:
+              verdict: true_positive
+              by: security@platform.example
+              reason: key confirmed public in a gist
+      responses:
+        '201':
+          description: The decision with all its labels.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/DecisionEntry'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/InsufficientScope'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '413':
+          $ref: '#/components/responses/BodyTooLarge'
+        '422':
+          $ref: '#/components/responses/Unprocessable'
+        '500':
+          $ref: '#/components/responses/Internal'
+        '503':
+          $ref: '#/components/responses/Unavailable'
+  /v1/rules:
+    get:
+      operationId: getRules
+      summary: Get the loaded ruleset
+      description: |
+        The ruleset decisions are made with, with defaults applied: its
+        version, lists and rules. `503 no_ruleset` while none is loaded.
+
+        Scope: `read`.
+      tags: [rules]
+      x-catraca-scope: read
+      responses:
+        '200':
+          description: The ruleset.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Ruleset'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/InsufficientScope'
+        '500':
+          $ref: '#/components/responses/Internal'
+        '503':
+          $ref: '#/components/responses/Unavailable'
+  /v1/rules/reload:
+    post:
+      operationId: reloadRules
+      summary: Reload the ruleset from disk
+      description: |
+        Reads the ruleset file again and swaps it in atomically. A file that
+        does not load leaves the current ruleset serving and answers
+        `422 invalid_ruleset`, with one `details` entry per problem.
+
+        Scope: `admin`.
+      tags: [rules]
+      x-catraca-scope: admin
+      responses:
+        '200':
+          description: The new ruleset is serving.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ReloadResponse'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/InsufficientScope'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '422':
+          $ref: '#/components/responses/Unprocessable'
+        '500':
+          $ref: '#/components/responses/Internal'
+  /v1/rules/explain:
+    post:
+      operationId: explainEvent
+      summary: Explain an event against the current ruleset
+      description: |
+        Answers every signal of an event and each rule's result, without
+        deciding it: nothing is written to the audit log, no hook is called
+        and no decision is counted. With `observe=true` the signals are read
+        from the store as a decision reads them, which counts the event, so
+        it needs the `decide` scope as well as `read`; a `key_leak` event is
+        then refused with `400 invalid_event`.
+
+        Scope: `read` (and `decide` with `observe=true`).
+      tags: [rules]
+      x-catraca-scope: read
+      parameters:
+        - name: observe
+          in: query
+          description: Read the signals from the store, counting the event. Needs the `decide` scope too.
+          schema: {type: boolean, default: false}
+      requestBody:
+        $ref: '#/components/requestBodies/Event'
+      responses:
+        '200':
+          description: The explanation.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Explanation'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/InsufficientScope'
+        '413':
+          $ref: '#/components/responses/BodyTooLarge'
+        '500':
+          $ref: '#/components/responses/Internal'
+        '503':
+          $ref: '#/components/responses/Unavailable'
+  /v1/rules/{id}/review:
+    get:
+      operationId: reviewRule
+      summary: Unlabeled matches of a rule, for reviewers
+      description: |
+        The most recent unlabeled matches of a rule, newest first, each with
+        its reason and stored event. The rule does not need to be in the
+        current ruleset. Label one at `/v1/decisions/{decision_id}/labels`
+        with the rule's `rule_id`.
+
+        Scope: `read`.
+      tags: [rules]
+      x-catraca-scope: read
+      parameters:
+        - name: id
+          in: path
+          required: true
+          description: The rule id.
+          schema: {type: string}
+        - name: mode
+          in: query
+          description: Only matches in this mode. Default any.
+          schema:
+            $ref: '#/components/schemas/Mode'
+        - name: limit
+          in: query
+          description: How many matches.
+          schema: {type: integer, minimum: 1, maximum: 1000, default: 50}
+      responses:
+        '200':
+          description: The review queue.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ReviewResponse'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/InsufficientScope'
+        '500':
+          $ref: '#/components/responses/Internal'
+        '503':
+          $ref: '#/components/responses/Unavailable'
+  /v1/stats/rules:
+    get:
+      operationId: ruleStats
+      summary: Precision per rule against the gate
+      description: |
+        The precision of every rule of the current ruleset over a window,
+        evaluated against the precision gate, with the shadow rules to
+        `promote` and the enforced rules to `retire`.
+
+        Scope: `read`.
+      tags: [stats]
+      x-catraca-scope: read
+      parameters:
+        - name: since
+          in: query
+          description: Where the window starts. A duration back from now (`720h`, the default), a number of days (`30d`), or an RFC 3339 time or date.
+          schema: {type: string}
+          example: 30d
+      responses:
+        '200':
+          description: The report.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/StatsResponse'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/InsufficientScope'
+        '500':
+          $ref: '#/components/responses/Internal'
+        '503':
+          $ref: '#/components/responses/Unavailable'
+  /v1/accounts/{id}/state:
+    parameters:
+      - name: id
+        in: path
+        required: true
+        description: The platform's account id, at most 256 bytes.
+        schema: {type: string, maxLength: 256}
+    get:
+      operationId: getAccountState
+      summary: Get an account's state
+      description: |
+        The account's state. An account with no state, or whose state
+        expired or was reset, is `active`. A stored state Catraca cannot
+        read answers `500 internal`. `404 not_configured` when the server
+        has no account states.
+
+        Scope: `read`.
+      tags: [accounts]
+      x-catraca-scope: read
+      responses:
+        '200':
+          description: The state.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AccountState'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/InsufficientScope'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '500':
+          $ref: '#/components/responses/Internal'
+        '503':
+          $ref: '#/components/responses/Unavailable'
+    put:
+      operationId: setAccountState
+      summary: Set an account's state
+      description: |
+        Sets the account's state, replacing any other, and answers `200`
+        with it. `active` resets the account, as `DELETE` does. On
+        `503 store_unavailable` the state may or may not have changed: send
+        the request again.
+
+        Scope: `admin`.
+      tags: [accounts]
+      x-catraca-scope: admin
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/AccountStateRequest'
+            example:
+              state: suspended
+              until: '2026-11-01T18:00:00Z'
+              reason: chargeback fraud, ticket 4411
+      responses:
+        '200':
+          description: The state as set.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AccountState'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/InsufficientScope'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '413':
+          $ref: '#/components/responses/BodyTooLarge'
+        '500':
+          $ref: '#/components/responses/Internal'
+        '503':
+          $ref: '#/components/responses/Unavailable'
+    delete:
+      operationId: resetAccountState
+      summary: Reset an account to active
+      description: |
+        Resets the account to `active` and answers `200` with
+        `{"account_id": "...", "state": "active"}`, whether or not it had a
+        state.
+
+        Scope: `admin`.
+      tags: [accounts]
+      x-catraca-scope: admin
+      responses:
+        '200':
+          description: The account is active.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AccountState'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/InsufficientScope'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '500':
+          $ref: '#/components/responses/Internal'
+        '503':
+          $ref: '#/components/responses/Unavailable'
+  /v1/feedback:
+    post:
+      operationId: genericFeedback
+      summary: A feedback event in Catraca's format
+      description: |
+        For providers without an adapter. Signed with
+        `feedback.generic.secret` in `Catraca-Signature`:
+        `t=<unix seconds>,v1=<hex HMAC-SHA256 of "<t>.<raw body>">`, within
+        five minutes of Catraca's clock. Errors are in the provider format,
+        `{"error": "..."}`. `404 not_configured` without the
+        `feedback.generic` section. See docs/feedback.md for the fields.
+      tags: [providers]
+      security:
+        - catracaSignature: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/Event'
+      responses:
+        '202':
+          description: The event was recorded; the decision.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/DecisionResponse'
+        '400':
+          $ref: '#/components/responses/ProviderError'
+        '401':
+          $ref: '#/components/responses/ProviderError'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '503':
+          description: The event could not be counted; send it again, with the same `id`, after `Retry-After`.
+          headers:
+            Retry-After:
+              $ref: '#/components/headers/RetryAfter'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ProviderError'
+  /v1/feedback/ses:
+    post:
+      operationId: sesFeedback
+      summary: Amazon SES notifications through SNS
+      description: |
+        SNS deliveries of SES notifications, verified by their SNS signature;
+        subscriptions are confirmed for the configured topics. Set up in the
+        provider, not called by hand: see docs/feedback.md for the setup and
+        the status codes each provider's retry policy needs.
+        `404 not_configured` without the `feedback.ses` section.
+      tags: [providers]
+      security:
+        - snsSignature: []
+      requestBody:
+        required: true
+        content:
+          text/plain:
+            schema:
+              type: string
+              description: An SNS message, as JSON in a text/plain body.
+      responses:
+        '200':
+          description: Accepted, or a subscription confirmed.
+        '4XX':
+          $ref: '#/components/responses/ProviderError'
+        '5XX':
+          $ref: '#/components/responses/ProviderError'
+  /v1/feedback/usesend:
+    post:
+      operationId: useSendFeedback
+      summary: useSend webhooks
+      description: |
+        useSend webhooks, verified by their signature. Set up in the
+        provider, not called by hand: see docs/feedback.md.
+        `404 not_configured` without the `feedback.usesend` section.
+      tags: [providers]
+      security:
+        - useSendSignature: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              description: A useSend webhook payload.
+      responses:
+        '200':
+          description: Accepted.
+        '4XX':
+          $ref: '#/components/responses/ProviderError'
+        '5XX':
+          $ref: '#/components/responses/ProviderError'
+  /v1/secret-scanning/github:
+    post:
+      operationId: githubSecretScanning
+      summary: GitHub secret scanning partner endpoint
+      description: |
+        GitHub posts a signed batch of tokens it found in public; Catraca
+        verifies the ECDSA signature with GitHub's published keys, stores a
+        report per token and answers, then resolves each token and emits a
+        `key_leak` event for every key it finds. With
+        `secret_scanning.github.feedback: true` the answer is `200` with a
+        label per token resolved in time. A batch whose reports cannot be
+        stored gets `503` with `Retry-After`. See docs/secret-scanning.md.
+        `404 not_configured` without the `secret_scanning.github` section.
+      tags: [providers]
+      security:
+        - githubSignature: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: array
+              items:
+                $ref: '#/components/schemas/GitHubSecretMatch'
+      responses:
+        '200':
+          description: A label per token resolved in time, with `feedback` on.
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/GitHubSecretLabel'
+        '202':
+          description: The batch was stored; tokens are resolved afterwards.
+          content:
+            application/json:
+              schema:
+                type: array
+                maxItems: 0
+        '4XX':
+          $ref: '#/components/responses/ProviderError'
+        '503':
+          description: The reports could not be stored; GitHub sends the batch again.
+          headers:
+            Retry-After:
+              $ref: '#/components/headers/RetryAfter'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ProviderError'
+  /healthz:
+    get:
+      operationId: healthz
+      summary: Liveness
+      description: 'Answers `200 {"status": "ok"}` while the process serves HTTP.'
+      tags: [operations]
+      security: []
+      responses:
+        '200':
+          description: The process serves HTTP.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [status]
+                properties:
+                  status: {type: string, const: ok}
+  /readyz:
+    get:
+      operationId: readyz
+      summary: Readiness
+      description: |
+        Ready when a ruleset is loaded and the server is not shutting down;
+        otherwise `503` with the failing check. With `verbose`, also the
+        health of the dependencies (which never make it not ready) and the
+        ruleset the instance decides with.
+      tags: [operations]
+      security: []
+      parameters:
+        - name: verbose
+          in: query
+          description: Add `dependencies` and `ruleset`. Present with any value, or none.
+          allowEmptyValue: true
+          schema: {type: string}
+      responses:
+        '200':
+          description: Ready.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Readiness'
+        '503':
+          description: Not ready.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Readiness'
+  /metrics:
+    get:
+      operationId: metrics
+      summary: Prometheus metrics
+      description: |
+        Prometheus metrics in the text format; with tracing on, OpenMetrics
+        too, with exemplars. docs/api.md lists the metrics.
+      tags: [operations]
+      security: []
+      responses:
+        '200':
+          description: The metrics.
+          content:
+            text/plain:
+              schema: {type: string}
+            application/openmetrics-text:
+              schema: {type: string}
+        '404':
+          $ref: '#/components/responses/NotFound'
+components:
+  securitySchemes:
+    bearerToken:
+      type: http
+      scheme: bearer
+      description: |
+        A token from `auth.tokens` in catraca.yaml. Each route needs one
+        scope, named by the operation's `x-catraca-scope`: `decide`, `read`,
+        `label` or `admin`. A token configured without `scopes` has them
+        all. A missing or wrong token gets `401 unauthorized`; a token
+        without the scope gets `403 insufficient_scope`.
+    catracaSignature:
+      type: apiKey
+      in: header
+      name: Catraca-Signature
+      description: '`t=<unix seconds>,v1=<hex HMAC-SHA256 of "<t>.<raw body>">` with `feedback.generic.secret`, within five minutes of the server clock.'
+    snsSignature:
+      type: apiKey
+      in: header
+      name: x-amz-sns-message-type
+      description: The body is an SNS message whose signature Catraca verifies against the SNS certificate; the header names the message type.
+    useSendSignature:
+      type: apiKey
+      in: header
+      name: X-UseSend-Signature
+      description: useSend's webhook signature, verified with `feedback.usesend.secret`. See docs/feedback.md.
+    githubSignature:
+      type: apiKey
+      in: header
+      name: Github-Public-Key-Signature
+      description: GitHub's ECDSA signature of the body, checked against the key named by `Github-Public-Key-Identifier` from GitHub's published keys.
+  headers:
+    RequestId:
+      description: The request id, the one sent or a generated one.
+      schema: {type: string}
+    RetryAfter:
+      description: Seconds to wait before sending the request again.
+      schema: {type: integer, minimum: 0}
+    RetryAfterThrottle:
+      description: For a throttle, seconds to wait, rounded up; the same number as `retry_after`.
+      schema: {type: integer, minimum: 0}
+  parameters:
+    DecisionID:
+      name: id
+      in: path
+      required: true
+      description: The decision id (a ULID).
+      schema: {type: string}
+  requestBodies:
+    Event:
+      required: true
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/Event'
+          example:
+            type: send
+            account_id: acct_42
+            api_key_id: key_7d3e
+            ip: 203.0.113.7
+            from: hello@shop.example
+            to: [ana@mail.example]
+            subject: Your receipt
+            links: ['https://shop.example/r/1']
+  responses:
+    BadRequest:
+      description: The request is malformed; the same request gets the same answer, so fix it rather than retrying.
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorResponse'
+    Unauthorized:
+      description: No token, or not a configured one (`unauthorized`).
+      headers:
+        WWW-Authenticate:
+          description: '`Bearer realm="catraca"`'
+          schema: {type: string}
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorResponse'
+    InsufficientScope:
+      description: The token does not have the route's scope (`insufficient_scope`).
+      headers:
+        WWW-Authenticate:
+          description: '`Bearer realm="catraca", error="insufficient_scope", scope="<scope>"`'
+          schema: {type: string}
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorResponse'
+    NotFound:
+      description: No such decision or route (`not_found`), or the route's section is not configured (`not_configured`).
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorResponse'
+    BodyTooLarge:
+      description: The body is over `server.max_body_bytes` (`body_too_large`).
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorResponse'
+    Unprocessable:
+      description: '`rule_not_matched` for a label, `invalid_ruleset` for a reload, with `details`.'
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorResponse'
+    Internal:
+      description: An unexpected error (`internal`); details are in the server log.
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorResponse'
+    Unavailable:
+      description: |
+        `no_ruleset`, `unavailable`, `overloaded`, `store_unavailable` or
+        `audit_unavailable`. All but `no_ruleset` and `store_unavailable`
+        carry `Retry-After`.
+      headers:
+        Retry-After:
+          $ref: '#/components/headers/RetryAfter'
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorResponse'
+    ProviderError:
+      description: An error in the format providers expect.
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ProviderError'
+  schemas:
+    EventType:
+      type: string
+      enum: [send, feedback, account, key_leak]
+    Action:
+      type: string
+      description: What the platform should do, from least to most severe.
+      enum: [allow, flag, throttle, hold, block]
+    Mode:
+      type: string
+      description: Whether a rule acts (`enforce`) or only records what it would have done (`shadow`).
+      enum: [shadow, enforce]
+    OnError:
+      type: string
+      description: What a rule that cannot be evaluated does.
+      enum: [open, closed]
+    FeedbackKind:
+      type: string
+      enum: [bounce, complaint, delivery, trap, blocklist]
+    FeedbackInfo:
+      type: object
+      additionalProperties: false
+      required: [kind]
+      properties:
+        kind:
+          $ref: '#/components/schemas/FeedbackKind'
+        bounce_type:
+          type: string
+          description: For bounces.
+          enum: [permanent, transient]
+        recipient: {type: string}
+        message_id:
+          type: string
+          description: The platform's id for the email the feedback is about.
+    AccountInfo:
+      type: object
+      additionalProperties: false
+      properties:
+        action:
+          type: string
+          description: For example `signup`, `login`, `api_key_created` or `domain_added`.
+        created_at:
+          type: string
+          format: date-time
+          description: When the account was created; without it Catraca uses the first time it saw the account.
+        plan: {type: string}
+    LeakInfo:
+      type: object
+      additionalProperties: false
+      properties:
+        source: {type: string}
+        url: {type: string}
+    Event:
+      type: object
+      description: |
+        An event. Decoded strictly: an unknown field is `400 invalid_json`.
+        `account_id` is required except for `key_leak`, which needs
+        `api_key_id`; a `feedback` event needs `feedback`. The limits of
+        docs/api.md#limits apply; an event over one is `400 invalid_event`.
+      additionalProperties: false
+      required: [type]
+      properties:
+        id:
+          type: string
+          maxLength: 256
+          description: Your id for the event; sent again with the same id, it counts once. Generated when left out.
+        type:
+          $ref: '#/components/schemas/EventType'
+        time:
+          type: string
+          format: date-time
+          description: When it happened; defaults to when Catraca receives it.
+        account_id: {type: string, maxLength: 256}
+        api_key_id: {type: string, maxLength: 256}
+        ip: {type: string, maxLength: 256}
+        from: {type: string}
+        to:
+          type: array
+          maxItems: 1000
+          items: {type: string}
+        subject: {type: string}
+        links:
+          type: array
+          maxItems: 1000
+          items: {type: string}
+        feedback:
+          $ref: '#/components/schemas/FeedbackInfo'
+        account:
+          $ref: '#/components/schemas/AccountInfo'
+        leak:
+          $ref: '#/components/schemas/LeakInfo'
+        attributes:
+          type: object
+          maxProperties: 64
+          description: String pairs exposed to rules as `event.attributes`.
+          additionalProperties: {type: string}
+    Match:
+      type: object
+      required: [rule_id, reason, action, mode]
+      properties:
+        rule_id: {type: string}
+        reason:
+          type: string
+          description: Show it to the sender when you refuse or delay a send.
+        action:
+          $ref: '#/components/schemas/Action'
+        mode:
+          $ref: '#/components/schemas/Mode'
+        effects:
+          type: array
+          description: What Catraca asked the platform's hooks to do, such as `revoke_key`.
+          items: {type: string}
+        retry_after:
+          type: integer
+          description: Whole seconds, for a throttle rule.
+        errored:
+          type: boolean
+          description: The rule matched only because it fails closed.
+    RuleError:
+      type: object
+      required: [rule_id, error]
+      properties:
+        rule_id: {type: string}
+        error: {type: string}
+    Decision:
+      type: object
+      required: [id, time, action, ruleset_version, latency_us]
+      properties:
+        id:
+          type: string
+          description: The decision id (a ULID); use it to label the decision.
+        event_id:
+          type: string
+          description: The event's id, the one sent or a generated one.
+        time:
+          type: string
+          format: date-time
+        action:
+          $ref: '#/components/schemas/Action'
+        retry_after:
+          type: integer
+          description: For `throttle`, how long to wait, in whole seconds rounded up; the same number as `Retry-After`.
+        matches:
+          type: array
+          description: The enforced rules that matched.
+          items:
+            $ref: '#/components/schemas/Match'
+        shadow:
+          type: array
+          description: Shadow rules that matched; what would have happened.
+          items:
+            $ref: '#/components/schemas/Match'
+        errors:
+          type: array
+          description: Rules that could not be evaluated.
+          items:
+            $ref: '#/components/schemas/RuleError'
+        degraded:
+          type: boolean
+          description: Signals were missing, for example because the store timed out.
+        uncounted:
+          type: boolean
+          description: The store failed rather than answered late; send the event again with its `id` to count it.
+        duplicate:
+          type: boolean
+          description: An event with the same `id` had counted already.
+        ruleset_version: {type: string}
+        latency_us:
+          type: integer
+          description: Time to decide, in microseconds.
+    DecisionResponse:
+      type: object
+      required: [decision]
+      properties:
+        decision:
+          $ref: '#/components/schemas/Decision'
+    StoredEvent:
+      type: object
+      description: What the audit log keeps of an event; no message content unless `audit.event_detail` is `full`.
+      required: [type, time, account_id]
+      properties:
+        id: {type: string}
+        type:
+          $ref: '#/components/schemas/EventType'
+        time: {type: string, format: date-time}
+        account_id: {type: string}
+        api_key_id: {type: string}
+        ip: {type: string}
+        from_domain: {type: string}
+        recipients: {type: integer}
+        recipient_domains:
+          type: array
+          items: {type: string}
+        subject_sha256:
+          type: string
+          description: The first 16 hex digits of the SHA-256 of the subject.
+        feedback_kind:
+          $ref: '#/components/schemas/FeedbackKind'
+        bounce_type: {type: string}
+        account_action: {type: string}
+        full:
+          $ref: '#/components/schemas/Event'
+    Verdict:
+      type: string
+      enum: [true_positive, false_positive]
+    LabelRequest:
+      type: object
+      additionalProperties: false
+      required: [verdict, by]
+      properties:
+        verdict:
+          $ref: '#/components/schemas/Verdict'
+        by:
+          type: string
+          description: Who gives the label, a reviewer or a system such as the appeals flow.
+        reason:
+          type: string
+          description: Why, such as an appeal or ticket number.
+        rule_id:
+          type: string
+          description: Label only this rule's match; without it the label covers every rule that matched.
+        time:
+          type: string
+          format: date-time
+          description: When the verdict was given; defaults to now. The latest label of a match counts.
+    Label:
+      type: object
+      description: A label as the audit log returns it.
+      required: [verdict, by, time]
+      properties:
+        rule_id: {type: string}
+        verdict:
+          $ref: '#/components/schemas/Verdict'
+        by: {type: string}
+        reason: {type: string}
+        client:
+          type: string
+          description: The name of the token that sent the label.
+        time: {type: string, format: date-time}
+    DecisionEntry:
+      type: object
+      description: A decision in the audit log, with its event and labels.
+      required: [decision, event, labels]
+      properties:
+        decision:
+          $ref: '#/components/schemas/Decision'
+        event:
+          $ref: '#/components/schemas/StoredEvent'
+        labels:
+          type: array
+          description: Oldest first.
+          items:
+            $ref: '#/components/schemas/Label'
+    DecisionPage:
+      type: object
+      required: [decisions]
+      properties:
+        decisions:
+          type: array
+          items:
+            type: object
+            required: [decision, event]
+            properties:
+              decision:
+                $ref: '#/components/schemas/Decision'
+              event:
+                $ref: '#/components/schemas/StoredEvent'
+        next_cursor:
+          type: string
+          description: Absent on the last page.
+    Rule:
+      type: object
+      description: A rule with defaults applied. docs/rules.md describes the fields.
+      required: [id, when, action, mode, on_error]
+      properties:
+        id: {type: string}
+        description: {type: string}
+        when:
+          type: string
+          description: The CEL expression.
+        action:
+          $ref: '#/components/schemas/Action'
+        mode:
+          $ref: '#/components/schemas/Mode'
+        on_error:
+          $ref: '#/components/schemas/OnError'
+        retry_after:
+          type: string
+          description: A Go duration, such as `1m0s`.
+        reason: {type: string}
+        tags:
+          type: array
+          items: {type: string}
+    Ruleset:
+      type: object
+      required: [version, format, lists, rules]
+      properties:
+        version: {type: string}
+        format: {type: integer}
+        lists:
+          type: object
+          additionalProperties:
+            type: array
+            items: {type: string}
+        rules:
+          type: array
+          items:
+            $ref: '#/components/schemas/Rule'
+    GateHold:
+      type: object
+      required: [rule, status]
+      properties:
+        rule: {type: string}
+        status:
+          type: string
+          enum: [insufficient_labels, below_precision, unavailable]
+    ReloadResponse:
+      type: object
+      required: [version, previous_version, changed, rules, warnings]
+      properties:
+        version:
+          type: string
+          description: The version as applied, with any held rules in shadow mode.
+        previous_version: {type: string}
+        changed: {type: boolean}
+        rules: {type: integer}
+        warnings:
+          type: array
+          description: Lint findings of the new ruleset.
+          items: {type: string}
+        held:
+          type: array
+          description: With `gate.on_load` at `enforce`, rules held in shadow mode.
+          items:
+            $ref: '#/components/schemas/GateHold'
+        ungated:
+          type: array
+          description: With `gate.on_load` at `warn`, rules enforcing without having passed the gate.
+          items:
+            $ref: '#/components/schemas/GateHold'
+    Signals:
+      type: object
+      description: |
+        Every signal, by map; a map is `null` when it has none. docs/signals.md
+        lists the signals. It is what `catraca rules explain` and fixtures take.
+      required: [event, account, key, ip, domain]
+      properties:
+        event:
+          type: [object, 'null']
+        account:
+          type: [object, 'null']
+        key:
+          type: [object, 'null']
+        ip:
+          type: [object, 'null']
+        domain:
+          type: [object, 'null']
+        entity:
+          type: object
+          description: One map of signals per declared entity the event carries, by entity name.
+          additionalProperties:
+            type: [object, 'null']
+    RuleExplanation:
+      type: object
+      required: [id, matched, action, mode, on_error]
+      properties:
+        id: {type: string}
+        matched:
+          type: boolean
+          description: A rule that could not be evaluated matches when its `on_error` is `closed`.
+        action:
+          $ref: '#/components/schemas/Action'
+        mode:
+          $ref: '#/components/schemas/Mode'
+        on_error:
+          $ref: '#/components/schemas/OnError'
+        error:
+          type: string
+          description: Why the rule could not be evaluated.
+    Explanation:
+      type: object
+      required: [ruleset_version, signals, action, rules, observed, counted]
+      properties:
+        ruleset_version: {type: string}
+        signals:
+          $ref: '#/components/schemas/Signals'
+        action:
+          $ref: '#/components/schemas/Action'
+        retry_after:
+          type: integer
+          description: For a throttle, the retry in whole seconds.
+        rules:
+          type: array
+          description: Every rule, in file order.
+          items:
+            $ref: '#/components/schemas/RuleExplanation'
+        observed:
+          type: boolean
+          description: The signals were read from the store.
+        counted:
+          type: boolean
+          description: Observing counted the event, as deciding it would have.
+        duplicate:
+          type: boolean
+          description: The event's `id` had counted already.
+        degraded:
+          type: boolean
+          description: '`observe` was asked for and the store failed or was skipped.'
+    ReviewItem:
+      type: object
+      required: [decision_id, rule_id, mode, action, reason, time, event]
+      properties:
+        decision_id: {type: string}
+        rule_id: {type: string}
+        mode:
+          $ref: '#/components/schemas/Mode'
+        action:
+          $ref: '#/components/schemas/Action'
+        reason: {type: string}
+        errored: {type: boolean}
+        time: {type: string, format: date-time}
+        event:
+          $ref: '#/components/schemas/StoredEvent'
+    ReviewResponse:
+      type: object
+      required: [rule_id, items]
+      properties:
+        rule_id: {type: string}
+        mode:
+          $ref: '#/components/schemas/Mode'
+        items:
+          type: array
+          description: Newest first.
+          items:
+            $ref: '#/components/schemas/ReviewItem'
+    RuleStats:
+      type: object
+      required: [rule_id, mode, matches, errored, labeled, true_positives, false_positives, precision, precision_lower, precision_upper, status]
+      properties:
+        rule_id: {type: string}
+        mode:
+          $ref: '#/components/schemas/Mode'
+        matches: {type: integer}
+        errored: {type: integer}
+        labeled: {type: integer}
+        true_positives: {type: integer}
+        false_positives: {type: integer}
+        precision: {type: number}
+        precision_lower: {type: number}
+        precision_upper: {type: number}
+        status:
+          type: string
+          enum: [passes, insufficient_labels, below_precision]
+        override: {type: boolean}
+    StatsResponse:
+      type: object
+      required: [since, ruleset_version, gate, rules]
+      properties:
+        since: {type: string, format: date-time}
+        ruleset_version: {type: string}
+        gate:
+          type: object
+          required: [min_labeled, min_precision]
+          properties:
+            min_labeled: {type: integer}
+            min_precision: {type: number}
+        rules:
+          type: array
+          items:
+            $ref: '#/components/schemas/RuleStats'
+        promote:
+          type: array
+          description: Shadow rules that pass the gate.
+          items: {type: string}
+        retire:
+          type: array
+          description: Enforced rules below the gate.
+          items: {type: string}
+    AccountStateValue:
+      type: string
+      enum: [active, review, suspended, trusted]
+    AccountStateRequest:
+      type: object
+      additionalProperties: false
+      required: [state]
+      properties:
+        state:
+          $ref: '#/components/schemas/AccountStateValue'
+        until:
+          type: string
+          format: date-time
+          description: When the state expires and the account is active again; must be in the future.
+        reason:
+          type: string
+          maxLength: 1024
+          description: Why, for whoever reads the state later.
+    AccountState:
+      type: object
+      required: [account_id, state]
+      properties:
+        account_id: {type: string}
+        state:
+          $ref: '#/components/schemas/AccountStateValue'
+        until: {type: string, format: date-time}
+        reason: {type: string}
+        set_at: {type: string, format: date-time}
+        set_by:
+          type: string
+          description: The name of the API token that set the state.
+    ErrorCode:
+      type: string
+      description: |
+        Stable, for programs. docs/api.md#conventions gives the status and
+        meaning of each.
+      enum:
+        - invalid_json
+        - invalid_event
+        - invalid_label
+        - invalid_parameter
+        - invalid_state
+        - invalid_account_id
+        - unauthorized
+        - insufficient_scope
+        - not_found
+        - not_configured
+        - method_not_allowed
+        - body_too_large
+        - rule_not_matched
+        - invalid_ruleset
+        - internal
+        - no_ruleset
+        - unavailable
+        - overloaded
+        - store_unavailable
+        - audit_unavailable
+    ErrorResponse:
+      type: object
+      description: The body of every `/v1` error, `404` and `405`, except the provider routes.
+      required: [error]
+      properties:
+        error:
+          type: object
+          required: [code, message]
+          properties:
+            code:
+              $ref: '#/components/schemas/ErrorCode'
+            message:
+              type: string
+              description: For people.
+            details:
+              type: array
+              description: One entry per problem, for a failed ruleset reload.
+              items: {type: string}
+    ProviderError:
+      type: object
+      description: The error format of the provider routes.
+      required: [error]
+      properties:
+        error: {type: string}
+    GitHubSecretMatch:
+      type: object
+      description: A token GitHub found in public.
+      required: [token, type, url, source]
+      properties:
+        token: {type: string}
+        type: {type: string}
+        url: {type: string}
+        source: {type: string}
+    GitHubSecretLabel:
+      type: object
+      required: [token_hash, token_type, label]
+      properties:
+        token_hash: {type: string}
+        token_type: {type: string}
+        label:
+          type: string
+          enum: [true_positive, false_positive]
+    Readiness:
+      type: object
+      required: [status, checks]
+      properties:
+        status:
+          type: string
+          enum: [ready, not_ready]
+        checks:
+          type: object
+          description: Each check, `ok` or what is wrong.
+          additionalProperties: {type: string}
+        dependencies:
+          type: object
+          description: With `verbose`, the health of each dependency by name (`audit`, `store`).
+          additionalProperties:
+            $ref: '#/components/schemas/DependencyStatus'
+        ruleset:
+          $ref: '#/components/schemas/RulesetStatus'
+    DependencyStatus:
+      type: object
+      required: [status, duration_ms]
+      properties:
+        status:
+          type: string
+          description: '`ok`, `unavailable`, `timeout`, `not_open` or `unknown`.'
+        since: {type: string, format: date-time}
+        checked_at: {type: string, format: date-time}
+        duration_ms: {type: number}
+    RulesetStatus:
+      type: object
+      required: [path, gate]
+      properties:
+        version: {type: string}
+        file_version: {type: string}
+        path: {type: string}
+        source:
+          type: string
+          enum: [start, watch, signal, api]
+        loaded_at: {type: string, format: date-time}
+        gate:
+          type: string
+          enum: ['off', warn, enforce]
+        held:
+          type: array
+          items:
+            $ref: '#/components/schemas/GateHold'
+        ungated:
+          type: array
+          items:
+            $ref: '#/components/schemas/GateHold'
+        failed_at: {type: string, format: date-time}
