@@ -2,8 +2,8 @@
 
 `catraca` runs the server and the tools around rules: checking and testing a
 ruleset, the precision gate for CI, backtests and precision reports,
-labeling decisions, setting account states, listing and redriving webhook deliveries, and the queue
-of leaked-key reports. `catraca help` lists the commands and
+labeling, listing and exporting decisions, setting account states, listing
+and redriving webhook deliveries, and the queue of leaked-key reports. `catraca help` lists the commands and
 `catraca <command> -h` the flags of one. Flags may come before or after
 positional arguments, with one dash or two.
 
