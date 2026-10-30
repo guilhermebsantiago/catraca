@@ -10,7 +10,7 @@ import (
 )
 
 // Set is what rules see. Each map is exposed to CEL under its name:
-// event, account, key, ip and domain. Values are int64, float64, bool,
+// event, account, key, ip, domain and entity. Values are int64, float64, bool,
 // string or []string. A signal that could not be computed is absent from its
 // map, so a rule that reads it fails and its on_error policy applies. The
 // exception is key.leaked, which the catalog can answer from memory when the
@@ -21,6 +21,10 @@ type Set struct {
 	Key     map[string]any
 	IP      map[string]any
 	Domain  map[string]any
+	// Entity holds, for each configured entity whose attribute the event
+	// carries, a map[string]any of its signals, under the entity's name;
+	// rules read entity.<name>.<signal>. See Entity.
+	Entity map[string]any
 	// Duplicate is true when the event had counted already: the store
 	// remembered its id, and its increments were skipped. It is not a
 	// signal rules read.

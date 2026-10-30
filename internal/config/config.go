@@ -252,8 +252,38 @@ type Engine struct {
 	// remembered address. Without one, anyone who reads the store can test
 	// known addresses against it. Changing it forgets every address.
 	RecipientHashKey Secret `yaml:"recipient_hash_key"`
+	// Entities are event attributes counted like accounts and IPs are, so
+	// rules can see many accounts behind one value; see signal.Entity. At
+	// most signal.MaxEntities.
+	Entities []Entity `yaml:"entities"`
 	// Breaker is the circuit breaker around the store calls of decisions.
 	Breaker Breaker `yaml:"breaker"`
+}
+
+// Entity is one entry of engine.entities.
+type Entity struct {
+	// Name is how rules refer to it: entity.<name>.<signal>.
+	Name string `yaml:"name"`
+	// Attribute is the key of event.attributes whose value it is keyed by.
+	Attribute string `yaml:"attribute"`
+}
+
+// EntityNames returns the names of the configured entities.
+func (e Engine) EntityNames() []string {
+	out := make([]string, len(e.Entities))
+	for i, x := range e.Entities {
+		out[i] = x.Name
+	}
+	return out
+}
+
+// SignalEntities returns the configured entities as the catalog takes them.
+func (e Engine) SignalEntities() []signal.Entity {
+	out := make([]signal.Entity, len(e.Entities))
+	for i, x := range e.Entities {
+		out[i] = signal.Entity{Name: x.Name, Attribute: x.Attribute}
+	}
+	return out
 }
 
 // Breaker configures the store's circuit breaker; see

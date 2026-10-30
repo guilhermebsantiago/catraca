@@ -35,6 +35,12 @@ const (
 	Bounce    FeedbackKind = "bounce"
 	Complaint FeedbackKind = "complaint"
 	Delivery  FeedbackKind = "delivery"
+	// Trap is a send of the account's that reached a spam trap, as a trap
+	// network or a mailbox provider reported it.
+	Trap FeedbackKind = "trap"
+	// Blocklist is a blocklist listing attributed to the account, such as
+	// a Spamhaus or provider listing of a domain or IP only it sends from.
+	Blocklist FeedbackKind = "blocklist"
 )
 
 // Event is one thing that happened on the platform. Only Type, AccountID and

@@ -32,6 +32,8 @@ What Catraca records for each kind:
 | `bounce` | `permanent` or `transient` | SES `Undetermined` bounces count as `transient`: the hard bounce rate only grows on evidence |
 | `complaint` | | a `not-spam` feedback report retracts a complaint, so it is ignored |
 | `delivery` | | |
+| `trap` | | [generic endpoint](#generic-endpoint) only; see [third-party reputation](#third-party-reputation) |
+| `blocklist` | | [generic endpoint](#generic-endpoint) only; see [third-party reputation](#third-party-reputation) |
 
 Provider details that rules may want go to `event.attributes`: `provider`
 (`ses`, `usesend`), `bounce_subtype` (`General`, `MailboxFull`,
@@ -321,8 +323,9 @@ Catraca-Signature: t=1760529600,v1=5f1c...e9
   or complaint, say, not the id of the email it is about, which a bounce and
   a complaint share. Without it every sending counts.
 - `type` may be omitted; when present it must be `feedback`.
-- `account_id` and `feedback.kind` (`bounce`, `complaint` or `delivery`) are
-  required; bounces also need `bounce_type` (`permanent` or `transient`).
+- `account_id` and `feedback.kind` (`bounce`, `complaint`, `delivery`,
+  `trap` or `blocklist`) are required; bounces also need `bounce_type`
+  (`permanent` or `transient`).
 - `time` defaults to when Catraca receives the event. A time more than
   `engine.max_future_skew` ahead of Catraca's clock is replaced by the
   clock's, and an event older than `engine.max_event_age` (7 days) is
@@ -353,6 +356,31 @@ The answer is `202 Accepted` with the decision, as for `POST /v1/events`;
 not verify, and `503` with `Retry-After` means the event could not be
 counted ([above](#when-feedback-cannot-be-counted)): send it again later,
 signed anew, with the same `id`.
+
+### Third-party reputation
+
+Spam-trap networks, blocklists and mailbox providers' sender tools report
+problems a bounce or complaint never shows. When the platform can attribute
+one to an account, it posts it to the generic endpoint with one of two kinds:
+
+- `trap`: a send of the account's reached a spam trap. `recipient` may name
+  the trap, though networks rarely disclose it; the trap is not added to the
+  recipient memory, since it accepts mail and a rule should not tell the
+  sender which address it was.
+- `blocklist`: a listing of a domain or IP that only this account sends from,
+  such as a Spamhaus DBL listing of its sender domain. A listing of a shared
+  IP belongs to no single account and should not be sent.
+
+They count in [`account.trap_hits_7d`](signals.md#account) and
+`account.blocklist_hits_7d`. Put the source in `attributes` (`"provider":
+"spamhaus"`, `"list": "dbl"`), where rules can read it. Each report counts
+once per `id`, so give a listing that stays in place over several polls the
+same `id` (the listing's own id, or the list and the listed name), or it
+counts on every poll.
+
+A third kind, for provider-side feedback such as Google Postmaster's domain
+reputation, is left out: those are daily aggregates per domain, not events
+about a send, and a counter of them would mean nothing.
 
 ## Metrics
 

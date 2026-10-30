@@ -56,6 +56,10 @@ type Options struct {
 	// reads the store can test known addresses against. Changing it
 	// forgets every address remembered.
 	RecipientHashKey []byte
+	// Entities are the attributes counted as entities; see Entity. At most
+	// MaxEntities; an invalid or repeated one makes NewCatalog panic, as
+	// configuration validates them first.
+	Entities []Entity
 }
 
 // NewCatalog returns a Catalog that keeps its counters in s and computes the
@@ -70,9 +74,23 @@ func NewCatalog(s store.Store, opts Options) Catalog {
 	if opts.RecipientMemory == 0 {
 		opts.RecipientMemory = DefaultRecipientMemory
 	}
+	if len(opts.Entities) > MaxEntities {
+		panic(fmt.Sprintf("signal: %d entities, at most %d", len(opts.Entities), MaxEntities))
+	}
+	seen := map[string]bool{}
+	for _, e := range opts.Entities {
+		if err := e.Validate(); err != nil {
+			panic("signal: " + err.Error())
+		}
+		if seen[e.Name] {
+			panic("signal: entity " + e.Name + " is declared twice")
+		}
+		seen[e.Name] = true
+	}
 	return &catalog{
 		store: s, retention: opts.Retention, dedupeTTL: opts.DedupeTTL, leaked: newLeakedKeys(maxLeakedKeys),
 		recipientMemoryTTL: opts.RecipientMemory, recipientHashKey: slices.Clone(opts.RecipientHashKey),
+		entityDefs: slices.Clone(opts.Entities),
 	}
 }
 
@@ -91,6 +109,7 @@ type catalog struct {
 	// it is negative.
 	recipientMemoryTTL time.Duration
 	recipientHashKey   []byte
+	entityDefs         []Entity
 }
 
 // Store keys, before the store's own prefix and layout. Entity ids come last
@@ -144,6 +163,7 @@ func (c *catalog) Observe(ctx context.Context, ev event.Event) (Set, error) {
 	ip := ipSignals(&b, ev, f)
 	dom := domainSignals(&b, ev, f)
 	suppressed := c.recipientMemory(&b, ev)
+	ents := c.entities(&b, ev)
 	// Marked last, so new_ip compares against the IPs seen before this event.
 	if ev.Type == event.Send && f.ip != "" {
 		if ev.AccountID != "" {
@@ -167,6 +187,7 @@ func (c *catalog) Observe(ctx context.Context, ev event.Event) (Set, error) {
 	set.Key = key.signals(ev.Time)
 	set.IP = ip.signals()
 	set.Domain = dom.signals()
+	set.Entity = entitySignals(ents)
 	suppressed.addTo(set.Event)
 	if key != nil && key.leaked.Found() {
 		// Keys reported to other replicas, or before a restart, are
@@ -212,6 +233,7 @@ type accountReads struct {
 	ips24h, keys24h                                          *store.IntResult
 	bounces24h, hardBounces24h, complaints24h, deliveries24h *store.IntResult
 	bounces7d, hardBounces7d, complaints7d                   *store.IntResult
+	trapHits7d, blocklistHits7d                              *store.IntResult
 	firstSeen                                                *store.TimeResult
 	createdAt                                                *store.StringResult
 	state                                                    *store.StringResult
@@ -231,6 +253,7 @@ func (c *catalog) account(b *store.Batch, ev event.Event, f facts) *accountReads
 	ips, keys := accountKey("ips", id), accountKey("keys", id)
 	bounces, hard := accountKey("bounces", id), accountKey("hard_bounces", id)
 	complaints, deliveries := accountKey("complaints", id), accountKey("deliveries", id)
+	traps, blocklists := accountKey("trap_hits", id), accountKey("blocklist_hits", id)
 	created := accountKey("created_at", id)
 	ipSends := accountIPKey("ip_sends", id, f.ip)
 
@@ -273,6 +296,10 @@ func (c *catalog) account(b *store.Batch, ev event.Event, f facts) *accountReads
 				b.Incr(complaints, week, at, 1)
 			case event.Delivery:
 				b.Incr(deliveries, day, at, 1)
+			case event.Trap:
+				b.Incr(traps, week, at, 1)
+			case event.Blocklist:
+				b.Incr(blocklists, week, at, 1)
 			}
 		}
 	}
@@ -299,6 +326,8 @@ func (c *catalog) account(b *store.Batch, ev event.Event, f facts) *accountReads
 		bounces7d:           b.Count(bounces, week, at),
 		hardBounces7d:       b.Count(hard, week, at),
 		complaints7d:        b.Count(complaints, week, at),
+		trapHits7d:          b.Count(traps, week, at),
+		blocklistHits7d:     b.Count(blocklists, week, at),
 		firstSeen:           b.FirstSeen(accountKey("first_seen", id), at, c.retention),
 		createdAt:           b.Get(created),
 		state:               b.Get(accountKey("state", id)),
@@ -350,6 +379,8 @@ func (r *accountReads) signals(at time.Time) map[string]any {
 		"bounce_rate_7d":                 rate(r.bounces7d.Val(), of7d),
 		"hard_bounce_rate_7d":            rate(r.hardBounces7d.Val(), of7d),
 		"complaint_rate_7d":              rate(r.complaints7d.Val(), of7d),
+		"trap_hits_7d":                   r.trapHits7d.Val(),
+		"blocklist_hits_7d":              r.blocklistHits7d.Val(),
 		"age_hours":                      ageHours(at, origin),
 		"hourly_baseline_7d":             baseline,
 		"volume_ratio_1h":                float64(r.sends1h.Val()) / max(baseline, 1),

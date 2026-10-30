@@ -5,7 +5,7 @@ import "slices"
 // Spec describes one signal: where rules find it and the type of its value.
 type Spec struct {
 	// Map is the CEL variable the signal belongs to: event, account, key,
-	// ip or domain.
+	// ip, domain, or entity for the signals of every entity (EntitySpecs).
 	Map string
 	// Name is the signal's key in its map.
 	Name string
@@ -63,6 +63,8 @@ var specs = []Spec{
 	{"account", "bounce_rate_7d", "double"},
 	{"account", "hard_bounce_rate_7d", "double"},
 	{"account", "complaint_rate_7d", "double"},
+	{"account", "trap_hits_7d", "int"},
+	{"account", "blocklist_hits_7d", "int"},
 	{"account", "age_hours", "double"},
 	{"account", "hourly_baseline_7d", "double"},
 	{"account", "volume_ratio_1h", "double"},

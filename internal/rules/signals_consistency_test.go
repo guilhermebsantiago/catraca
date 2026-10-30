@@ -39,9 +39,12 @@ func TestKnownSignalsAreTheCatalogs(t *testing.T) {
 }
 
 // TestSignalMapsAreVariables checks that every map the catalog fills is a
-// CEL variable rules can read, and the other way round.
+// CEL variable rules can read, and the other way round. The entity map holds
+// a map per configured entity, whose signals are signal.EntitySpecs.
 func TestSignalMapsAreVariables(t *testing.T) {
 	got := slices.Sorted(maps.Keys(knownSignals))
+	got = append(got, "entity")
+	slices.Sort(got)
 	want := slices.Sorted(slices.Values(variables))
 	if !slices.Equal(got, want) {
 		t.Errorf("signal maps = %v, CEL variables = %v", got, want)
