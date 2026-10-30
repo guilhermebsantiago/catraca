@@ -128,7 +128,7 @@ read the [recipient memory](#the-recipient-memory).
 | `link_domains` | list(string) | distinct hostnames of `links`, lowercase, sorted; a link without a scheme, such as `example.com/offer`, is read as http |
 | `links` | int | number of `links` |
 | `subject_length` | int | characters (Unicode code points) in `subject` |
-| `feedback_kind` | string | `bounce`, `complaint` or `delivery` for feedback events, `""` otherwise |
+| `feedback_kind` | string | `bounce`, `complaint`, `delivery`, `trap` or `blocklist` for feedback events, `""` otherwise |
 | `bounce_type` | string | as sent for bounces (`permanent`, `transient`), `""` otherwise |
 | `account_action` | string | `account.action` for account events, such as `signup`; `""` otherwise |
 | `attributes` | map(string, string) | the platform's attributes, empty when there are none |
