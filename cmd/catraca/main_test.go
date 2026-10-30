@@ -115,7 +115,7 @@ rules:
 
 func TestRulesCheck(t *testing.T) {
 	dir := t.TempDir()
-	expect(t, runCLI(t, nil, "rules", "check", defaultRules), exitOK, "ok ", "12 rules (3 enforced, 9 shadow)")
+	expect(t, runCLI(t, nil, "rules", "check", defaultRules), exitOK, "ok ", "13 rules (3 enforced, 10 shadow)")
 
 	broken := writeFile(t, dir, "broken.yaml", brokenRules)
 	r := runCLI(t, nil, "rules", "check", broken)
@@ -480,13 +480,29 @@ audit:
 `+extra)
 }
 
+func TestConfigCheckEntities(t *testing.T) {
+	env := map[string]string{"TOKEN": testToken}
+	path := testConfig(t, "engine: {entities: [{name: content, attribute: content_hash}]}\n")
+	writeFile(t, filepath.Dir(path), "rules.yaml", `version: 1
+rules:
+  - id: template-reuse
+    when: entity.content.distinct_accounts_24h > 5 && entity.device.sends_1h > 1
+    reason: r
+`)
+	r := runCLI(t, env, "config", "check", "-config", path)
+	expect(t, r, exitOK, "rule template-reuse: reads entity.device, but engine.entities declares no entity device")
+	if strings.Contains(r.stderr, "entity.content") {
+		t.Errorf("a declared entity was reported:\n%s", r)
+	}
+}
+
 func TestConfigCheck(t *testing.T) {
 	env := map[string]string{"TOKEN": testToken}
 	path := testConfig(t, "")
 	r := runCLI(t, env, "config", "check", "-config", path)
 	expect(t, r, exitOK, path+" is valid", "(2 warning(s))", "effect revoke_key has no hook",
 		"platform has no scopes, so it can call every route",
-		"api tokens  platform (every scope)", "12 rules: 3 enforced, 9 shadow", "postgres://catraca:xxxxx@db.internal:5432/catraca",
+		"api tokens  platform (every scope)", "13 rules: 3 enforced, 10 shadow", "postgres://catraca:xxxxx@db.internal:5432/catraca",
 		"at most 5s ahead of the clock (later is clamped), 168h0m0s behind (older is rejected)",
 		"when the file changes (read every 5s), on SIGHUP", "no enforced rule without an override to check now")
 	// With the watch off, and a rule enforced without an override that the
