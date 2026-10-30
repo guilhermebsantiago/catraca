@@ -15,6 +15,9 @@ base:
     ip: 203.0.113.10
     from_domain: example.com
     recipients: 1
+    role_recipients: 0
+    suppressed_recipients: 0
+    suppressed_ratio: 0
     to_domains: [gmail.com]
     link_domains: [example.com]
     links: 1
@@ -100,6 +103,7 @@ cases:
 
   - name: when the store is down a send with an API key is allowed
     signals:
+      event: {suppressed_recipients: null, suppressed_ratio: null}
       account: null
       key: null
       ip: null
@@ -115,11 +119,13 @@ cases:
         - key-many-ips
         - account-takeover-volume
         - recipient-domain-spray
+        - suppressed-recipients-new-account
 
   # While the store is down, the catalog still answers key.leaked for keys
   # it knows leaked, and only that: every other key signal is absent.
   - name: when the store is down a key known to be leaked is still blocked
     signals:
+      event: {suppressed_recipients: null, suppressed_ratio: null}
       account: null
       key: {leaked: true, sends_1m: null, sends_1h: null, distinct_ips_1h: null, distinct_ips_24h: null, new_ip: null, age_hours: null}
       ip: null
@@ -135,6 +141,7 @@ cases:
         - key-many-ips
         - account-takeover-volume
         - recipient-domain-spray
+        - suppressed-recipients-new-account
 
   - name: a leaked key outranks a burst whatever the burst rule's mode
     signals:
@@ -327,6 +334,49 @@ cases:
   - name: an established B2B sender reaching many domains
     signals:
       account: {recipients_1h: 400, distinct_recipient_domains_1h: 350}
+    expect:
+      matches: []
+
+  # suppressed-recipients-new-account
+
+  - name: a new account mailing a list where 12 of 60 addresses bounced or complained before
+    signals:
+      event: {recipients: 60, suppressed_recipients: 12, suppressed_ratio: 0.2}
+      account: {age_hours: 20}
+    expect:
+      matches: [suppressed-recipients-new-account]
+
+  - name: a sample of 100 checked out of 1000 with 30 suppressed
+    signals:
+      event: {recipients: 1000, suppressed_recipients: 30, suppressed_ratio: 0.3}
+      account: {age_hours: 100}
+    expect:
+      matches: [suppressed-recipients-new-account]
+
+  - name: two stale addresses among 60 are churn, not a bought list
+    signals:
+      event: {recipients: 60, suppressed_recipients: 2, suppressed_ratio: 0.0333}
+      account: {age_hours: 20}
+    expect:
+      matches: []
+
+  - name: a new account's single send to an address that bounced before
+    signals:
+      event: {recipients: 1, suppressed_recipients: 1, suppressed_ratio: 1}
+      account: {age_hours: 20}
+    expect:
+      matches: []
+
+  - name: an established account mailing stale addresses is left to the rate rules
+    signals:
+      event: {recipients: 60, suppressed_recipients: 12, suppressed_ratio: 0.2}
+    expect:
+      matches: []
+
+  - name: feedback is not a send
+    signals:
+      event: {type: feedback, feedback_kind: bounce, bounce_type: permanent, recipients: 0, suppressed_recipients: 0, suppressed_ratio: 0}
+      account: {age_hours: 20}
     expect:
       matches: []
 

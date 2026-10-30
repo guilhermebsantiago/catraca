@@ -64,6 +64,7 @@ func eventSignals(ev event.Event, f facts) map[string]any {
 	if ev.Attributes != nil {
 		m["attributes"] = maps.Clone(ev.Attributes)
 	}
+	m["role_recipients"] = roleRecipients(ev.To)
 	return m
 }
 

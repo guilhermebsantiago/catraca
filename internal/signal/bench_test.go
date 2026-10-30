@@ -181,6 +181,71 @@ func BenchmarkObserveWideSend(b *testing.B) {
 	}
 }
 
+// BenchmarkObserveRecipientMemory measures what the recipient memory adds to
+// a send: the same send with the memory on and off, to 3, 100 and
+// event.MaxRecipients recipients, half of them in a memory of 2,000
+// addresses that hard-bounced. A send checks at most
+// signal.MaxCheckedRecipients of them, so the store work stops growing past
+// that; hashing every address to pick them does not.
+func BenchmarkObserveRecipientMemory(b *testing.B) {
+	const remembered = 2000
+	for _, recipients := range []int{3, 100, event.MaxRecipients} {
+		to := make([]string, recipients)
+		for i := range to {
+			// Even addresses bounced; odd ones did not.
+			to[i] = fmt.Sprintf("r%d@list.example", i*remembered/recipients/2*2+i%2)
+		}
+		for _, mode := range []string{"off", "on"} {
+			opts := signal.Options{}
+			if mode == "off" {
+				opts.RecipientMemory = -1
+			}
+			for i, be := range backends {
+				b.Run(fmt.Sprintf("to=%d/memory=%s/%s", recipients, mode, be.name), func(b *testing.B) {
+					skipBackend(b, i)
+					c := signal.NewCatalog(be.new(b), opts)
+					defer c.Close()
+					ctx := context.Background()
+					for j := 0; j < remembered; j += 2 {
+						ev := event.Event{
+							Type:      event.Feedback,
+							Time:      t0,
+							AccountID: "old-sender",
+							Feedback:  &event.FeedbackInfo{Kind: event.Bounce, BounceType: "permanent", Recipient: fmt.Sprintf("r%d@list.example", j)},
+						}
+						if _, err := c.Observe(ctx, ev); err != nil {
+							b.Fatal(err)
+						}
+					}
+					done := measureRedis(b, i)
+					b.ReportAllocs()
+					n := 0
+					for b.Loop() {
+						ev := event.Event{
+							Type:      event.Send,
+							AccountID: fmt.Sprintf("acct-%d", n%1000),
+							APIKeyID:  fmt.Sprintf("key-%d", n%1000),
+							IP:        fmt.Sprintf("203.0.%d.%d", n%1000/256, n%256),
+							From:      "news@sender.example",
+							Time:      t0.Add(time.Hour + time.Duration(n)*time.Millisecond),
+							To:        to,
+						}
+						set, err := c.Observe(ctx, ev)
+						if err != nil {
+							b.Fatal(err)
+						}
+						if mode == "on" && set.Event["suppressed_recipients"].(int64) == 0 {
+							b.Fatal("no recipient found in the memory")
+						}
+						n++
+					}
+					done()
+				})
+			}
+		}
+	}
+}
+
 // measureRedis reads the CPU time of backend i's server, when it has one, and
 // returns a function to call after the loop, which reports the CPU time per
 // iteration as redis-us/op.

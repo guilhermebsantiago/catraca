@@ -183,3 +183,22 @@ rules:
     action: hold
     reason: New account sending to an unusually wide spread of recipient domains
     tags: [list-quality, new-account]
+
+  - id: suppressed-recipients-new-account
+    description: >-
+      Holds sends from accounts younger than 7 days when two or more of the
+      recipients checked, and over 10% of them, hard-bounced or complained
+      on this platform in the last 30 days, whoever sent to them. A new
+      customer's list should be fresh; one full of addresses other senders
+      already found dead or hostile was bought, scraped or left to go
+      stale. It is the check ESPs make with an account-level suppression
+      list, made before the bounces come back. Sends to a single address
+      never match: one typo or one reused address is not a list.
+    when: >-
+      event.type == "send"
+      && account.age_hours < 168
+      && event.suppressed_recipients >= 2
+      && event.suppressed_ratio > 0.1
+    action: hold
+    reason: New account mailing addresses that recently hard-bounced or complained on this platform
+    tags: [list-quality, new-account]

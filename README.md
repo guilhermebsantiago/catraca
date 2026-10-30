@@ -63,11 +63,13 @@ Catraca sits in the send path and is built on a few principles:
   standalone, Sentinel or Cluster) or memory: per account, API key, IP and
   sender domain.
   Velocity, recipient spread, bounce and complaint rates, new and recent IPs,
-  keys used from many places, leaked keys. [All signals](docs/signals.md).
+  keys used from many places, leaked keys, and a platform-wide memory of
+  addresses that hard-bounced or complained, kept as keyed hashes.
+  [All signals](docs/signals.md).
 - **A starter ruleset** for email senders: new-account bursts, complaint and
   hard-bounce rates, leaked keys, keys used from many IPs, account takeover
   volume spikes, shortener links from new accounts, signup farms, recipient
-  spraying. [rules/default.yaml](rules/default.yaml)
+  spraying, new accounts mailing addresses that already bounced. [rules/default.yaml](rules/default.yaml)
 - **Backtesting**: `catraca replay` runs a ruleset over labeled events and
   reports precision and recall per rule before anything ships.
 - **Feedback** from Amazon SES (through SNS, signature verified) and useSend,

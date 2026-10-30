@@ -100,6 +100,9 @@ func (v *validator) explicit(c *Config) {
 		// would outlast no retry.
 		v.add("engine.dedupe_ttl", "must be at least 1s, or 0s to turn deduplication off, got %s", d)
 	}
+	if d := c.Engine.RecipientMemory; d < 0 || (d > 0 && d < time.Hour) {
+		v.add("engine.recipient_memory", "must be at least 1h, or 0s to turn the recipient memory off, got %s", d)
+	}
 	if v.isSet("engine.breaker.failure_threshold") && c.Engine.Breaker.FailureThreshold < 1 {
 		v.add("engine.breaker.failure_threshold", "must be at least 1, got %d", c.Engine.Breaker.FailureThreshold)
 	}

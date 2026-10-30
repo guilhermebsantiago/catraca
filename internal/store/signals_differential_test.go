@@ -3,6 +3,7 @@ package store_test
 import (
 	"context"
 	"fmt"
+	"maps"
 	"math/rand/v2"
 	"reflect"
 	"testing"
@@ -24,7 +25,8 @@ import (
 // The sequences have every event type, ids and their retries, time moving
 // across every window from a minute to a week, past the dedupe ttl, the
 // retention and the 30 days new_ip looks back, events up to a week late,
-// as the engine accepts them, and keys marked leaked.
+// as the engine accepts them, keys marked leaked, and hard bounces and
+// complaints, which the recipient memory keeps for 30 days.
 func FuzzSignalsAgree(f *testing.F) {
 	r := rand.New(rand.NewPCG(3, 5))
 	for range 4 {
@@ -195,6 +197,7 @@ func (g *eventGen) next() (*event.Event, string) {
 		ev.Feedback = &event.FeedbackInfo{
 			Kind:       pick(g, []event.FeedbackKind{event.Bounce, event.Complaint, event.Delivery}),
 			BounceType: pick(g, []string{"permanent", "transient", "Permanent"}),
+			Recipient:  pick(g, genRcpts),
 		}
 	case kind < 240:
 		ev.Type = event.Account
@@ -243,7 +246,16 @@ func setsDiffer(want, got signal.Set, memoryLate bool) string {
 		}
 		return fmt.Sprintf("duplicate: %v, %v", want.Duplicate, got.Duplicate)
 	}
-	if !reflect.DeepEqual(want.Event, got.Event) || want.Duplicate != got.Duplicate {
+	// The memory store may have forgotten a recipient that a late event's
+	// window still reaches, as it may an IP, so it may find fewer.
+	wantEvent, gotEvent := maps.Clone(want.Event), maps.Clone(got.Event)
+	ws, _ := wantEvent["suppressed_recipients"].(int64)
+	gs, _ := gotEvent["suppressed_recipients"].(int64)
+	for _, k := range []string{"suppressed_recipients", "suppressed_ratio"} {
+		delete(wantEvent, k)
+		delete(gotEvent, k)
+	}
+	if !reflect.DeepEqual(wantEvent, gotEvent) || ws > gs || want.Duplicate != got.Duplicate {
 		return "event signals or duplicate"
 	}
 	for _, m := range [...]struct {

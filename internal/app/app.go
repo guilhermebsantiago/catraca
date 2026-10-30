@@ -140,7 +140,15 @@ func New(ctx context.Context, cfg *config.Config, opts Options) (_ *App, err err
 	if dedupe == 0 {
 		dedupe = -1 // engine.dedupe_ttl: 0s turns deduplication off.
 	}
-	a.catalog = signal.NewCatalog(a.store, signal.Options{DedupeTTL: dedupe})
+	recipients := cfg.Engine.RecipientMemory
+	if recipients == 0 {
+		recipients = -1 // engine.recipient_memory: 0s turns the memory off.
+	}
+	a.catalog = signal.NewCatalog(a.store, signal.Options{
+		DedupeTTL:        dedupe,
+		RecipientMemory:  recipients,
+		RecipientHashKey: []byte(cfg.Engine.RecipientHashKey.Value()),
+	})
 
 	alog := log.With("component", "audit")
 	auditOpts := cfg.Audit.Options()

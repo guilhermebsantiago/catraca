@@ -4,7 +4,10 @@ Bounces and complaints are the clearest sign that an account is sending
 mail people did not ask for. Catraca turns them into `feedback` events, one
 per affected recipient, so rules can read `account.bounce_rate_24h`,
 `account.hard_bounce_rate_24h`, `account.complaint_rate_24h` and
-`domain.complaints_24h`.
+`domain.complaints_24h`. The recipient of a hard bounce or a complaint also
+goes into the [recipient memory](signals.md#the-recipient-memory), so a
+later send to it, from any account, counts in
+`event.suppressed_recipients`.
 
 | route | source | authentication |
 |---|---|---|
@@ -231,6 +234,8 @@ Every other event (`email.sent`, `email.opened`, `email.suppressed`,
 `contact.*`, `domain.*`, `webhook.test`, ...) is acknowledged and ignored.
 useSend sends the email's whole `to` list rather than the recipient a bounce
 or complaint was about, so Catraca records one event per address in `to`.
+For an email to several addresses, the recipient memory then remembers
+every one of them, not only the one that bounced or complained.
 
 **Account id.** By default it is the payload's `teamId`, which fits a
 self-hosted useSend whose teams are the platform's accounts: send your

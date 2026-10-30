@@ -367,6 +367,8 @@ them and keeps its one connection.
 | `max_future_skew` | `5s` | how far ahead of Catraca's clock an event's `time` may be. A later time is replaced by the clock's, since an event cannot come from the future and, counted there, would empty the windows it touches until the clock caught up. Keep it well under a minute, the shortest window |
 | `max_event_age` | `168h` | how far behind Catraca's clock an event's `time` may be. An older event is answered `400 invalid_event`, and the feedback endpoints acknowledge it so the provider does not retry; a `key_leak` takes the clock's time instead. The default is the longest counter window, so nothing a counter could still use is refused. A lower value also stops late feedback from counting; a higher one lets an event move an account's first-seen time further back |
 | `dedupe_ttl` | `10m` | how long the `id` of an event that counted is remembered, so that the event sent again meanwhile, a retry after a timeout or a provider's redelivery, does not count twice ([retries](api.md#retries)). `0s` turns it off: every sending counts |
+| `recipient_memory` | `720h` | how long an address that hard-bounced or complained is remembered, for every account, so that a send to it counts in [`event.suppressed_recipients`](signals.md#the-recipient-memory). At least `1h`; `0s` turns it off, and the two `suppressed_` signals are then absent |
+| `recipient_hash_key` | none | secret that keys the digest the store keeps instead of each remembered address. Without it the digest is a plain hash, and anyone who can read the store can test an address they already know against it. Use 32 random bytes or more; changing it forgets every address remembered |
 | `breaker.failure_threshold` | `20` | the fewest store calls in a row that must fail or miss `deadline` for the store breaker to open |
 | `breaker.failure_window` | `500ms` | how long they must keep failing, with none succeeding, for it to open |
 | `breaker.cooldown` | `2s` | how long the breaker stays open, deciding without the store, before it probes the store |
@@ -394,6 +396,15 @@ later still. An event sent again after the window counts again. Raise
 with `maxmemory-policy volatile-ttl` (see [redis](#store)), the entries are
 among the first keys evicted under memory pressure, which costs retries
 their protection before it costs counters.
+
+**The recipient memory.** Each address remembered costs one member of a
+sorted set: about 110 bytes on Redis, split over 16 keys (16 hash slots on a
+cluster), and about 50 bytes in the memory store. It is kept for
+`recipient_memory` after its latest hard bounce or complaint, so the memory
+holds the distinct addresses that bounced or complained in that window: at
+10,000 a day, about 33 MB on Redis with the default. A send checks at most
+100 of its addresses, in the same round trip as its other signals; see
+[benchmarks](benchmark.md#the-recipient-memory) for the cost.
 
 **The store breaker.** With Redis down or stalled, every decision would
 still wait out its deadline before degrading, and send another round trip
