@@ -290,14 +290,24 @@ fine: `legit`.
 The log does not keep recipients, the subject, links, attributes or the
 sender's address, so the export rebuilds each event from what it kept: the
 ids, type, time, account, key and IP, the sender as `@` and its domain, and
-the feedback kind and account action. Rules that read `event.to`,
-`event.recipients`, recipient domains, links, the subject or attributes,
-and lists or signals keyed on them, cannot match as they did, so their
-recall and precision in the backtest mean little. The export says on
-stderr how many events were minimal. To backtest those rules from the log,
-run with `event_detail: full` for a while, within what your privacy policy
-allows (see [what is stored](#what-is-stored)). Rules on accounts, keys,
-IPs, the sender's domain, event types and feedback replay as they ran.
+the feedback kind and bounce type and the account action. Rules that read
+`event.to`, `event.recipients`, recipient domains, links, the subject or
+attributes, and lists or signals keyed on them, cannot match as they did,
+so their recall and precision in the backtest mean little. An account's
+creation time and plan are not kept either, so account age falls back to
+the first event the replay sees. The export says on stderr how many events
+were minimal. To backtest those rules from the log, run with
+`event_detail: full` for a while, within what your privacy policy allows
+(see [personal data](#personal-data-and-how-long-to-keep-it)). Rules on
+accounts, keys, IPs, the sender's domain, event types and feedback kinds
+replay closest to how they ran.
+
+The replay's counters only see the exported events. With `--labeled-only`
+they miss the unlabeled traffic between the labeled events, so rate and
+count rules match less than they did; leave it out for those, as unlabeled
+lines feed the counters without being scored. The first events of a file
+run on empty counters, and decisions [retention](#retention) deleted are
+gone from them too.
 
 The replay needs events in time order and the log is in decision order. An
 event whose time is before the one decided before it, as clients' clocks

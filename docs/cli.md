@@ -172,9 +172,12 @@ when any label that applies is a `true_positive`, legit when all are
 leaves them out. Then backtest a ruleset on it:
 
 ```sh
-catraca audit export --audit "$CATRACA_AUDIT_DSN" --since 90d --labeled-only --out labeled.jsonl
-catraca replay rules.yaml labeled.jsonl
+catraca audit export --audit "$CATRACA_AUDIT_DSN" --since 90d --out events.jsonl
+catraca replay rules.yaml events.jsonl
 ```
+
+Keep the unlabeled decisions for rules on rates and counts: the replay's
+counters only see the lines in the file.
 
 With `audit.event_detail: minimal`, the default, the log keeps no
 recipients, subject, links or attributes and only the sender's domain, so
