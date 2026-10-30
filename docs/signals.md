@@ -364,8 +364,8 @@ A rule that reads an entity `engine.entities` does not declare always fails
 to evaluate; `catraca config check` and the server warn about it at load.
 `catraca rules check` cannot, as it reads no configuration.
 
-Each entity a send names costs it eight more store operations, two of them
-distinct counts, in the same round trip: about 100 µs of Redis time on the
+Each entity a send names costs it eight more store operations (two
+increments, two distinct-set adds and four reads) in the same round trip: about 100 µs of Redis time on the
 [benchmark](benchmark.md#entities)'s machine, a seventh of the send's own.
 At most 16 entities can be declared.
 
