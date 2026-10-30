@@ -10,8 +10,20 @@ and downgrades, and what an upgrade from the launch has to act on.
 
 ## [Unreleased]
 
-Everything since the public launch on 2026-10-15
-([b326e38](https://github.com/guilhermebsantiago/catraca/commit/b326e38)):
+## [0.1.0] - 2026-10-29
+
+The first tagged release: everything since the public launch on 2026-10-15
+([b326e38](https://github.com/guilhermebsantiago/catraca/commit/b326e38)).
+
+Three changes ask something of anyone running the launch build; the
+[upgrade guide](docs/upgrading.md) has the steps:
+
+- The image and the compose stack need `CATRACA_OPS_TOKEN` as well as
+  `CATRACA_API_TOKEN`, which can now only decide.
+- Accounts set to `review` or `suspended` are held or blocked from the
+  first send, without the precision gate: they are an operator's decision.
+- With `gate.on_load: enforce`, the default, an enforced rule without enough
+  labels or an `override` starts in shadow mode until it passes the gate.
 three waves of reliability work, then fixes to the TypeScript client and
 the docs.
 
@@ -127,4 +139,5 @@ the docs.
   docs/design.md's route table lacked `GET /v1/rules/{id}/review`, and
   docs/signals.md called the first-seen retention configurable.
 
-[Unreleased]: https://github.com/guilhermebsantiago/catraca/compare/b326e38...HEAD
+[Unreleased]: https://github.com/guilhermebsantiago/catraca/compare/v0.1.0...HEAD
+[0.1.0]: https://github.com/guilhermebsantiago/catraca/compare/b326e38...v0.1.0
