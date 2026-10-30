@@ -163,24 +163,25 @@ A send looks up at most 100 of its addresses in the
 the script it already runs, after hashing every address to pick them.
 `BenchmarkObserveRecipientMemory` sends the same event with the memory on
 and off, to 3, 100 and 1,000 recipients, half of them among 2,000
-remembered addresses. One run of one second per case, with the difference
-the memory makes:
+remembered addresses. Medians of three runs of one second per case; Redis's
+time per event varied by a quarter between runs, as in the sections above:
 
-| recipients | memory store, Go | real Redis, call | real Redis, CPU |
-|---|---|---|---|
-| 3 | +0.3 µs (17.8 µs) | +35 µs (596 µs) | +43 µs (589 µs) |
-| 100 | +27 µs (37 µs) | +309 µs (610 µs) | +232 µs (571 µs) |
-| 1,000 (100 checked) | +254 µs (305 µs) | +688 µs (869 µs) | +473 µs (612 µs) |
+| recipients | memory store, off | memory store, on | Redis CPU, off | Redis CPU, on |
+|---|---|---|---|---|
+| 3 | 17 µs | 24 µs | 734 µs | 640 µs |
+| 100 | 36 µs | 66 µs | 677 µs | 1,034 µs |
+| 1,000 (100 checked) | 254 µs | 418 µs | 654 µs | 806 µs |
 
-On this Redis build a lookup costs about 2.3 µs of Redis time, about as
-much as the `SET NX` of an id, and the 100-address cap bounds a send to
-about a quarter of a millisecond of it, against the 26 ms 1,000 domains may
-cost. In Go the cost past 100 is hashing: an HMAC-SHA-256 per address, some
-0.25 µs, to pick the 100 checked without letting the sender choose them.
-The three-recipient case, the common one, is within noise.
+With three recipients, the common case, the difference is within noise.
+A lookup costs about 1.5 to 3.5 µs of Redis time on this Redis build, about
+as much as the `SET NX` of an id, so the 100-address cap bounds a send to
+some 150 to 360 µs of it, against the 26 ms 1,000 domains may cost. In Go
+the cost past 100 addresses is hashing: an HMAC-SHA-256 per address, about
+0.2 µs, to pick the 100 checked without letting the sender choose them.
 
 ```sh
-CATRACA_TEST_REDIS_URL=redis://localhost:6379/0   go test ./internal/signal -run '^$' -bench '^BenchmarkObserveRecipientMemory$' -benchtime 1s
+CATRACA_TEST_REDIS_URL=redis://localhost:6379/0 \
+  go test ./internal/signal -run '^$' -bench '^BenchmarkObserveRecipientMemory$' -benchtime 1s -count 3
 ```
 
 ## The Redis store
