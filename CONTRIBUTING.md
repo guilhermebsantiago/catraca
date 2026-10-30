@@ -88,7 +88,8 @@ the run.
   and weekly: gofmt, `go mod tidy`, vet and staticcheck; govulncheck, after
   checking that CI and the Dockerfile build with the `go.mod` toolchain;
   `promtool check rules` and `promtool test rules` on the Prometheus rules;
-  tests on Linux against real Redis and Postgres, and on Windows and macOS;
+  `helm lint`, `helm template`, kubeconform and `catraca config check` on
+  the Helm chart; tests on Linux against real Redis and Postgres, and on Windows and macOS;
   the fault-injection scenarios against Redis and Postgres; every fuzz
   target, one job per package, for 20 seconds each on pull requests and
   `main` and for 5 minutes on the weekly run and when run by hand, with the
@@ -112,7 +113,11 @@ the run.
   `go` directive, the toolchain line and the image together, by hand.
 - Nor does it move the Prometheus release whose `promtool` CI runs
   (`PROMETHEUS_VERSION` in ci.yml): bump it by hand, with the SHA-256 of
-  the `linux-amd64` archive from the release's `sha256sums.txt`.
+  the `linux-amd64` archive from the release's `sha256sums.txt`. The same
+  goes for Helm and kubeconform in the `helm` job (`HELM_VERSION`,
+  `KUBECONFORM_VERSION`): Helm's checksum is in
+  `https://get.helm.sh/<archive>.sha256sum`, kubeconform's in the
+  release's `CHECKSUMS`.
 
 ## Releasing
 

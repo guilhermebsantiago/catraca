@@ -60,6 +60,10 @@ the docs.
   the memory and Redis stores agree.
 - **Docs:** this changelog, and [docs/compatibility.md](docs/compatibility.md)
   on what is stable before 1.0.
+- **Kubernetes:** a Helm chart in `deploy/helm/catraca`, with the probes on
+  the admin port, the ruleset in a ConfigMap that reloads without a
+  restart and secrets from an existing Secret
+  ([docs/kubernetes.md](docs/kubernetes.md)).
 
 ### Changed
 
