@@ -141,6 +141,14 @@ engine:
   # its database has not opened yet. Size it as decisions per second times
   # how long the database may take to open.
   record_queue: 4096
+  # Event attributes counted as entities, read by rules as
+  # entity.<name>.distinct_accounts_24h and the like (docs/signals.md).
+  # Each one a send carries costs it eight more store operations.
+  # entities:
+  #   - name: content
+  #     attribute: content_hash
+  #   - name: parent
+  #     attribute: parent_account
   # When store calls keep failing or missing the deadline for
   # failure_window, none succeeding, and at least failure_threshold of them,
   # decide without the store for cooldown, then let probes through to see

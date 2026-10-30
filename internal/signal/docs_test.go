@@ -65,7 +65,9 @@ func TestSpecsAreDocumented(t *testing.T) {
 	}
 
 	produced := map[string]string{}
-	for _, s := range Specs() {
+	// Every declared entity has the same signals, under entity.<name>; the
+	// page documents them once, in the entity table.
+	for _, s := range append(Specs(), EntitySpecs()...) {
 		name := s.Map + "." + s.Name
 		produced[name] = s.Type
 		switch typ, ok := documented[name]; {

@@ -100,6 +100,10 @@ effects without a hook and API tokens without scopes are warnings.
 		fmt.Fprintln(c.stderr, formatWarning(cfg.Rules.Path, w))
 		warnings++
 	}
+	for _, w := range rs.LintEntities(cfg.Engine.EntityNames()) {
+		fmt.Fprintln(c.stderr, formatWarning(cfg.Rules.Path, w))
+		warnings++
+	}
 	for _, m := range app.MissingHooks(rs, cfg.Hooks) {
 		fmt.Fprintf(c.stderr, "%s: warning: %s\n", cfg.Rules.Path, m)
 		warnings++

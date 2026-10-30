@@ -246,6 +246,60 @@ func BenchmarkObserveRecipientMemory(b *testing.B) {
 	}
 }
 
+// BenchmarkObserveEntities is BenchmarkObserve with 0, 1 and 4 entities
+// declared, each named by every send: the difference per entity is what one
+// costs a send. Values come from a pool of 200 per entity, so the distinct
+// sets hold several accounts each, as for a template many accounts share.
+func BenchmarkObserveEntities(b *testing.B) {
+	const accounts = 1000
+	for _, n := range []int{0, 1, 4} {
+		var ents []signal.Entity
+		for j := range n {
+			ents = append(ents, signal.Entity{Name: fmt.Sprintf("e%d", j), Attribute: fmt.Sprintf("attr_%d", j)})
+		}
+		events := make([]event.Event, accounts)
+		for i := range events {
+			events[i] = event.Event{
+				Type:       event.Send,
+				AccountID:  fmt.Sprintf("acct-%d", i),
+				APIKeyID:   fmt.Sprintf("key-%d", i),
+				IP:         fmt.Sprintf("203.0.%d.%d", i/256, i%256),
+				From:       fmt.Sprintf("news@sender-%d.example", i%50),
+				To:         []string{"a@gmail.example", "b@outlook.example", "c@gmail.example"},
+				Subject:    "Your weekly digest",
+				Attributes: map[string]string{},
+			}
+			for j := range n {
+				events[i].Attributes[fmt.Sprintf("attr_%d", j)] = fmt.Sprintf("value-%d-%d", j, i%200)
+			}
+		}
+		for i, be := range backends {
+			b.Run(fmt.Sprintf("entities=%d/%s", n, be.name), func(b *testing.B) {
+				skipBackend(b, i)
+				c := signal.NewCatalog(be.new(b), signal.Options{Entities: ents})
+				defer c.Close()
+				ctx := context.Background()
+				done := measureRedis(b, i)
+				b.ReportAllocs()
+				k := 0
+				for b.Loop() {
+					ev := events[k%accounts]
+					ev.Time = t0.Add(time.Duration(k) * time.Millisecond)
+					set, err := c.Observe(ctx, ev)
+					if err != nil {
+						b.Fatal(err)
+					}
+					if len(set.Entity) != n {
+						b.Fatalf("%d entities in the set, want %d", len(set.Entity), n)
+					}
+					k++
+				}
+				done()
+			})
+		}
+	}
+}
+
 // measureRedis reads the CPU time of backend i's server, when it has one, and
 // returns a function to call after the loop, which reports the CPU time per
 // iteration as redis-us/op.

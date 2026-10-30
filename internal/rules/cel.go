@@ -32,7 +32,7 @@ import (
 const MaxCost = 10_000
 
 // variables are the names rules read signals from, in signal.Set order.
-var variables = []string{"event", "account", "key", "ip", "domain"}
+var variables = []string{"event", "account", "key", "ip", "domain", "entity"}
 
 // newEnv builds the CEL environment for a ruleset. Lists are bound into the
 // in_list and any_in_list functions, so each ruleset gets its own env.
@@ -194,8 +194,11 @@ func exprLine(when *yaml.Node, celLine int) int {
 // exprInfo is what static inspection learns about a rule's expression.
 type exprInfo struct {
 	// refs are the signals the expression reads by name, such as
-	// account.sends_1m.
+	// account.sends_1m. For entity, Name is the entity's name.
 	refs []signalRef
+	// entityRefs are the entity signals the expression reads by name, such
+	// as entity.content.sends_24h: Map is the entity's name.
+	entityRefs []signalRef
 	// lists are the list names passed to in_list and any_in_list.
 	lists []string
 	// constant is true when the expression is a literal.
@@ -235,6 +238,41 @@ func inspect(a *celast.AST, lists map[string][]string, listNames []string) (expr
 		}
 	}
 
+	// addEntityRef records entity.<name>.<signal>, written with selects or
+	// string indexes, when operand is entity.<name>.
+	addEntityRef := func(operand celast.Expr, signal string) {
+		var inner celast.Expr
+		var name string
+		switch operand.Kind() {
+		case celast.SelectKind:
+			inner, name = operand.AsSelect().Operand(), operand.AsSelect().FieldName()
+		case celast.CallKind:
+			call := operand.AsCall()
+			switch call.FunctionName() {
+			case operators.Index, operators.OptIndex, operators.OptSelect:
+				if len(call.Args()) != 2 {
+					return
+				}
+				n, ok := stringLiteral(call.Args()[1])
+				if !ok {
+					return
+				}
+				inner, name = call.Args()[0], n
+			default:
+				return
+			}
+		default:
+			return
+		}
+		if inner.Kind() != celast.IdentKind || inner.AsIdent() != "entity" {
+			return
+		}
+		ref := signalRef{Map: name, Name: signal}
+		if !slices.Contains(info.entityRefs, ref) {
+			info.entityRefs = append(info.entityRefs, ref)
+		}
+	}
+
 	celast.PreOrderVisit(a.Expr(), celast.NewExprVisitor(func(e celast.Expr) {
 		switch e.Kind() {
 		case celast.ComprehensionKind:
@@ -242,6 +280,7 @@ func inspect(a *celast.AST, lists map[string][]string, listNames []string) (expr
 		case celast.SelectKind:
 			sel := e.AsSelect()
 			addRef(sel.Operand(), sel.FieldName())
+			addEntityRef(sel.Operand(), sel.FieldName())
 		case celast.CallKind:
 			call := e.AsCall()
 			args := call.Args()
@@ -250,6 +289,7 @@ func inspect(a *celast.AST, lists map[string][]string, listNames []string) (expr
 				if len(args) == 2 {
 					if name, ok := stringLiteral(args[1]); ok {
 						addRef(args[0], name)
+						addEntityRef(args[0], name)
 					}
 				}
 			case "in_list", "any_in_list":
@@ -287,14 +327,14 @@ func stringLiteral(e celast.Expr) (string, bool) {
 // activation exposes a signal.Set to CEL. Each map is converted once per
 // evaluation and shared by every rule.
 type activation struct {
-	maps [5]map[string]any
-	vars [5]ref.Val
+	maps [6]map[string]any
+	vars [6]ref.Val
 }
 
 var emptySignals = map[string]any{}
 
 func newActivation(set signal.Set) *activation {
-	a := &activation{maps: [5]map[string]any{set.Event, set.Account, set.Key, set.IP, set.Domain}}
+	a := &activation{maps: [6]map[string]any{set.Event, set.Account, set.Key, set.IP, set.Domain, set.Entity}}
 	for i, m := range a.maps {
 		// A missing map behaves like a map with every signal absent: reading
 		// from it is an evaluation error, not a null dereference.
@@ -333,6 +373,8 @@ func (a *activation) ResolveName(name string) (any, bool) {
 		return a.vars[3], true
 	case "domain":
 		return a.vars[4], true
+	case "entity":
+		return a.vars[5], true
 	}
 	return nil, false
 }

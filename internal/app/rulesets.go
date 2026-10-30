@@ -72,9 +72,11 @@ type rulesetLoader struct {
 	// stats reads the labeled outcomes of every rule, for the gate.
 	stats func(context.Context) ([]precision.RuleStats, error)
 	hooks []config.Hook
-	log   *slog.Logger
-	loads *prometheus.CounterVec
-	now   func() time.Time
+	// entities are the names of engine.entities, for LintEntities.
+	entities []string
+	log      *slog.Logger
+	loads    *prometheus.CounterVec
+	now      func() time.Time
 
 	// mu serializes loads and the watch's looks, and guards the fields
 	// below it.
@@ -110,9 +112,10 @@ func newRulesetLoader(cfg *config.Config, holder *rules.Holder, lb labels, reg p
 		policy:   cfg.Gate.OnLoad,
 		gate:     cfg.Gate.Precision(),
 		// Labels count over all time, as in catraca rules gate.
-		stats: func(ctx context.Context) ([]precision.RuleStats, error) { return lb.RuleStats(ctx, time.Time{}) },
-		hooks: cfg.Hooks,
-		log:   log,
+		stats:    func(ctx context.Context) ([]precision.RuleStats, error) { return lb.RuleStats(ctx, time.Time{}) },
+		hooks:    cfg.Hooks,
+		entities: cfg.Engine.EntityNames(),
+		log:      log,
 		loads: prometheus.NewCounterVec(prometheus.CounterOpts{
 			Name: "catraca_ruleset_loads_total",
 			Help: "Ruleset loads at start and on reload, by result (ok or error).",
@@ -178,6 +181,9 @@ func (l *rulesetLoader) load(ctx context.Context, source string, data []byte, re
 	}
 	l.log.Info("ruleset loaded", attrs...)
 	for _, w := range file.Lint() {
+		l.log.Warn("ruleset warning", "warning", w.String())
+	}
+	for _, w := range file.LintEntities(l.entities) {
 		l.log.Warn("ruleset warning", "warning", w.String())
 	}
 	for _, m := range MissingHooks(file, l.hooks) {

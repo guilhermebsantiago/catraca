@@ -9,7 +9,7 @@
 export type EventType = "send" | "feedback" | "account" | "key_leak";
 
 /** The outcome carried by a feedback event. Mirrors event.FeedbackKind. */
-export type FeedbackKind = "bounce" | "complaint" | "delivery";
+export type FeedbackKind = "bounce" | "complaint" | "delivery" | "trap" | "blocklist";
 
 /** A delivery outcome. Mirrors event.FeedbackInfo. */
 export interface FeedbackInfo {
@@ -63,7 +63,7 @@ export interface SendEvent extends EventFields {
   account_id: string;
 }
 
-/** A bounce, complaint or delivery. */
+/** A bounce, complaint, delivery, spam trap hit or blocklist listing. */
 export interface FeedbackEvent extends EventFields {
   type: "feedback";
   account_id: string;

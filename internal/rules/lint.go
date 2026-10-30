@@ -67,6 +67,12 @@ func (rs *Ruleset) Lint() []Warning {
 					ref, suggest(ref.Name, slices.Sorted(maps.Keys(names))))
 			}
 		}
+		for _, ref := range r.expr.entityRefs {
+			if _, ok := entitySignals[ref.Name]; !ok {
+				warn(r.Line, where, "reads entity.%s.%s, which is not an entity signal: it is always absent, so the rule always fails to evaluate%s",
+					ref.Map, ref.Name, suggest(ref.Name, slices.Sorted(maps.Keys(entitySignals))))
+			}
+		}
 		if r.OnError == decision.FailClosed {
 			for _, g := range presenceGuards {
 				if readsMap(r.expr.refs, g.Map) && !slices.Contains(r.expr.refs, signalRef{"event", g.Guard}) {
@@ -94,6 +100,27 @@ func (rs *Ruleset) Lint() []Warning {
 	}
 
 	slices.SortStableFunc(out, func(a, b Warning) int { return a.Line - b.Line })
+	return out
+}
+
+// LintEntities returns warnings about the rules that read an entity
+// missing from declared, the names of engine.entities: the catalog never
+// produces it, so such a rule always fails to evaluate. Lint cannot tell,
+// since a ruleset does not know the configuration it runs with.
+func (rs *Ruleset) LintEntities(declared []string) []Warning {
+	var out []Warning
+	for _, r := range rs.rules {
+		reported := map[string]bool{}
+		for _, ref := range r.expr.refs {
+			if ref.Map != "entity" || slices.Contains(declared, ref.Name) || reported[ref.Name] {
+				continue
+			}
+			reported[ref.Name] = true
+			out = append(out, Warning{Line: r.Line, Where: "rule " + r.ID,
+				Msg: fmt.Sprintf("reads entity.%s, but engine.entities declares no entity %s: it is always absent, so the rule always fails to evaluate%s",
+					ref.Name, ref.Name, suggest(ref.Name, slices.Sorted(slices.Values(declared))))})
+		}
+	}
 	return out
 }
 

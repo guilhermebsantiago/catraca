@@ -719,6 +719,10 @@ func TestValidation(t *testing.T) {
 		{"dedupe ttl", "engine: {dedupe_ttl: -1s}", "engine.dedupe_ttl: must be at least 1s, or 0s to turn deduplication off, got -1s"},
 		{"short dedupe ttl", "engine: {dedupe_ttl: 500ms}", "engine.dedupe_ttl: must be at least 1s, or 0s to turn deduplication off, got 500ms"},
 		{"short recipient memory", "engine: {recipient_memory: 30m}", "engine.recipient_memory: must be at least 1h, or 0s to turn the recipient memory off, got 30m0s"},
+		{"entity name", "engine: {entities: [{name: Content, attribute: content_hash}]}", `engine.entities[0]: name "Content" must be a lowercase letter`},
+		{"entity attribute", "engine: {entities: [{name: content}]}", "engine.entities[0]: entity content: attribute is required"},
+		{"entity twice", "engine: {entities: [{name: content, attribute: a}, {name: content, attribute: b}]}", "engine.entities[1].name: content is declared twice"},
+		{"entity field", "engine: {entities: [{name: content, attribute: a, hash: true}]}", "hash"},
 		{"min labeled", "gate: {min_labeled: 0}", "gate.min_labeled: must be at least 1, got 0"},
 		{"min precision", "gate: {min_precision: 1.5}", "gate.min_precision: must be greater than 0 and at most 1, got 1.5"},
 		{"store backend", "store: {backend: etcd}", `store.backend: want memory or redis, got "etcd"`},
@@ -967,5 +971,23 @@ func TestLoadMissingFile(t *testing.T) {
 	_, err := Load(filepath.Join(t.TempDir(), "nope.yaml"))
 	if err == nil || !strings.Contains(err.Error(), "nope.yaml") {
 		t.Fatalf("err = %v", err)
+	}
+}
+
+func TestEntities(t *testing.T) {
+	cfg := mustParse(t, minimal+"engine: {entities: [{name: content, attribute: content_hash}, {name: parent, attribute: parent_account}]}\n", nil)
+	if got := cfg.Engine.EntityNames(); len(got) != 2 || got[0] != "content" || got[1] != "parent" {
+		t.Errorf("EntityNames() = %v", got)
+	}
+	if got := cfg.Engine.SignalEntities(); len(got) != 2 || got[1].Name != "parent" || got[1].Attribute != "parent_account" {
+		t.Errorf("SignalEntities() = %+v", got)
+	}
+	var many strings.Builder
+	many.WriteString(minimal + "engine:\n  entities:\n")
+	for i := range 17 {
+		fmt.Fprintf(&many, "    - {name: e%d, attribute: a}\n", i)
+	}
+	if _, err := Parse([]byte(many.String()), "catraca.yaml", env(nil)); err == nil || !strings.Contains(err.Error(), "engine.entities: lists 17 entities; at most 16 are counted") {
+		t.Errorf("17 entities: error = %v", err)
 	}
 }

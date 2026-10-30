@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/guilhermebsantiago/catraca/internal/audit"
+	"github.com/guilhermebsantiago/catraca/internal/signal"
 	"github.com/guilhermebsantiago/catraca/internal/store"
 )
 
@@ -108,6 +109,20 @@ func (v *validator) explicit(c *Config) {
 	}
 	if d := c.Engine.RecipientMemory; d < 0 || (d > 0 && d < time.Hour) {
 		v.add("engine.recipient_memory", "must be at least 1h, or 0s to turn the recipient memory off, got %s", d)
+	}
+	if n := len(c.Engine.Entities); n > signal.MaxEntities {
+		v.add("engine.entities", "lists %d entities; at most %d are counted", n, signal.MaxEntities)
+	}
+	entityNames := map[string]bool{}
+	for i, e := range c.Engine.Entities {
+		path := fmt.Sprintf("engine.entities[%d]", i)
+		if err := (signal.Entity{Name: e.Name, Attribute: e.Attribute}).Validate(); err != nil {
+			v.add(path, "%v", err)
+		}
+		if entityNames[e.Name] {
+			v.add(path+".name", "%s is declared twice", e.Name)
+		}
+		entityNames[e.Name] = true
 	}
 	if v.isSet("engine.breaker.failure_threshold") && c.Engine.Breaker.FailureThreshold < 1 {
 		v.add("engine.breaker.failure_threshold", "must be at least 1, got %d", c.Engine.Breaker.FailureThreshold)

@@ -17,6 +17,9 @@ type Signals struct {
 	Key     map[string]any `json:"key"`
 	IP      map[string]any `json:"ip"`
 	Domain  map[string]any `json:"domain"`
+	// Entity holds one map of signals per entity the server declares and
+	// the event carries, keyed by the entity's name.
+	Entity map[string]any `json:"entity,omitempty"`
 }
 
 // RuleExplanation is how one rule fared against a signal set.
@@ -53,7 +56,7 @@ func (rs *Ruleset) Explain(set signal.Set) Explanation {
 	out := Combine(results)
 	x := Explanation{
 		RulesetVersion: rs.Version(),
-		Signals:        Signals{Event: set.Event, Account: set.Account, Key: set.Key, IP: set.IP, Domain: set.Domain},
+		Signals:        Signals{Event: set.Event, Account: set.Account, Key: set.Key, IP: set.IP, Domain: set.Domain, Entity: set.Entity},
 		Action:         out.Action,
 		RetryAfter:     decision.RetrySeconds(out.RetryAfter),
 		Rules:          make([]RuleExplanation, len(results)),

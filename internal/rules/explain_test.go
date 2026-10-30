@@ -37,7 +37,8 @@ func TestExplain(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	set := signal.Set{Event: map[string]any{"type": "send"}, Account: map[string]any{"sends_1m": int64(11)}}
+	set := signal.Set{Event: map[string]any{"type": "send"}, Account: map[string]any{"sends_1m": int64(11)},
+		Entity: map[string]any{"content": map[string]any{"distinct_accounts_24h": int64(4)}}}
 	x := rs.Explain(set)
 	want := []RuleExplanation{
 		{ID: "burst", Matched: true, Action: decision.Throttle, Mode: decision.Enforce, OnError: decision.FailOpen},
@@ -69,6 +70,10 @@ func TestExplain(t *testing.T) {
 	}
 	if again := rs.Explain(back); again.Action != x.Action || back.Account["sends_1m"] != int64(11) || back.Key != nil {
 		t.Errorf("read back: %+v, action %s", back, again.Action)
+	}
+	// Entity signals are shown, one map per entity, and read back too.
+	if content, _ := back.Entity["content"].(map[string]any); content["distinct_accounts_24h"] != int64(4) {
+		t.Errorf("entity signals read back as %+v, want content.distinct_accounts_24h 4", back.Entity)
 	}
 }
 

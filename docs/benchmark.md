@@ -215,6 +215,31 @@ deciding whether to keep a plain allow under `audit.sample_allowed` about
 go test ./internal/audit -run '^$' -bench 'SQLite$' -benchtime 3x
 ```
 
+### Entities
+
+Each [entity](signals.md#entity) a send names adds two increments, two
+distinct-set adds and four reads to the script it already runs.
+`BenchmarkObserveEntities` sends the event of `BenchmarkObserve` with 0, 1
+and 4 entities declared, every send naming each one, with 200 values per
+entity shared by 1,000 accounts. Medians of three runs of 5,000 sends:
+
+| entities | memory store | Redis, per send | Redis CPU |
+|---|---|---|---|
+| 0 | 16 µs | 631 µs | 603 µs |
+| 1 | 16 µs | 726 µs | 672 µs |
+| 4 | 26 µs | 1,043 µs | 981 µs |
+
+An entity costs a send some 90 to 100 µs of Redis time on this Redis build,
+about a seventh of the send's own, and 3 µs on the memory store. On a
+cluster its two keys are two more script calls in the same pipeline, as for
+the other counters. Declare the attributes rules read, not every one a
+platform sends.
+
+```sh
+CATRACA_TEST_REDIS_URL=redis://localhost:6379/0 \
+  go test ./internal/signal -run '^$' -bench 'BenchmarkObserveEntities/./^(memory|redis-server)$' -benchtime 5000x -count 3
+```
+
 ## The Redis store
 
 Before, a send event's batch was about 90 pipelined commands, and every

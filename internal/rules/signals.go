@@ -49,6 +49,10 @@ var kindOfType = map[string]signalKind{
 // (age_hours: 2 becomes float64(2)).
 var knownSignals = indexSpecs(signal.Specs())
 
+// entitySignals are the signals of every entity, by name: what
+// entity.<name>.<signal> may read.
+var entitySignals = indexSpecs(signal.EntitySpecs())["entity"]
+
 func indexSpecs(specs []signal.Spec) map[string]map[string]signalKind {
 	out := map[string]map[string]signalKind{}
 	for _, s := range specs {

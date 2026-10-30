@@ -136,10 +136,10 @@ func genericEvent(in event.Event) (event.Event, error) {
 		default:
 			return event.Event{}, errors.New(`feedback.bounce_type must be "permanent" or "transient"`)
 		}
-	case event.Complaint, event.Delivery:
+	case event.Complaint, event.Delivery, event.Trap, event.Blocklist:
 		info.BounceType = ""
 	default:
-		return event.Event{}, errors.New(`feedback.kind must be "bounce", "complaint" or "delivery"`)
+		return event.Event{}, errors.New(`feedback.kind must be "bounce", "complaint", "delivery", "trap" or "blocklist"`)
 	}
 	return event.Event{
 		ID:         in.ID,

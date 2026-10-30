@@ -88,8 +88,9 @@ empty after a restart and fills as leaked keys are used.
 | event | records |
 |---|---|
 | `send` | account: sends, sends from the IP, recipients, recipient domains, IP and API key; key: sends and IP; ip: sends, account and API key; domain: sends and account; the IP as known to the account and to the key (`new_ip`) |
-| `feedback` | account: bounces, hard bounces, complaints or deliveries; domain: complaints; the recipient memory: the recipient of a hard bounce or complaint |
+| `feedback` | account: bounces, hard bounces, complaints, deliveries, trap hits or blocklist hits; domain: complaints; the recipient memory: the recipient of a hard bounce or complaint |
 | `account` | ip: a signup, when `account.action` is `signup`; account: its creation time, when `account.created_at` is set |
+| `send`, `account` | each [entity](#entity) whose attribute the event carries: the account, and for a send the send |
 | `key_leak` | key: leaked |
 | every event | the first time its account and API key were seen |
 
@@ -127,7 +128,7 @@ read the [recipient memory](#the-recipient-memory).
 | `link_domains` | list(string) | distinct hostnames of `links`, lowercase, sorted; a link without a scheme, such as `example.com/offer`, is read as http |
 | `links` | int | number of `links` |
 | `subject_length` | int | characters (Unicode code points) in `subject` |
-| `feedback_kind` | string | `bounce`, `complaint` or `delivery` for feedback events, `""` otherwise |
+| `feedback_kind` | string | `bounce`, `complaint`, `delivery`, `trap` or `blocklist` for feedback events, `""` otherwise |
 | `bounce_type` | string | as sent for bounces (`permanent`, `transient`), `""` otherwise |
 | `account_action` | string | `account.action` for account events, such as `signup`; `""` otherwise |
 | `attributes` | map(string, string) | the platform's attributes, empty when there are none |
@@ -195,6 +196,8 @@ The account that sent the event.
 | `bounce_rate_7d` | double | 7 d | `bounces_7d / max(recipients_7d, sends_7d, 1)`, at most 1 |
 | `hard_bounce_rate_7d` | double | 7 d | `hard_bounces_7d / max(recipients_7d, sends_7d, 1)`, at most 1 |
 | `complaint_rate_7d` | double | 7 d | `complaints_7d / max(recipients_7d, sends_7d, 1)`, at most 1 |
+| `trap_hits_7d` | int | 7 d | feedback events of kind `trap`: sends that reached a spam trap, as a trap network or provider reported them ([feedback](feedback.md#third-party-reputation)) |
+| `blocklist_hits_7d` | int | 7 d | feedback events of kind `blocklist`: blocklist listings attributed to the account |
 | `age_hours` | double | | hours since the account was created, or since it was first seen when the creation time is unknown |
 | `hourly_baseline_7d` | double | 7 d | `sends_7d / 168`: the average sends per hour over the week |
 | `volume_ratio_1h` | double | 1 h | `sends_1h / max(hourly_baseline_7d, 1)`: how this hour compares to the weekly average |
@@ -321,10 +324,71 @@ The sender domain: the domain of `from`.
 | `distinct_accounts_24h` | int | 24 h | distinct accounts of send events from the domain |
 | `complaints_24h` | int | 24 h | complaint feedback events whose `from` has the domain |
 
+## `entity`
+
+Entities are event attributes counted the way accounts and IPs are, so rules
+can see many accounts behind one value: a template's content hash, a payment
+fingerprint, a device id, a signup email domain, a parent account. None is
+counted until `engine.entities` declares it ([configuration](config.md#engine)):
+
+```yaml
+engine:
+  entities:
+    - name: content          # entity.content.<signal>
+      attribute: content_hash # keyed by event.attributes.content_hash
+    - name: parent
+      attribute: parent_account
+```
+
+`entity` holds a map per declared entity whose attribute the event carries,
+non-empty: `entity.content` is absent on an event without
+`attributes.content_hash`, so a rule that reads it follows `on_error`. Guard
+with `"content" in entity` when the attribute is optional. Each entity has the
+same signals:
+
+| signal | type | window | meaning |
+|---|---|---|---|
+| `sends_1h` | int | 1 h | send events with this attribute value |
+| `sends_24h` | int | 24 h | send events with this attribute value |
+| `distinct_accounts_24h` | int | 24 h | distinct accounts of send and account events with this attribute value |
+| `distinct_accounts_7d` | int | 7 d | distinct accounts of send and account events with this attribute value |
+
+Account events count toward the distinct accounts, so a signup that carries a
+device id or payment fingerprint links its account before it sends. Values are
+matched exactly as sent, and the store keeps a SHA-256 digest of each, never
+the value: attributes such as a signup email or device id may be personal.
+The digest is not keyed, so a value with few possibilities (an email domain)
+can be guessed from it by anyone who reads the store.
+
+A rule that reads an entity `engine.entities` does not declare always fails
+to evaluate; `catraca config check` and the server warn about it at load.
+`catraca rules check` cannot, as it reads no configuration.
+
+Each entity a send names costs it eight more store operations (two
+increments, two distinct-set adds and four reads) in the same round trip: about 100 µs of Redis time on the
+[benchmark](benchmark.md#entities)'s machine, a seventh of the send's own.
+At most 16 entities can be declared.
+
 ## Examples
 
 ```yaml
 rules:
+  - id: template-reuse-new-accounts
+    # Snowshoe and signup farms: one template sent by many young accounts.
+    when: >
+      event.type == "send" && "content" in entity &&
+      entity.content.distinct_accounts_24h >= 5 && account.age_hours < 72.0
+    mode: shadow
+    action: hold
+    reason: Many new accounts sending the same content
+
+  - id: trap-hits
+    when: event.type == "send" && account.trap_hits_7d >= 3 && account.state != "trusted"
+    mode: shadow
+    action: flag
+    reason: Sends from this account reached spam traps this week
+
+
   - id: leaked-key-send
     when: event.type == "send" && key.leaked
     action: block

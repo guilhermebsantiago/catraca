@@ -167,15 +167,16 @@ not to make a counter look like zero when the store is down.
 
 ## The CEL environment
 
-Rules see five variables, each a `map(string, dyn)`:
+Rules see six variables, each a `map(string, dyn)`:
 
 | variable | signals | present |
 |---|---|---|
 | `event` | computed from the event alone: `type`, `account_id`, `api_key_id`, `ip`, `from_domain`, `recipients`, `to_domains`, `link_domains`, `links`, `subject_length`, `feedback_kind`, `bounce_type`, `account_action`, `attributes`, `role_recipients`; and from the recipient memory, `suppressed_recipients` and `suppressed_ratio` | always; the two `suppressed_` signals when the store answers |
-| `account` | sends, sends from the event's IP, recipients, distinct domains/IPs/keys, bounces, complaints and their rates, `age_hours`, `hourly_baseline_7d`, `volume_ratio_1h`, `new_ip`, `recent_ip` | when the store answers |
+| `account` | sends, sends from the event's IP, recipients, distinct domains/IPs/keys, bounces, complaints and their rates, spam trap and blocklist hits, `age_hours`, `hourly_baseline_7d`, `volume_ratio_1h`, `new_ip`, `recent_ip` | when the store answers |
 | `key` | `sends_1m`, `sends_1h`, `distinct_ips_1h`, `distinct_ips_24h`, `new_ip`, `age_hours`, `leaked` | when the event has an API key; while the store is down, only `leaked`, for keys known to be leaked |
 | `ip` | `sends_1m`, `sends_1h`, `distinct_accounts_24h`, `distinct_keys_24h`, `signups_24h` | when the event has an IP |
 | `domain` | `sends_1h`, `distinct_accounts_24h`, `complaints_24h` | when From has a domain |
+| `entity` | a map per entity in `engine.entities`: `entity.<name>.sends_1h`, `sends_24h`, `distinct_accounts_24h`, `distinct_accounts_7d` ([entities](signals.md#entity)) | each entity when the event carries its attribute and the store answers |
 
 The full list, with windows and definitions, is in the
 [Signals section of the design](design.md#signals). Window suffixes are

@@ -148,6 +148,7 @@ func New(ctx context.Context, cfg *config.Config, opts Options) (_ *App, err err
 		DedupeTTL:        dedupe,
 		RecipientMemory:  recipients,
 		RecipientHashKey: []byte(cfg.Engine.RecipientHashKey.Value()),
+		Entities:         cfg.Engine.SignalEntities(),
 	})
 
 	alog := log.With("component", "audit")

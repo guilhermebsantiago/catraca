@@ -167,14 +167,41 @@ func parseSignals(e *errs, n *yaml.Node, where string, base signal.Set) signal.S
 			m = &set.IP
 		case "domain":
 			m = &set.Domain
+		case "entity":
+			m = &set.Entity
 		}
 		if isNull(v) {
 			*m = nil
 			return
 		}
+		if name == "entity" {
+			*m = parseEntityMaps(e, v, where, *m)
+			return
+		}
 		*m = parseSignalMap(e, v, where, name, *m)
 	})
 	return set
+}
+
+// parseEntityMaps reads signals.entity: a map of signals per entity name,
+// each read like any other map on top of the one in base.
+func parseEntityMaps(e *errs, n *yaml.Node, where string, base map[string]any) map[string]any {
+	m := maps.Clone(base)
+	if m == nil {
+		m = map[string]any{}
+	}
+	if !mapping(e, n, where, "signals.entity") {
+		return m
+	}
+	fields(e, n, where, nil, func(name string, _, v *yaml.Node) {
+		if isNull(v) {
+			delete(m, name)
+			return
+		}
+		prev, _ := m[name].(map[string]any)
+		m[name] = parseSignalMap(e, v, where, "entity."+name, prev)
+	})
+	return m
 }
 
 func parseSignalMap(e *errs, n *yaml.Node, where, mapName string, base map[string]any) map[string]any {
@@ -191,6 +218,9 @@ func parseSignalMap(e *errs, n *yaml.Node, where, mapName string, base map[strin
 			return
 		}
 		kind := knownSignals[mapName][name]
+		if strings.HasPrefix(mapName, "entity.") {
+			kind = entitySignals[name]
+		}
 		if kind == 0 {
 			kind = guessKind(v)
 		}

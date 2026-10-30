@@ -49,7 +49,7 @@ API tokens without [scopes](api.md#conventions) are printed as warnings.
 catraca.yaml is valid (1 warning(s))
   listen      :8080
   api tokens  send-path (decide), ops (decide, read, label, admin)
-  ruleset     rules/default.yaml (version 098086f42c27, 12 rules: 3 enforced, 9 shadow)
+  ruleset     rules/default.yaml (version 1670cb7264a7, 13 rules: 3 enforced, 10 shadow)
   reload      when the file changes (read every 5s), on SIGHUP and on POST /v1/rules/reload
   store       memory (one instance; counters are lost on restart)
   audit       sqlite:catraca.db, minimal events

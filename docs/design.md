@@ -149,8 +149,19 @@ with action "signup").
 `domain` (sender domain, present when From has one): `sends_1h`,
 `distinct_accounts_24h`, `complaints_24h`.
 
+`entity` (one map per entity in `engine.entities` whose attribute the event
+carries): `entity.<name>.sends_1h`, `sends_24h`, `distinct_accounts_24h`,
+`distinct_accounts_7d`. An entity is an event attribute counted like the
+keys above, so rules see the accounts behind one content hash, payment
+fingerprint, device or parent account. Its counters go in the same batch as
+the rest, keyed by a SHA-256 digest of the value; the names are configured,
+so `LintEntities` checks rules against the configuration where one is at
+hand (`config check`, the server's reloads) and `Lint` checks only the
+signal names.
+
 Which counters an event increments: send events increment sends, recipients
-and distinct sets; feedback events increment bounces/complaints/deliveries on
+and distinct sets; feedback events increment bounces/complaints/deliveries
+(and the account's trap and blocklist hits) on
 the account and sender domain of the original send (the feedback event
 carries account_id and, when known, from); account events increment
 `ip.signups_24h` for signups and record first-seen.
@@ -203,7 +214,7 @@ when the rule is enforced and its `when` is true), `retry_after` (for throttle),
 `tags`, and `override` (`{by, reason, at}`: a recorded decision to enforce a
 rule that has not passed the gate).
 
-CEL environment: variables `event`, `account`, `key`, `ip`, `domain`, all
+CEL environment: variables `event`, `account`, `key`, `ip`, `domain`, `entity`, all
 `map(string, dyn)`. Functions: `in_list(name, value) bool`,
 `any_in_list(name, list) bool`, `domain_of(address) string`,
 `ratio(a, b) double` (a / max(b, 1)). Rules are compiled at load; an unknown
