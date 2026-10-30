@@ -19,13 +19,17 @@ const (
 	// of the way of the start itself.
 	pruneFirst = time.Minute
 	pruneEvery = 10 * time.Minute
-	// pruneBatch is the most rows one DELETE removes, so no statement holds
-	// locks for long. On SQLite every write waits for it, the decision
-	// writer included.
+	// pruneBatch is the default of Options.PruneBatch on SQLite: the most
+	// rows one DELETE removes, so no statement holds locks for long. On
+	// SQLite every write waits for it, the decision writer included.
 	pruneBatch = 500
-	// pruneMinPause is the least time between two batches. After a batch
-	// the loop waits at least as long as the batch took, so a large backlog
-	// takes at most about half of the database's write time.
+	// pruneBatchPostgres is the default on Postgres, where a DELETE locks
+	// only the rows it deletes.
+	pruneBatchPostgres = 5000
+	// pruneMinPause is the least time between two batches. Without
+	// Options.PrunePause the loop waits at least as long as the batch took
+	// on SQLite, so a large backlog takes at most about half of the
+	// database's write time; on Postgres it is the default pause.
 	pruneMinPause = 10 * time.Millisecond
 	// pruneTimeout bounds one DELETE.
 	pruneTimeout = 30 * time.Second
@@ -94,7 +98,7 @@ func (db *DB) prune(ctx context.Context, now time.Time) error {
 
 	cutoff := toMicros(now.Add(-db.opts.Retention))
 	from := db.retention.from
-	err := inBatches(ctx, func(ctx context.Context) (int, error) {
+	err := db.inBatches(ctx, func(ctx context.Context) (int, error) {
 		n, last, err := db.deleteDecisions(ctx, from, cutoff, true)
 		if n > 0 {
 			// Every unlabeled decision before last was in this batch.
@@ -113,7 +117,7 @@ func (db *DB) prune(ctx context.Context, now time.Time) error {
 
 	if lr := db.opts.LabeledRetention; lr > 0 {
 		labeledCutoff := toMicros(now.Add(-lr))
-		err := inBatches(ctx, func(ctx context.Context) (int, error) {
+		err := db.inBatches(ctx, func(ctx context.Context) (int, error) {
 			n, _, err := db.deleteDecisions(ctx, 0, labeledCutoff, false)
 			decisions += n
 			return n, err
@@ -123,7 +127,7 @@ func (db *DB) prune(ctx context.Context, now time.Time) error {
 		}
 	}
 
-	err = inBatches(ctx, func(ctx context.Context) (int, error) {
+	err = db.inBatches(ctx, func(ctx context.Context) (int, error) {
 		n, err := db.deleteDeliveries(ctx, cutoff)
 		deliveries += n
 		return n, err
@@ -133,7 +137,7 @@ func (db *DB) prune(ctx context.Context, now time.Time) error {
 	}
 
 	var leakReports int
-	err = inBatches(ctx, func(ctx context.Context) (int, error) {
+	err = db.inBatches(ctx, func(ctx context.Context) (int, error) {
 		n, err := db.deleteLeakReports(ctx, cutoff)
 		leakReports += n
 		return n, err
@@ -152,18 +156,23 @@ func (db *DB) prune(ctx context.Context, now time.Time) error {
 	return errors.Join(errs...)
 }
 
-// inBatches calls del until it deletes fewer than pruneBatch rows, pausing
-// between batches as long as the last one took.
-func inBatches(ctx context.Context, del func(context.Context) (int, error)) error {
+// inBatches calls del until it deletes fewer than PruneBatch rows, pausing
+// between batches for PrunePause or, without one, as long as the last
+// batch took.
+func (db *DB) inBatches(ctx context.Context, del func(context.Context) (int, error)) error {
 	for {
 		start := time.Now()
 		sctx, cancel := context.WithTimeout(ctx, pruneTimeout)
 		n, err := del(sctx)
 		cancel()
-		if err != nil || n < pruneBatch {
+		if err != nil || n < db.opts.PruneBatch {
 			return err
 		}
-		t := time.NewTimer(max(time.Since(start), pruneMinPause))
+		pause := db.opts.PrunePause
+		if pause == 0 {
+			pause = max(time.Since(start), pruneMinPause)
+		}
+		t := time.NewTimer(pause)
 		select {
 		case <-ctx.Done():
 			t.Stop()
@@ -173,7 +182,7 @@ func inBatches(ctx context.Context, del func(context.Context) (int, error)) erro
 	}
 }
 
-// deleteDecisions deletes up to pruneBatch decisions decided in [from,
+// deleteDecisions deletes up to PruneBatch decisions decided in [from,
 // before), oldest first, skipping labeled ones when unlabeledOnly is set.
 // Matches and labels go with them through ON DELETE CASCADE. It returns how
 // many it deleted and the latest decision time among them. On Postgres,
@@ -191,7 +200,7 @@ func (db *DB) deleteDecisions(ctx context.Context, from, before int64, unlabeled
     LIMIT ?` + db.dialect.skipLocked + `
 )
 RETURNING decided_at_us`
-	rows, err := db.db.QueryContext(ctx, db.dialect.rebind(q), from, before, pruneBatch)
+	rows, err := db.db.QueryContext(ctx, db.dialect.rebind(q), from, before, db.opts.PruneBatch)
 	if err != nil {
 		return 0, 0, err
 	}
@@ -207,7 +216,7 @@ RETURNING decided_at_us`
 	return n, last, rows.Err()
 }
 
-// deleteDeliveries deletes up to pruneBatch delivered or dead deliveries
+// deleteDeliveries deletes up to PruneBatch delivered or dead deliveries
 // last updated before before, oldest first. Pending ones are never deleted.
 func (db *DB) deleteDeliveries(ctx context.Context, before int64) (int, error) {
 	res, err := db.db.ExecContext(ctx, db.dialect.rebind(`DELETE FROM outbox WHERE id IN (
@@ -215,7 +224,7 @@ func (db *DB) deleteDeliveries(ctx context.Context, before int64) (int, error) {
     WHERE status IN ('delivered', 'dead') AND updated_at_us < ?
     ORDER BY updated_at_us
     LIMIT ?`+db.dialect.skipLocked+`
-)`), before, pruneBatch)
+)`), before, db.opts.PruneBatch)
 	if err != nil {
 		return 0, err
 	}

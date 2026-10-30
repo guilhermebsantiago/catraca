@@ -247,6 +247,12 @@ func TestDefaults(t *testing.T) {
 		{"audit.max_idle_conns", cfg.Audit.MaxIdleConns, 10},
 		{"audit.conn_max_lifetime", cfg.Audit.ConnMaxLifetime, 30 * time.Minute},
 		{"audit.conn_max_idle_time", cfg.Audit.ConnMaxIdleTime, 5 * time.Minute},
+		{"audit.buffer_size", cfg.Audit.BufferSize, 8192},
+		{"audit.batch_size", cfg.Audit.BatchSize, 256},
+		{"audit.sample_allowed", cfg.Audit.SampleAllowed, 1.0},
+		{"audit.retention_batch", cfg.Audit.RetentionBatch, 0},
+		{"audit.retention_pause", cfg.Audit.RetentionPause, time.Duration(0)},
+		{"engine.record_queue", cfg.Engine.RecordQueue, 4096},
 		{"engine.deadline", cfg.Engine.Deadline, 10 * time.Millisecond},
 		{"engine.dispatch_timeout", cfg.Engine.DispatchTimeout, 10 * time.Millisecond},
 		{"outbox.workers", cfg.Outbox.Workers, 16},
@@ -301,7 +307,13 @@ audit:
   max_open_conns: 20
   conn_max_lifetime: 1h
   conn_max_idle_time: 1m
+  buffer_size: 60000
+  batch_size: 1000
+  sample_allowed: 0.1
+  retention_batch: 20000
+  retention_pause: 50ms
 engine:
+  record_queue: 30000
   deadline: 25ms
   dispatch_timeout: 50ms
   max_future_skew: 30s
@@ -372,8 +384,12 @@ logging:
 	opts := cfg.Audit.Options()
 	wantPool := audit.Pool{MaxOpen: 20, MaxIdle: 20, MaxLifetime: time.Hour, MaxIdleTime: time.Minute}
 	if opts.EventMode != audit.EventFull || opts.Retention != 90*24*time.Hour || opts.LabeledRetention != 2*365*24*time.Hour ||
-		opts.Pool != wantPool {
+		opts.Pool != wantPool || opts.BufferSize != 60000 || opts.BatchSize != 1000 || opts.SampleAllowed != 0.1 ||
+		opts.PruneBatch != 20000 || opts.PrunePause != 50*time.Millisecond {
 		t.Errorf("audit options = %+v", opts)
+	}
+	if cfg.Engine.RecordQueue != 30000 {
+		t.Errorf("engine.record_queue = %d, want 30000", cfg.Engine.RecordQueue)
 	}
 	if cfg.Engine.Deadline != 25*time.Millisecond || cfg.Engine.DispatchTimeout != 50*time.Millisecond ||
 		cfg.Engine.MaxFutureSkew != 30*time.Second || cfg.Engine.MaxEventAge != 72*time.Hour ||
@@ -726,6 +742,17 @@ func TestValidation(t *testing.T) {
 		{"idle above open", "audit: {max_open_conns: 4, max_idle_conns: 8}", "audit.max_idle_conns: must be at most max_open_conns (4), got 8"},
 		{"conn lifetime", "audit: {conn_max_lifetime: 0s}", "audit.conn_max_lifetime: must be a positive duration"},
 		{"conn idle time", "audit: {conn_max_idle_time: -1s}", "audit.conn_max_idle_time: must be a positive duration"},
+		{"buffer size", "audit: {buffer_size: 0}", "audit.buffer_size: must be at least 1, got 0"},
+		{"batch size", "audit: {batch_size: -1}", "audit.batch_size: must be at least 1, got -1"},
+		{"batch above buffer", "audit: {buffer_size: 100, batch_size: 200}", "audit.batch_size: must be at most buffer_size (100), got 200"},
+		{"batch above default buffer", "audit: {batch_size: 10000}", "audit.batch_size: must be at most buffer_size (8192), got 10000"},
+		{"sample allowed zero", "audit: {sample_allowed: 0}", "audit.sample_allowed: must be greater than 0 and at most 1, got 0"},
+		{"sample allowed above 1", "audit: {sample_allowed: 1.5}", "audit.sample_allowed: must be greater than 0 and at most 1, got 1.5"},
+		{"sample allowed NaN", "audit: {sample_allowed: .nan}", `audit.sample_allowed: want a number, got ".nan"`},
+		{"retention batch", "audit: {retention_batch: 0}", "audit.retention_batch: must be from 1 to 100000, got 0"},
+		{"large retention batch", "audit: {retention_batch: 200000}", "audit.retention_batch: must be from 1 to 100000, got 200000"},
+		{"retention pause", "audit: {retention_pause: 0s}", "audit.retention_pause: must be a positive duration"},
+		{"record queue", "engine: {record_queue: 0}", "engine.record_queue: must be at least 1, got 0"},
 		{"hook name", "hooks: [{name: Revoke-Key, url: 'https://x', secret: " + testSecret + "}]", "hooks[0].name: must be lowercase letters"},
 		{"hook name required", "hooks: [{url: 'https://x', secret: " + testSecret + "}]", "hooks[0].name: is required"},
 		{"hook duplicate", "hooks: [{name: a, url: 'https://x', secret: " + testSecret + "}, {name: a, url: 'https://y', secret: " + testSecret + "}]", "hooks[1].name: another hook already carries out a"},

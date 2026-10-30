@@ -17,6 +17,11 @@ import (
 // compares them in constant time, but a short one can still be guessed.
 const minSecretLen = 16
 
+// maxRetentionBatch is the largest audit.retention_batch accepted: one
+// DELETE of more rows holds its locks, and on SQLite every write, for
+// seconds.
+const maxRetentionBatch = 100_000
+
 var (
 	// effectName matches the effect names rules may list, which name hooks.
 	effectName = regexp.MustCompile(`^[a-z][a-z0-9_]*$`)
@@ -141,6 +146,17 @@ func (v *validator) explicit(c *Config) {
 	v.positive("audit.conn_max_idle_time", c.Audit.ConnMaxIdleTime)
 	v.positive("audit.retention", c.Audit.Retention)
 	v.positive("audit.labeled_retention", c.Audit.LabeledRetention)
+	if n := c.Audit.RetentionBatch; v.isSet("audit.retention_batch") && (n < 1 || n > maxRetentionBatch) {
+		v.add("audit.retention_batch", "must be from 1 to %d, got %d", maxRetentionBatch, n)
+	}
+	v.positive("audit.retention_pause", c.Audit.RetentionPause)
+	v.atLeastOne("audit.buffer_size", c.Audit.BufferSize)
+	v.atLeastOne("audit.batch_size", c.Audit.BatchSize)
+	// Written so that NaN fails too.
+	if r := c.Audit.SampleAllowed; v.isSet("audit.sample_allowed") && !(r > 0 && r <= 1) {
+		v.add("audit.sample_allowed", "must be greater than 0 and at most 1, got %g", r)
+	}
+	v.atLeastOne("engine.record_queue", c.Engine.RecordQueue)
 	if v.isSet("secret_scanning.github.max_attempts") && c.SecretScanning.GitHub.MaxAttempts < 1 {
 		v.add("secret_scanning.github.max_attempts", "must be at least 1, got %d", c.SecretScanning.GitHub.MaxAttempts)
 	}
@@ -373,6 +389,9 @@ func (v *validator) audit(a Audit) {
 	}
 	if a.MaxOpenConns >= 1 && a.MaxIdleConns > a.MaxOpenConns {
 		v.add("audit.max_idle_conns", "must be at most max_open_conns (%d), got %d", a.MaxOpenConns, a.MaxIdleConns)
+	}
+	if a.BufferSize >= 1 && a.BatchSize > a.BufferSize {
+		v.add("audit.batch_size", "must be at most buffer_size (%d), got %d", a.BufferSize, a.BatchSize)
 	}
 	switch {
 	case a.Retention > 0 && a.Retention < audit.MinRetention:

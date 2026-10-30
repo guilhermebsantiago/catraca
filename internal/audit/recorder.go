@@ -42,6 +42,9 @@ type RecorderStats struct {
 	// time while it wrote the rest of their batch: usually a value it cannot
 	// store, such as a NUL byte in a Postgres text column.
 	Rejected uint64
+	// SampledOut decisions were plain allows Options.SampleAllowed left out
+	// of the log on purpose. They are not counted as dropped.
+	SampledOut uint64
 	// Queued decisions are waiting to be written.
 	Queued int
 }
@@ -49,12 +52,47 @@ type RecorderStats struct {
 // RecorderStats returns the recorder's counters.
 func (db *DB) RecorderStats() RecorderStats {
 	return RecorderStats{
-		Recorded: db.recorded.Load(),
-		Dropped:  db.dropped.Load(),
-		Failed:   db.failed.Load(),
-		Rejected: db.rejected.Load(),
-		Queued:   int(max(0, db.pending.Load())),
+		Recorded:   db.recorded.Load(),
+		Dropped:    db.dropped.Load(),
+		Failed:     db.failed.Load(),
+		Rejected:   db.rejected.Load(),
+		SampledOut: db.sampledOut.Load(),
+		Queued:     int(max(0, db.pending.Load())),
 	}
+}
+
+// PlainAllow reports whether d is a decision Options.SampleAllowed may
+// leave out: an allow that no rule matched, enforced or in shadow, that no
+// rule failed on, made with every signal, from an event that counted. It
+// has nothing to review and nothing for the precision gate to count. Every
+// other decision is always recorded.
+func PlainAllow(d decision.Decision) bool {
+	return d.Action == decision.Allow && len(d.Matches) == 0 && len(d.Shadow) == 0 && len(d.Errors) == 0 &&
+		!d.Degraded && !d.Uncounted && !d.Duplicate
+}
+
+// KeepAllow reports whether a plain allow with decision id id is recorded
+// when Options.SampleAllowed is rate. It depends only on the id, so every
+// process keeps the same ones, and a reader can tell whether a decision it
+// cannot find was left out on purpose.
+func KeepAllow(id string, rate float64) bool {
+	if rate >= 1 {
+		return true
+	}
+	// FNV-1a, then the SplitMix64 finalizer, so that ids differing only in
+	// their last characters, as ULIDs made in the same millisecond do,
+	// still spread over the whole range.
+	h := uint64(14695981039346656037)
+	for i := 0; i < len(id); i++ {
+		h ^= uint64(id[i])
+		h *= 1099511628211
+	}
+	h ^= h >> 30
+	h *= 0xbf58476d1ce4e5b9
+	h ^= h >> 27
+	h *= 0x94d049bb133111eb
+	h ^= h >> 31
+	return float64(h>>11)/(1<<53) < rate
 }
 
 // row is a decision ready to insert, built in Record so the writer holds no
@@ -84,9 +122,14 @@ type matchRow struct {
 
 // Record queues d and ev to be written by the background writer. It never
 // blocks and never fails: when the buffer is full or the DB is closed, the
-// decision is dropped, counted in RecorderStats and logged. ctx is unused; it
-// is there to satisfy the engine's Recorder interface.
+// decision is dropped, counted in RecorderStats and logged. A plain allow
+// that Options.SampleAllowed leaves out is only counted. ctx is unused; it is
+// there to satisfy the engine's Recorder interface.
 func (db *DB) Record(_ context.Context, ev event.Event, d decision.Decision) {
+	if rate := db.opts.SampleAllowed; rate < 1 && d.ID != "" && PlainAllow(d) && !KeepAllow(d.ID, rate) {
+		db.sampledOut.Add(1)
+		return
+	}
 	r, err := db.newRow(ev, d)
 	if err != nil {
 		db.drop(err.Error())
