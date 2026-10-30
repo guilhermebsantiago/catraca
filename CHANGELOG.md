@@ -15,6 +15,11 @@ the docs.
 
 ### Added
 
+- **API:** [docs/openapi.yaml](docs/openapi.yaml), an OpenAPI 3.1 spec of
+  every route, with the event, decision, label, error and account state
+  schemas and the scope of each route, for generating clients; a test
+  checks its routes, scopes and error codes against the server and
+  docs/api.md.
 - **Hooks:** each hook is delivered from its own lane, with its own
   `concurrency`, `max_attempts` and `max_age`, so a slow receiver cannot
   hold up the others; `outbox.workers` sizes the pool they share, and
