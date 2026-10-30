@@ -151,6 +151,21 @@ rules:
     reason: Hard bounce rate above 5% in the last 24 hours; the recipient list looks bought or stale
     tags: [reputation]
 
+  - id: spam-traps-or-blocklisted
+    description: >-
+      Holds sends from accounts that hit two or more spam traps in the last
+      7 days, or whose own sending domain or IP was listed on a blocklist,
+      as the platform reported through trap and blocklist feedback. Traps
+      are addresses that never signed up, so mail reaching them was not
+      asked for; one hit can be a typo, two in a week is a list. Platforms
+      that do not report these kinds never match.
+    when: >-
+      event.type == "send"
+      && (account.trap_hits_7d >= 2 || account.blocklist_hits_7d >= 1)
+    action: hold
+    reason: Sends reached spam traps, or the account's own domain or IP was blocklisted, in the last 7 days
+    tags: [reputation]
+
   - id: key-many-ips
     description: >-
       Holds sends with an API key that was used from 20 or more IP addresses

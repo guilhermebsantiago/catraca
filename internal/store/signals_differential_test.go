@@ -49,7 +49,7 @@ func FuzzSignalsAgree(f *testing.F) {
 				continue
 			}
 			s, advance := be.New(t)
-			c := signal.NewCatalog(s, signal.Options{Retention: 10 * day, DedupeTTL: 10 * time.Minute})
+			c := signal.NewCatalog(s, signal.Options{Retention: 10 * day, DedupeTTL: 10 * time.Minute, Entities: genEntities})
 			runs = append(runs, runner{be, c, advance})
 		}
 		g := &eventGen{data: data, at: t0, newest: t0}
@@ -123,7 +123,10 @@ var (
 	genIPs      = []string{"", "203.0.113.7", "2001:db8::1", "2001:DB8::1"}
 	genFroms    = []string{"", "news@one.example", "Team <Team@Two.example>", "billing@one.example"}
 	genRcpts    = []string{"a@m1.example", "b@m2.example", "C@M1.example", "d@m3.example", "e@m4.example", "f@m2.example"}
-	genJumps    = []time.Duration{
+	// Two entities may share a value, and a value may hold ':'.
+	genEntities     = []signal.Entity{{Name: "content", Attribute: "content_hash"}, {Name: "parent", Attribute: "parent_account"}}
+	genEntityValues = []string{"tpl-1", "tpl:2", "", "acct-1"}
+	genJumps        = []time.Duration{
 		time.Minute, 61 * time.Second, time.Hour, 61 * time.Minute, 24 * time.Hour, 24*time.Hour + 24*time.Minute,
 		week, week + 2*time.Hour + 48*time.Minute, 10 * time.Minute, 10 * day, 30 * day, 31 * day,
 	}
@@ -195,7 +198,7 @@ func (g *eventGen) next() (*event.Event, string) {
 		ev.Type = event.Feedback
 		ev.IP = ""
 		ev.Feedback = &event.FeedbackInfo{
-			Kind:       pick(g, []event.FeedbackKind{event.Bounce, event.Complaint, event.Delivery}),
+			Kind:       pick(g, []event.FeedbackKind{event.Bounce, event.Complaint, event.Delivery, event.Trap, event.Blocklist}),
 			BounceType: pick(g, []string{"permanent", "transient", "Permanent"}),
 			Recipient:  pick(g, genRcpts),
 		}
@@ -212,6 +215,10 @@ func (g *eventGen) next() (*event.Event, string) {
 		if g.byte()%2 == 0 {
 			ev.AccountID = ""
 		}
+	}
+	if b := g.byte(); b%4 != 0 {
+		// Feedback carries attributes too; the entities ignore it.
+		ev.Attributes = map[string]string{genEntities[b%2].Attribute: pick(g, genEntityValues)}
 	}
 	if g.byte()%3 != 0 {
 		g.n++
@@ -234,7 +241,7 @@ func setsDiffer(want, got signal.Set, memoryLate bool) string {
 		for _, m := range [...]struct {
 			name      string
 			want, got map[string]any
-		}{{"event", want.Event, got.Event}, {"account", want.Account, got.Account}, {"key", want.Key, got.Key}, {"ip", want.IP, got.IP}, {"domain", want.Domain, got.Domain}} {
+		}{{"event", want.Event, got.Event}, {"account", want.Account, got.Account}, {"key", want.Key, got.Key}, {"ip", want.IP, got.IP}, {"domain", want.Domain, got.Domain}, {"entity", want.Entity, got.Entity}} {
 			for k, w := range m.want {
 				if g, ok := m.got[k]; !ok || !reflect.DeepEqual(w, g) {
 					return fmt.Sprintf("%s.%s: %v, %v", m.name, k, w, g)
@@ -261,7 +268,7 @@ func setsDiffer(want, got signal.Set, memoryLate bool) string {
 	for _, m := range [...]struct {
 		name      string
 		want, got map[string]any
-	}{{"account", want.Account, got.Account}, {"key", want.Key, got.Key}, {"ip", want.IP, got.IP}, {"domain", want.Domain, got.Domain}} {
+	}{{"account", want.Account, got.Account}, {"key", want.Key, got.Key}, {"ip", want.IP, got.IP}, {"domain", want.Domain, got.Domain}, {"entity", want.Entity, got.Entity}} {
 		if (m.want == nil) != (m.got == nil) || len(m.want) != len(m.got) {
 			return m.name + ": not the same signals"
 		}

@@ -119,6 +119,21 @@ func TestGenericComplaintDropsBounceType(t *testing.T) {
 	}
 }
 
+func TestGenericReputationKinds(t *testing.T) {
+	for _, kind := range []event.FeedbackKind{event.Trap, event.Blocklist} {
+		dec := &recorder{}
+		h := newTestGeneric(t, dec, nil)
+		body := `{"account_id":"a","feedback":{"kind":"` + string(kind) + `","bounce_type":"permanent"},"attributes":{"provider":"spamhaus"}}`
+		if code, resp := postSigned(t, h, body); code != http.StatusAccepted {
+			t.Fatalf("%s: status %d body %s", kind, code, resp)
+		}
+		evs := dec.got()
+		if len(evs) != 1 || evs[0].Feedback.Kind != kind || evs[0].Feedback.BounceType != "" || evs[0].Attributes["provider"] != "spamhaus" {
+			t.Errorf("%s: events %+v", kind, evs)
+		}
+	}
+}
+
 func TestGenericSignature(t *testing.T) {
 	body := []byte(`{"account_id":"a","feedback":{"kind":"delivery"}}`)
 	now := time.Now()

@@ -48,6 +48,8 @@ base:
     bounce_rate_7d: 0.005
     hard_bounce_rate_7d: 0.0023
     complaint_rate_7d: 0.0002
+    trap_hits_7d: 0
+    blocklist_hits_7d: 0
     age_hours: 4000
     hourly_baseline_7d: 35.7
     volume_ratio_1h: 1.12
@@ -126,6 +128,7 @@ cases:
         - new-account-burst
         - complaint-rate-high
         - hard-bounce-rate-high
+        - spam-traps-or-blocklisted
         - key-many-ips
         - account-takeover-volume
         - recipient-domain-spray
@@ -150,6 +153,7 @@ cases:
         - new-account-burst
         - complaint-rate-high
         - hard-bounce-rate-high
+        - spam-traps-or-blocklisted
         - key-many-ips
         - account-takeover-volume
         - recipient-domain-spray
@@ -208,6 +212,7 @@ cases:
         - new-account-burst
         - complaint-rate-high
         - hard-bounce-rate-high
+        - spam-traps-or-blocklisted
         - account-takeover-volume
         - recipient-domain-spray
 
@@ -502,6 +507,41 @@ cases:
     signals:
       event: {type: feedback, feedback_kind: bounce, bounce_type: permanent, recipients: 0, suppressed_recipients: 0, suppressed_ratio: 0}
       account: {age_hours: 20}
+    expect:
+      matches: []
+
+  # spam-traps-or-blocklisted
+
+  - name: two spam trap hits in a week hold the account's sends
+    signals:
+      account: {trap_hits_7d: 2}
+    expect:
+      matches: [spam-traps-or-blocklisted]
+
+  - name: a single spam trap hit can be a typo
+    signals:
+      account: {trap_hits_7d: 1}
+    expect:
+      matches: []
+
+  - name: a blocklisted sending domain holds the account's sends
+    signals:
+      account: {blocklist_hits_7d: 1}
+    expect:
+      matches: [spam-traps-or-blocklisted]
+      action: allow
+      shadow: [spam-traps-or-blocklisted]
+
+  - name: a trusted account is still held for trap hits
+    signals:
+      account: {state: trusted, trap_hits_7d: 3}
+    expect:
+      matches: [spam-traps-or-blocklisted]
+
+  - name: the trap report itself is not a send
+    signals:
+      event: {type: feedback, feedback_kind: trap, recipients: 0, suppressed_recipients: 0, suppressed_ratio: 0}
+      account: {trap_hits_7d: 5}
     expect:
       matches: []
 
