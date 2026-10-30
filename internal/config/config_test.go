@@ -238,6 +238,7 @@ func TestDefaults(t *testing.T) {
 		{"rules.path", cfg.Rules.Path, "rules/default.yaml"},
 		{"rules.watch_interval", cfg.Rules.WatchInterval, 5 * time.Second},
 		{"gate.on_load", cfg.Gate.OnLoad, "enforce"},
+		{"gate.recheck_interval", cfg.Gate.RecheckInterval, 5 * time.Minute},
 		{"store.backend", cfg.Store.Backend, "memory"},
 		{"audit.dsn", cfg.Audit.DSN.Value(), "sqlite:catraca.db"},
 		{"audit.event_detail", cfg.Audit.EventDetail, "minimal"},
@@ -500,6 +501,9 @@ secret_scanning:
 func TestWatchIntervalZero(t *testing.T) {
 	if cfg := mustParse(t, minimal+"rules: {watch_interval: 0s}\n", nil); cfg.Rules.WatchInterval != 0 {
 		t.Errorf("watch_interval = %v, want 0", cfg.Rules.WatchInterval)
+	}
+	if cfg := mustParse(t, minimal+"gate: {recheck_interval: 0s}\n", nil); cfg.Gate.RecheckInterval != 0 {
+		t.Errorf("gate.recheck_interval = %v, want 0", cfg.Gate.RecheckInterval)
 	}
 }
 
@@ -787,6 +791,8 @@ func TestValidation(t *testing.T) {
 		{"watch interval", "rules: {watch_interval: -1s}", "rules.watch_interval: must be at least 1s, or 0s to turn the watch off, got -1s"},
 		{"short watch interval", "rules: {watch_interval: 100ms}", "rules.watch_interval: must be at least 1s, or 0s to turn the watch off, got 100ms"},
 		{"gate on load", "gate: {on_load: block}", `gate.on_load: want off, warn or enforce, got "block"`},
+		{"gate recheck", "gate: {recheck_interval: -1s}", "gate.recheck_interval: must be at least 1s, or 0s to turn the re-check off, got -1s"},
+		{"short gate recheck", "gate: {recheck_interval: 10ms}", "gate.recheck_interval: must be at least 1s, or 0s to turn the re-check off, got 10ms"},
 		{"hook previous empty", "hooks: [{name: a, url: 'https://x', secret: " + testSecret + ", previous_secrets: ['']}]", "hooks[0].previous_secrets[0]: is empty; remove it from the list once the rotation is over"},
 		{"hook previous short", "hooks: [{name: a, url: 'https://x', secret: " + testSecret + ", previous_secrets: [short]}]", "hooks[0].previous_secrets[0]: is 5 characters; use at least 16"},
 		{"hook previous current", "hooks: [{name: a, url: 'https://x', secret: " + testSecret + ", previous_secrets: [" + testSecret + "]}]", "hooks[0].previous_secrets[0]: is the current secret; list only the secrets being rotated out"},

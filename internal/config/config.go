@@ -38,6 +38,7 @@ const (
 	DefaultRulesPath       = "rules/default.yaml"
 	DefaultWatchInterval   = 5 * time.Second
 	DefaultGateOnLoad      = GateEnforce
+	DefaultGateRecheck     = 5 * time.Minute
 	DefaultAuditDSN        = "sqlite:catraca.db"
 	DefaultHookTimeout     = 10 * time.Second
 	DefaultLogLevel        = "info"
@@ -344,6 +345,11 @@ type Gate struct {
 	// not passed the gate: "enforce" (the default) holds it in shadow mode,
 	// "warn" lets it enforce and logs a warning, "off" does not check.
 	OnLoad string `yaml:"on_load"`
+	// RecheckInterval is how often the server runs the gate again on the
+	// rules OnLoad "enforce" holds in shadow mode, on the labels given
+	// since, without reading the ruleset file, and lets the ones that pass
+	// enforce. 0 turns the re-check off. Default 5m.
+	RecheckInterval time.Duration `yaml:"recheck_interval"`
 }
 
 // Precision returns the gate for the precision package.
@@ -644,6 +650,9 @@ func (c *Config) applyDefaults(set func(path string) bool) {
 	}
 	if c.Gate.OnLoad == "" {
 		c.Gate.OnLoad = DefaultGateOnLoad
+	}
+	if !set("gate.recheck_interval") {
+		c.Gate.RecheckInterval = DefaultGateRecheck
 	}
 	if c.Outbox.Workers == 0 {
 		c.Outbox.Workers = hooks.DefaultWorkers

@@ -1096,7 +1096,7 @@ in each bucket.
 | `catraca_ruleset_rules{mode}` | gauge | rules by mode, as applied: a rule the gate holds counts as shadow |
 | `catraca_ruleset_loads_total{result}` | counter | loads at start and reloads, by SIGHUP, the API or the watch, `ok` or `error` |
 | `catraca_ruleset_loaded_timestamp_seconds{source}` | gauge | when the current ruleset took effect, labeled with what loaded it: `start`, `watch`, `signal` or `api` |
-| `catraca_ruleset_gate_failures{status}` | gauge | rules the file newly enforces that had not passed the [precision gate](config.md#gate) when it loaded, by `insufficient_labels`, `below_precision` and `unavailable`: held in shadow mode with `gate.on_load: enforce`, enforcing with `warn` |
+| `catraca_ruleset_gate_failures{status}` | gauge | rules the file newly enforces that had not passed the [precision gate](config.md#gate) when it loaded, or at the last re-check of held rules (`gate.recheck_interval`), by `insufficient_labels`, `below_precision` and `unavailable`: held in shadow mode with `gate.on_load: enforce`, enforcing with `warn` |
 | `catraca_dependency_up{dependency}` | gauge | 1 when the last check of `store` (Redis) or `audit` succeeded, else 0 |
 | `catraca_dependency_check_duration_seconds{dependency}` | gauge | how long the last check took; a timeout counts as 2s |
 | `catraca_dependency_check_failures_total{dependency}` | counter | checks that failed or timed out |

@@ -474,6 +474,7 @@ lets it enforce.
 | `min_labeled` | `30` | labeled matches a rule needs, at least 1 |
 | `min_precision` | `0.9` | required Wilson 95% lower bound on precision, in (0, 1] |
 | `on_load` | `enforce` | what loading a ruleset does with a rule it would newly enforce that has not passed the gate: `enforce` holds it in shadow mode, `warn` lets it enforce and logs a warning, `off` does not check |
+| `recheck_interval` | `5m` | how often the gate runs again on the rules `on_load: enforce` holds, on the labels given since, without reading the file; at least `1s`. `0s` turns it off |
 
 `catraca rules gate` and `catraca report` take the same values as
 `--min-labeled` and `--min-precision`, so CI does not need this file.
@@ -495,8 +496,12 @@ that does not pass is held in shadow mode and the rest of the file loads:
 - each held rule is logged with its labels and what it lacks, listed under
   `held` in `/readyz?verbose` and in the answer of `POST /v1/rules/reload`,
   and counted in `catraca_ruleset_gate_failures{status}`;
-- the gate runs again on the next load: once its matches are labeled,
-  reload, or change the file, and the rule enforces.
+- the gate runs again on the held rules every `recheck_interval`, on the
+  labels given since, without reading the file: once a rule's matches are
+  labeled, it enforces, which is logged and drops it from `held` and from
+  `catraca_ruleset_gate_failures`. The re-check never touches a rule that
+  enforces. A load also runs the gate again; with `recheck_interval: 0s`
+  only a load does.
 
 The whole file is not refused, because that would also hold back every
 other change in it, such as a fix to a rule that blocks good senders, and
