@@ -91,6 +91,7 @@ func runContract(t *testing.T, newDSN func(t *testing.T) string) {
 	t.Run("GetNotFound", func(t *testing.T) { testGetNotFound(t, fresh(t)) })
 	t.Run("LabelErrors", func(t *testing.T) { testLabelErrors(t, fresh(t)) })
 	t.Run("LabelsAndRuleStats", func(t *testing.T) { testLabelsAndRuleStats(t, fresh(t)) })
+	t.Run("RuleStatsSkipsDuplicates", func(t *testing.T) { testRuleStatsSkipsDuplicates(t, fresh(t)) })
 	t.Run("LatestLabelWins", func(t *testing.T) { testLatestLabelWins(t, fresh(t)) })
 	t.Run("ReviewQueue", func(t *testing.T) { testReviewQueue(t, fresh(t)) })
 	t.Run("ListDecisions", func(t *testing.T) { testListDecisions(t, fresh(t)) })
@@ -569,6 +570,43 @@ func testConcurrentRecord(t *testing.T, db *DB) {
 	}
 	if got := statsByKey(t, db, time.Time{})["a/enforce"].Matches; got != workers*each {
 		t.Errorf("matches = %d, want %d", got, workers*each)
+	}
+}
+
+// A retried send with the same event id gets a decision of its own, marked
+// duplicate, with the same matches. The precision gate counts them once.
+func testRuleStatsSkipsDuplicates(t *testing.T, db *DB) {
+	since := t0.Add(-time.Hour)
+	first := newDecision("d1", t0, []string{"a"}, []string{"b"})
+	retry := newDecision("d2", t0.Add(time.Second), []string{"a"}, []string{"b"})
+	retry.EventID = first.EventID
+	retry.Duplicate = true
+	other := newDecision("d3", t0.Add(time.Minute), []string{"a"}, nil)
+	record(t, db, first, retry, other)
+	at := t0.Add(time.Hour).Truncate(time.Microsecond)
+	for _, id := range []string{"d1", "d2"} {
+		label(t, db, id, Label{Verdict: FalsePositive, By: "ana", Time: at})
+	}
+	label(t, db, "d3", Label{Verdict: TruePositive, By: "ana", Time: at})
+
+	want := map[string]precision.RuleStats{
+		"a/enforce": {RuleID: "a", Mode: decision.Enforce, Matches: 2, Labeled: 2, TruePositives: 1, FalsePositives: 1},
+		"b/shadow":  {RuleID: "b", Mode: decision.Shadow, Matches: 1, Labeled: 1, FalsePositives: 1},
+	}
+	for _, s := range []time.Time{since, {}} {
+		if got := statsByKey(t, db, s); !reflect.DeepEqual(got, want) {
+			t.Errorf("RuleStats(%v):\n got %+v\nwant %+v", s, got, want)
+		}
+	}
+
+	// The duplicate is still recorded, with its flag, and still reviewable.
+	got, err := db.Get(context.Background(), "d2")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !got.Decision.Duplicate || len(got.Labels) != 1 {
+		t.Errorf("Get(d2) = duplicate %v with %d labels, want a duplicate with 1 label",
+			got.Decision.Duplicate, len(got.Labels))
 	}
 }
 

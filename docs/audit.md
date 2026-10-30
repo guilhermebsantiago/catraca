@@ -292,6 +292,16 @@ since a time:
 
 A rule that was promoted during the window appears twice, once per mode.
 
+A retried event, sent again with an `id` that had counted already, gets a
+decision of its own marked `duplicate`, with the same matches. The rule
+stats leave those matches out, so the [precision gate](#the-precision-gate),
+[`catraca report`](cli.md#report) and [`catraca rules gate`](cli.md#rules-gate) count each event
+once; the duplicate is still recorded, and can be looked up and labeled.
+The query finds duplicates through a partial index on the decisions whose
+`decision_json` has the `duplicate` key (migration
+`0007_duplicate_decisions.sql`), which, like the `0006` indexes, can be
+built with `CREATE INDEX CONCURRENTLY` before upgrading.
+
 ## Listing decisions
 
 An analyst looking into an account, a leaked key or an IP needs its

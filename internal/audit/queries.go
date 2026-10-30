@@ -159,17 +159,25 @@ VALUES (?, ?, ?, ?, ?, ?, ?, ?)`),
 // and their labels, ordered by rule and mode. Feed the result to the
 // precision package. Decisions still queued are not counted; call Flush
 // first if that matters.
+//
+// Matches of duplicate decisions, made for a retried event that had
+// counted already, are left out: the first decision for the event counts
+// them once. A decision is a duplicate when its decision_json carries the
+// duplicate key, which is only written when true; the decisions_duplicate
+// partial index holds just those, so leaving them out reads no JSON.
 func (db *DB) RuleStats(ctx context.Context, since time.Time) ([]precision.RuleStats, error) {
-	rows, err := db.db.QueryContext(ctx, db.dialect.rebind(`SELECT rule_id, mode,
+	rows, err := db.db.QueryContext(ctx, db.dialect.rebind(`SELECT m.rule_id, m.mode,
     COUNT(*),
-    COUNT(*) FILTER (WHERE errored),
-    COUNT(verdict),
-    COUNT(*) FILTER (WHERE verdict = 'true_positive'),
-    COUNT(*) FILTER (WHERE verdict = 'false_positive')
-FROM matches
-WHERE decided_at_us >= ?
-GROUP BY rule_id, mode
-ORDER BY rule_id, mode`), toMicros(since))
+    COUNT(*) FILTER (WHERE m.errored),
+    COUNT(m.verdict),
+    COUNT(*) FILTER (WHERE m.verdict = 'true_positive'),
+    COUNT(*) FILTER (WHERE m.verdict = 'false_positive')
+FROM matches m
+WHERE m.decided_at_us >= ?
+    AND NOT EXISTS (SELECT 1 FROM decisions d
+        WHERE d.id = m.decision_id AND d.decision_json->>'duplicate' IS NOT NULL)
+GROUP BY m.rule_id, m.mode
+ORDER BY m.rule_id, m.mode`), toMicros(since))
 	if err != nil {
 		return nil, fmt.Errorf("audit: rule stats: %w", err)
 	}
