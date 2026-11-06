@@ -11,14 +11,14 @@
     "score": "node scripts/score.mjs"
   },
   "dependencies": {
-    "@remotion/cli": "4.0.538",
-    "@remotion/fonts": "4.0.538",
-    "@remotion/media": "4.0.538",
-    "@remotion/transitions": "4.0.538",
-    "motion": "14.6.0",
+    "@remotion/cli": "4.0.539",
+    "@remotion/fonts": "4.0.539",
+    "@remotion/media": "4.0.539",
+    "@remotion/transitions": "4.0.539",
+    "motion": "14.8.0",
     "react": "19.3.1",
     "react-dom": "19.3.1",
-    "remotion": "4.0.538"
+    "remotion": "4.0.539"
   },
   "devDependencies": {
     "@types/react": "19.3.0",
