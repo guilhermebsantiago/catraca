@@ -84,6 +84,7 @@ type Config struct {
 	SecretScanning SecretScanning `yaml:"secret_scanning"`
 	Logging        Logging        `yaml:"logging"`
 	Tracing        Tracing        `yaml:"tracing"`
+	SenderAuth     SenderAuth     `yaml:"sender_auth"`
 
 	// File is the path the configuration was read from, or "" for Parse
 	// without a file name.
@@ -686,6 +687,7 @@ func (c *Config) applyDefaults(set func(path string) bool) {
 	if c.Logging.Format == "" {
 		c.Logging.Format = DefaultLogFormat
 	}
+	c.SenderAuth.applyDefaults(set)
 }
 
 // resolvePaths makes the ruleset path and a SQLite audit path absolute

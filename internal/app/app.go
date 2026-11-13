@@ -37,6 +37,7 @@ import (
 	"github.com/guilhermebsantiago/catraca/internal/hooks"
 	"github.com/guilhermebsantiago/catraca/internal/rules"
 	"github.com/guilhermebsantiago/catraca/internal/secretscan"
+	"github.com/guilhermebsantiago/catraca/internal/senderauth"
 	"github.com/guilhermebsantiago/catraca/internal/signal"
 	"github.com/guilhermebsantiago/catraca/internal/store"
 	"github.com/guilhermebsantiago/catraca/internal/tracing"
@@ -73,6 +74,8 @@ type App struct {
 
 	store   store.Store
 	catalog signal.Catalog
+	// senderAuth is nil with sender_auth off.
+	senderAuth *senderauth.Refresher
 	audit   *auditLog
 	hooks   *hooks.Dispatcher
 	// stopHooks cancels hooks.Run; hooksDone is closed when it returns.
@@ -149,11 +152,16 @@ func New(ctx context.Context, cfg *config.Config, opts Options) (_ *App, err err
 	if recipients == 0 {
 		recipients = -1 // engine.recipient_memory: 0s turns the memory off.
 	}
+	authCache, err := a.startSenderAuth()
+	if err != nil {
+		return nil, err
+	}
 	a.catalog = signal.NewCatalog(a.store, signal.Options{
 		DedupeTTL:        dedupe,
 		RecipientMemory:  recipients,
 		RecipientHashKey: []byte(cfg.Engine.RecipientHashKey.Value()),
 		Entities:         cfg.Engine.SignalEntities(),
+		SenderAuth:       cfg.SenderAuth.SignalOptions(authCache),
 	})
 
 	alog := log.With("component", "audit")
@@ -276,6 +284,33 @@ func openStore(c config.Store) (store.Store, error) {
 		return s, nil
 	}
 	return store.NewMemory(), nil
+}
+
+// startSenderAuth starts the background lookups of sender domains when
+// sender_auth is on, and returns the cache the catalog reports its reads
+// to, nil when it is off.
+func (a *App) startSenderAuth() (signal.AuthCache, error) {
+	sa := a.cfg.SenderAuth
+	if !sa.Enabled {
+		return nil, nil
+	}
+	r, err := senderauth.NewRefresher(senderauth.Options{
+		Store:       a.store,
+		Checker:     sa.Checker(senderauth.NewSystemResolver(sa.Resolver)),
+		TTL:         sa.TTL,
+		NegativeTTL: sa.NegativeTTL,
+		Timeout:     sa.Timeout,
+		Workers:     sa.Workers,
+		QueueSize:   sa.QueueSize,
+		Registerer:  a.registry,
+		Logger:      a.log.With("component", "sender_auth"),
+	})
+	if err != nil {
+		return nil, err
+	}
+	r.Start()
+	a.senderAuth = r
+	return r, nil
 }
 
 func (a *App) startHooks() error {
@@ -633,7 +668,8 @@ func (a *App) reloadOnSignal() (stop func()) {
 //  2. the engine hands its queued decisions to the audit log;
 //  3. webhook delivery stops after the attempts in flight;
 //  4. the audit database writes what is queued and closes;
-//  5. the catalog closes the store.
+//  5. sender domain lookups stop, dropping those in flight;
+//  6. the catalog closes the store.
 //
 // When ctx ends first, the remaining steps still run but stop waiting. Close
 // is safe to call more than once.
@@ -667,6 +703,13 @@ func (a *App) Close(ctx context.Context) error {
 		if a.audit != nil {
 			if err := a.audit.Close(ctx); err != nil {
 				errs = append(errs, fmt.Errorf("close the audit database: %w", err))
+			}
+		}
+		// Sender domain lookups write to the store: they stop before it
+		// closes, dropping the ones in flight.
+		if a.senderAuth != nil {
+			if err := a.senderAuth.Close(ctx); err != nil {
+				errs = append(errs, fmt.Errorf("stop sender domain lookups: %w", err))
 			}
 		}
 		switch {
