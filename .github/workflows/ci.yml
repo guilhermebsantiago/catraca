@@ -333,6 +333,7 @@ jobs:
           - internal/feedback
           - internal/rules
           - internal/secretscan
+          - internal/senderauth
           - internal/store
           - signature
     runs-on: ubuntu-latest

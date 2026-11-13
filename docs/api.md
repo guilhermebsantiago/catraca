@@ -1113,6 +1113,12 @@ in each bucket.
 | `catraca_dependency_up{dependency}` | gauge | 1 when the last check of `store` (Redis) or `audit` succeeded, else 0 |
 | `catraca_dependency_check_duration_seconds{dependency}` | gauge | how long the last check took; a timeout counts as 2s |
 | `catraca_dependency_check_failures_total{dependency}` | counter | checks that failed or timed out |
+| `catraca_sender_auth_lookups_total{kind,outcome}` | counter | with [`sender_auth`](config.md#sender_auth) on: sender domain checks, by `kind` (`spf`, `dkim`, `dmarc`) and the state found ([signals](signals.md#sender-authentication)) |
+| `catraca_sender_auth_lookup_duration_seconds` | histogram | time to check one sender domain, every DNS lookup included |
+| `catraca_sender_auth_cache_reads_total{result}` | counter | sends that read their From domain in the cache: `hit`, or `miss` (the domain is queued for a lookup) |
+| `catraca_sender_auth_queued` | gauge | sender domains waiting for a lookup |
+| `catraca_sender_auth_queue_dropped_total` | counter | sender domains not queued because the queue was full |
+| `catraca_sender_auth_write_errors_total` | counter | checks whose result could not be written to the store |
 | `catraca_build_info{version,goversion}` | gauge | 1, labeled with the build |
 
 plus the standard `go_*` and `process_*` metrics. Every series of a

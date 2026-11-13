@@ -49,7 +49,7 @@ API tokens without [scopes](api.md#conventions) are printed as warnings.
 catraca.yaml is valid (1 warning(s))
   listen      :8080
   api tokens  send-path (decide), ops (decide, read, label, admin)
-  ruleset     rules/default.yaml (version 1670cb7264a7, 13 rules: 3 enforced, 10 shadow)
+  ruleset     rules/default.yaml (version ff88a0607f84, 15 rules: 3 enforced, 12 shadow)
   reload      when the file changes (read every 5s), on SIGHUP and on POST /v1/rules/reload
   store       memory (one instance; counters are lost on restart)
   audit       sqlite:catraca.db, minimal events
@@ -224,6 +224,44 @@ $ catraca account state acct_123 --set suspended --until 72h --reason "chargebac
 account acct_123 is suspended until 2026-11-01T21:02:11Z, set 2026-10-29T21:02:11Z by platform: chargeback fraud, ticket 4411
 $ catraca account state acct_123 --reset
 account acct_123 is active
+```
+
+## domain check
+
+```sh
+catraca domain check <domain> [--provider amazonses.com] [--selector s1] [--resolver host:port] [--timeout 10s] [--json]
+```
+
+Looks up a sender domain's SPF record, the DKIM keys under each
+`--selector` and the DMARC policy that applies to it, live and outside any
+cache, and prints each record, what was parsed from it, the SPF include
+tree with its lookup count, and the [signals](signals.md#sender-authentication)
+rules would read once the result is cached. `--provider` and `--selector`
+repeat or take comma-separated lists, like `sender_auth.providers` and
+`dkim_selectors`. It checks that the domain is set up to authenticate, not
+what a receiver does: SPF is evaluated for no sending IP and no DKIM
+signature is verified. It exits 0 whatever it finds, and 2 for a name that
+is not a domain.
+
+```sh
+$ catraca domain check gmail.com --provider _spf.google.com
+gmail.com (organizational domain gmail.com)
+
+SPF        found
+  record     v=spf1 redirect=_spf.google.com
+  all        softfail
+  provider   yes: redirect=_spf.google.com in gmail.com
+  lookups    1 of 10
+  records    gmail.com
+               redirect _spf.google.com
+
+DKIM       unknown
+  selectors  none given: pass --selector
+
+DMARC      none
+  record     _dmarc.gmail.com: v=DMARC1; p=none; sp=quarantine; rua=mailto:mailauth-reports@google.com
+  applies    p, the domain's own record
+  ...
 ```
 
 ## outbox list

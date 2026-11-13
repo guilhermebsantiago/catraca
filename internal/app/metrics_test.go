@@ -47,6 +47,8 @@ secret_scanning:
     enabled: true
     keys_url: http://127.0.0.1:1/keys
     resolver: {url: 'http://127.0.0.1:1/resolve', secret: %[1]s}
+# Starts the lookup workers, which look nothing up without sends.
+sender_auth: {enabled: true}
 `, secret, filepath.ToSlash(rules), filepath.ToSlash(filepath.Join(dir, "audit.db")))
 	cfg, err := config.Parse([]byte(yaml), "", func(string) (string, bool) { return "", false })
 	if err != nil {

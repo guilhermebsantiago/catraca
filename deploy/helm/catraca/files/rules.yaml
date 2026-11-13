@@ -268,3 +268,44 @@ rules:
     action: hold
     reason: New account mailing addresses that recently hard-bounced or complained on this platform
     tags: [list-quality, new-account]
+
+  - id: dmarc-protected-domain-unverified
+    description: >-
+      Holds sends whose From domain publishes a DMARC policy of reject or
+      quarantine when the account has not verified that domain, nor one
+      that shares its organizational domain. The owner of the domain asked
+      receivers to refuse mail it did not authenticate, and an account
+      sending as it without having proved it owns it is the shape of
+      spoofing and phishing: a bank's or a brand's domain in From. Needs
+      sender_auth on and the account's verified domains in
+      event.attributes (sender_auth.verified_domains_attribute); without
+      them domain.dmarc_policy or domain.verified is unknown, and the rule
+      never matches. So is a domain not cached yet, or whose lookup
+      failed.
+    when: >-
+      event.type == "send"
+      && domain.dmarc_policy in ["reject", "quarantine"]
+      && domain.verified == "no"
+    action: hold
+    reason: The From domain is protected by DMARC and is not one of the account's verified domains
+    tags: [sender-auth, spoofing]
+
+  - id: unauthenticated-domain-new-account
+    description: >-
+      Holds sends from accounts younger than 3 days whose From domain
+      publishes no SPF record and no usable DKIM key under the platform's
+      selectors: mail that cannot pass DMARC, from an account too new to
+      have set its domain up, the shape of a throwaway domain. Platforms
+      with a custom MAIL FROM domain authenticate SPF there, not on the
+      From domain, which is why DKIM must be missing too. Only an answer
+      reads as missing: a failed or slow lookup is unknown, so DNS trouble
+      never trips it. Needs sender_auth on, with dkim_selectors.
+    when: >-
+      event.type == "send"
+      && account.age_hours < 72
+      && domain.spf == "missing"
+      && domain.dkim in ["missing", "revoked"]
+      && account.state != "trusted"
+    action: hold
+    reason: New account sending from a domain with neither SPF nor DKIM
+    tags: [sender-auth, new-account]

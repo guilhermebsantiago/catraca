@@ -225,6 +225,7 @@ func (v *validator) config(c *Config) {
 	v.github(c.SecretScanning.GitHub)
 	v.logging(c.Logging)
 	v.tracing(c.Tracing)
+	v.senderAuth(c.SenderAuth)
 }
 
 func (v *validator) server(s Server) {

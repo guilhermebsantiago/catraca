@@ -179,6 +179,24 @@ it adds no round trip, and its cost is bounded whatever the send's 1,000
 recipients. Like every store-backed signal, `suppressed_recipients` and
 `suppressed_ratio` are absent when the store fails.
 
+Sender authentication (`domain.spf`, `domain.dkim`, `domain.dmarc_*`,
+package `senderauth`) needs DNS, and DNS never runs on the decision path:
+one SPF check can take ten sequential queries, a slow authoritative server
+answers in seconds, and a decision has 10 ms. A send instead reads its From
+domain's cached result with one more `Get` in the batch it already sends.
+On a miss every state is the string `unknown` and the domain goes to a
+bounded queue (dropped and counted when full); a few workers look it up
+under a per-domain timeout, at most one lookup per domain at a time and at
+most once per `negative_ttl`, and write the result to the store with a
+TTL, shorter when a record is missing or a lookup failed. Only NXDOMAIN or
+an answer without the record reads as `missing`; SERVFAIL, timeouts and
+network errors are `unknown`. Because states are strings and never absent,
+a rule comparing `== "reject"` is false on `unknown`, so a DNS outage or a
+cold cache cannot make it fire, whatever its `on_error`. Replays read no
+cache and explanations queue nothing, so neither ever makes a query. It is
+a check that the domain is set up to authenticate, not a receiver's:
+nothing evaluates SPF for an IP or verifies a DKIM signature.
+
 ## Rules
 
 A ruleset is a YAML file kept in git and reviewed like code.

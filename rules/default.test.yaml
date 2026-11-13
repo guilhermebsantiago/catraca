@@ -76,6 +76,15 @@ base:
     sends_1h: 40
     distinct_accounts_24h: 1
     complaints_24h: 0
+    spf: found
+    spf_all: softfail
+    spf_provider: "yes"
+    dkim: found
+    dmarc_policy: none
+    dmarc_pct: 100
+    dmarc_adkim: relaxed
+    dmarc_aspf: relaxed
+    verified: exact
 
 cases:
   - name: a healthy established sender is allowed
@@ -111,13 +120,17 @@ cases:
       action: allow
       matches: []
 
+  # While the store is down, domain holds only the sender authentication
+  # signals, unknown but for verified, which needs no store: the sender-auth
+  # rules are false rather than failing, even unauthenticated-domain-new-
+  # account, whose account signals are absent.
   - name: when the store is down a send with an API key is allowed
     signals:
       event: {suppressed_recipients: null, suppressed_ratio: null}
       account: null
       key: null
       ip: null
-      domain: null
+      domain: {sends_1h: null, distinct_accounts_24h: null, complaints_24h: null, spf: unknown, spf_all: unknown, spf_provider: unknown, dkim: unknown, dmarc_policy: unknown, dmarc_pct: -1, dmarc_adkim: unknown, dmarc_aspf: unknown, verified: "no"}
     expect:
       action: allow
       matches: []
@@ -142,7 +155,7 @@ cases:
       account: null
       key: {leaked: true, sends_1m: null, sends_1h: null, distinct_ips_1h: null, distinct_ips_24h: null, new_ip: null, age_hours: null}
       ip: null
-      domain: null
+      domain: {sends_1h: null, distinct_accounts_24h: null, complaints_24h: null, spf: unknown, spf_all: unknown, spf_provider: unknown, dkim: unknown, dmarc_policy: unknown, dmarc_pct: -1, dmarc_adkim: unknown, dmarc_aspf: unknown, verified: "no"}
     expect:
       action: block
       enforced: [leaked-key-send]
@@ -542,6 +555,106 @@ cases:
     signals:
       event: {type: feedback, feedback_kind: trap, recipients: 0, suppressed_recipients: 0, suppressed_ratio: 0}
       account: {trap_hits_7d: 5}
+    expect:
+      matches: []
+
+  # dmarc-protected-domain-unverified
+
+  - name: sending as a DMARC reject domain the account never verified is held
+    signals:
+      domain: {dmarc_policy: reject, verified: "no"}
+    expect:
+      matches: [dmarc-protected-domain-unverified]
+      action: allow
+      shadow: [dmarc-protected-domain-unverified]
+
+  - name: a quarantine policy is protected too
+    signals:
+      domain: {dmarc_policy: quarantine, dmarc_pct: 10, verified: "no"}
+    expect:
+      matches: [dmarc-protected-domain-unverified]
+
+  - name: a subdomain of a verified domain is the account's own
+    signals:
+      domain: {dmarc_policy: reject, verified: relaxed}
+    expect:
+      matches: []
+
+  - name: a domain that only monitors with p=none is not protected
+    signals:
+      domain: {dmarc_policy: none, verified: "no"}
+    expect:
+      matches: []
+
+  - name: without the verified domains attribute the rule never matches
+    signals:
+      domain: {dmarc_policy: reject, verified: unknown}
+    expect:
+      matches: []
+      errors: []
+
+  - name: a domain not cached yet, or whose lookup failed, is not held
+    signals:
+      domain: {spf: unknown, spf_all: unknown, spf_provider: unknown, dkim: unknown, dmarc_policy: unknown, dmarc_pct: -1, dmarc_adkim: unknown, dmarc_aspf: unknown, verified: "no"}
+    expect:
+      matches: []
+      errors: []
+
+  - name: an invalid DMARC record protects nothing
+    signals:
+      domain: {dmarc_policy: invalid, verified: "no"}
+    expect:
+      matches: []
+
+  # unauthenticated-domain-new-account
+
+  - name: a new account sending from a domain without SPF or DKIM is held
+    signals:
+      account: {age_hours: 10}
+      domain: {spf: missing, spf_all: unknown, spf_provider: "no", dkim: missing}
+    expect:
+      matches: [unauthenticated-domain-new-account]
+      action: allow
+      shadow: [unauthenticated-domain-new-account]
+
+  - name: a revoked DKIM key authenticates nothing
+    signals:
+      account: {age_hours: 10}
+      domain: {spf: missing, spf_all: unknown, spf_provider: "no", dkim: revoked}
+    expect:
+      matches: [unauthenticated-domain-new-account]
+
+  - name: DKIM alone is enough, as with a custom MAIL FROM domain
+    signals:
+      account: {age_hours: 10}
+      domain: {spf: missing, spf_all: unknown, spf_provider: "no", dkim: found}
+    expect:
+      matches: []
+
+  - name: a failed SPF lookup is unknown, not missing
+    signals:
+      account: {age_hours: 10}
+      domain: {spf: unknown, spf_all: unknown, spf_provider: unknown, dkim: missing}
+    expect:
+      matches: []
+
+  - name: DKIM without configured selectors is unknown
+    signals:
+      account: {age_hours: 10}
+      domain: {spf: missing, spf_all: unknown, spf_provider: "no", dkim: unknown}
+    expect:
+      matches: []
+
+  - name: an established account is left alone
+    signals:
+      domain: {spf: missing, spf_all: unknown, spf_provider: "no", dkim: missing}
+    expect:
+      matches: []
+
+  - name: a trusted new account is left alone
+    signals:
+      account: {age_hours: 10, state: trusted}
+      domain: {spf: missing, spf_all: unknown, spf_provider: "no", dkim: missing}
     expect:
       matches: []
 

@@ -12,12 +12,28 @@ and downgrades, and what an upgrade from the launch has to act on.
 
 ### Added
 
-- `POST /v1/feedback/resend` takes Resend's bounce, complaint and delivery
-  webhooks, verified by their Svix signature with
+- **Resend feedback:** `POST /v1/feedback/resend` takes Resend's bounce,
+  complaint and delivery webhooks, verified by their Svix signature with
   `feedback.resend.secret` or a `previous_secrets` entry. The account id is
   read from a tag (`account_tag`, `catraca-account` by default), and the
   events of a webhook are named after its `svix-id`, so Resend's retries
   count once ([feedback](docs/feedback.md#resend)).
+- **Sender authentication:** `domain.spf`, `domain.spf_all`,
+  `domain.spf_provider`, `domain.dkim`, `domain.dmarc_policy`,
+  `domain.dmarc_pct`, `domain.dmarc_adkim` and `domain.dmarc_aspf` say how
+  the From domain is set up to authenticate, from its DNS records, looked
+  up in the background and cached in the store, never on the decision path
+  (`sender_auth`, off by default). `domain.verified` compares the From
+  domain with the verified domains the platform sends in an attribute. Two
+  shadow rules use them, `dmarc-protected-domain-unverified` and
+  `unauthenticated-domain-new-account`, and `catraca domain check` prints a
+  domain's records live. It is a pre-send check of the domain, not what a
+  receiver does ([signals](docs/signals.md#sender-authentication)).
+
+### Changed
+
+- While the store is down, `domain` holds the sender authentication
+  signals, all `unknown` but `verified`, instead of being absent.
 
 ## [0.1.0] - 2026-10-29
 
