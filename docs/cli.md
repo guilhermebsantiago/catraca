@@ -368,5 +368,5 @@ set all three; other builds fall back to the VCS stamp when there is one),
 and the Go version and platform:
 
 ```text
-catraca v0.1.0 (0123456789ab, 2026-10-23T12:00:00Z) go1.26.10 linux/amd64
+catraca v0.1.0 (0123456789ab, 2026-10-23T12:00:00Z) go1.26.11 linux/amd64
 ```

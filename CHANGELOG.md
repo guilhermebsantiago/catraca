@@ -32,6 +32,7 @@ and downgrades, and what an upgrade from the launch has to act on.
 
 ### Changed
 
+- Builds with Go 1.26.11, which fixes GO-2026-6859 in `net/http`.
 - While the store is down, `domain` holds the sender authentication
   signals, all `unknown` but `verified`, instead of being absent.
 
