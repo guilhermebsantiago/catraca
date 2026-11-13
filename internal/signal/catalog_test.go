@@ -478,8 +478,8 @@ func TestObserveWhenTheStoreFails(t *testing.T) {
 		if !reflect.DeepEqual(set.Event, wantEvent) {
 			t.Errorf("event signals = %v, want %v", set.Event, wantEvent)
 		}
-		if set.Account != nil || set.Key != nil || set.IP != nil || set.Domain != nil {
-			t.Errorf("store-backed signals present after a failure: %+v", set)
+		if set.Account != nil || set.Key != nil || set.IP != nil || !reflect.DeepEqual(set.Domain, unknownAuth) {
+			t.Errorf("store-backed signals present after a failure, or sender authentication not unknown: %+v", set)
 		}
 	}
 
@@ -602,8 +602,13 @@ func TestKnownLeakedKeysWhenTheStoreFails(t *testing.T) {
 				if !tc.leaked && set.Key != nil {
 					t.Errorf("%s: key signals = %v, want absent", tc.key, set.Key)
 				}
-				if set.Account != nil || set.IP != nil || set.Domain != nil {
+				if set.Account != nil || set.IP != nil {
 					t.Errorf("%s: store-backed signals present during the outage: %+v", tc.key, set)
+				}
+				// The domain holds only the sender authentication states,
+				// unknown, so rules comparing them are false.
+				if !reflect.DeepEqual(set.Domain, unknownAuth) {
+					t.Errorf("%s: domain signals during the outage = %v, want %v", tc.key, set.Domain, unknownAuth)
 				}
 			}
 			if set, _ := c.Observe(ctx, send(3*time.Minute, withKey(""))); set.Key != nil {

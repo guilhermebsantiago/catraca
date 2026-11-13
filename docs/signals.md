@@ -61,9 +61,11 @@ A rule that reads an absent signal fails, and its `on_error` policy decides:
   `account.recent_ip` and `key.new_ip` are absent when the event has no `ip`.
 - `account.state` is absent when the stored state cannot be read.
 - When the counter store fails or does not answer within the deadline, only
-  `event` is present and the decision is marked degraded, with one
-  exception: for a key this Catraca process knows was leaked, `key` holds
-  `leaked: true` and nothing else.
+  `event` is present and the decision is marked degraded, with two
+  exceptions: for a key this Catraca process knows was leaked, `key` holds
+  `leaked: true` and nothing else; and `domain` holds the
+  [sender authentication](#sender-authentication) signals, all `unknown`
+  but `domain.verified`, which needs no store.
 
 ### Leaked keys while the store is down
 
@@ -323,6 +325,67 @@ The sender domain: the domain of `from`.
 | `sends_1h` | int | 1 h | send events from the domain |
 | `distinct_accounts_24h` | int | 24 h | distinct accounts of send events from the domain |
 | `complaints_24h` | int | 24 h | complaint feedback events whose `from` has the domain |
+| `spf` | string | | the domain's SPF record: `found` (one record, which parses with everything it includes within the 10-lookup limit), `missing`, `invalid` (several records, a syntax error, an include or redirect without a record, a loop, more than 10 lookups) or `unknown` |
+| `spf_all` | string | | what the record ends with, following `redirect`: `pass` (`+all`), `neutral` (`?all`), `softfail` (`~all`), `fail` (`-all`), `none` (no `all`); `unknown` unless `spf` is `found` |
+| `spf_provider` | string | | `yes` when the record reaches one of `sender_auth.providers` through `include` or `redirect` with pass qualifiers; `no` when it does not, or `spf` is `missing` or `invalid`; `unknown` without providers, after a failed lookup, or when an include with macros might expand to one |
+| `dkim` | string | | over `sender_auth.dkim_selectors`: `found` when one has a usable key, else `unknown` (a lookup failed, or no selector is configured), `invalid`, `revoked` (an empty `p=`) or `missing`, in that order |
+| `dmarc_policy` | string | | the DMARC policy that applies to the domain: `none`, `quarantine` or `reject`, or `missing`, `invalid` or `unknown` |
+| `dmarc_pct` | int | | the record's `pct`, 0 to 100 (default 100); -1 unless `dmarc_policy` is a policy |
+| `dmarc_adkim` | string | | DKIM alignment, `relaxed` or `strict`; `unknown` unless `dmarc_policy` is a policy |
+| `dmarc_aspf` | string | | SPF alignment, `relaxed` or `strict`; `unknown` unless `dmarc_policy` is a policy |
+| `verified` | string | | whether the domain is one the account verified, from the event's verified domains attribute: `exact`, `relaxed` (same organizational domain as one), `no`, or `unknown` when the event does not carry the attribute |
+
+### Sender authentication
+
+The `spf`, `dkim` and `dmarc_` signals say how the From domain is set up to
+authenticate its mail, from its DNS records. This is a pre-send check of the
+domain, not what a receiver does: Catraca evaluates SPF for no connecting
+IP and verifies no DKIM signature. A domain that passes it can still send
+mail that fails, from another IP or without a signature.
+
+They need `sender_auth.enabled` ([configuration](config.md#sender_auth)),
+are read for `send` events only, and never wait for DNS: a send reads its
+domain's cached result in the same store round trip as every other signal.
+When nothing is cached yet every state is `unknown` and the domain is
+queued for a background lookup, so the first sends from a new domain see
+`unknown` and later ones the result. Rules compare these strings, so an
+`unknown` never matches `== "reject"`, whatever the rule's `on_error`.
+`unknown` also covers lookups that failed (SERVFAIL, timeouts, refused,
+network errors); only NXDOMAIN or an answer without the record is
+`missing`. A result is cached for `sender_auth.ttl`, or
+`sender_auth.negative_ttl` when a record is missing or a lookup failed.
+
+What is checked:
+
+- **SPF** on the From domain itself. Platforms that send with a custom
+  `MAIL FROM` (Return-Path) domain, such as `send.example.com`, have SPF
+  authenticate that domain instead, so `spf` alone says little; the event
+  has no Return-Path field to check. Includes and redirects are followed in
+  evaluation order, with RFC 7208's limit of 10 DNS-querying terms; `a`,
+  `mx`, `ptr` and `exists` count toward it but are not resolved, so the
+  void-lookup limit is not checked. Macros (`%{i}` and the like) need the
+  sending IP and address: they are checked for syntax, never expanded.
+  Listing a provider's IP ranges instead of including its domain does not
+  count for `spf_provider`.
+- **DKIM**: the TXT record at `<selector>._domainkey.<domain>` for each
+  configured selector: a key that decodes (RSA of at least 1024 bits, or
+  Ed25519), or an empty `p=` for a revoked one.
+- **DMARC**: `_dmarc.<domain>`, else `_dmarc.<organizational domain>` by
+  the public suffix list (RFC 7489), whose `sp` then applies. Several
+  records at one name, or an invalid `p`, read as `invalid`; an invalid
+  `pct`, `adkim` or `aspf` takes its default.
+
+`domain.verified` is the platform's knowledge, not DNS: the event carries
+the domains the account verified in an attribute, `verified_domains` by
+default (`sender_auth.verified_domains_attribute`), separated by commas or
+spaces, up to 100. It works with `sender_auth` off and in replays. Send
+your shared sending domains in it too. An empty attribute says the account
+verified none: `no`.
+
+`catraca replay` and `POST /v1/rules/explain` never cause a lookup: replays
+read no cache, so the states are `unknown`, and explaining reads the cache
+as deciding would but queues nothing on a miss. `catraca domain check`
+([cli](cli.md#domain-check)) does live lookups and prints every record.
 
 ## `entity`
 

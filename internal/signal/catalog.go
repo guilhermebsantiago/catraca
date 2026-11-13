@@ -60,6 +60,9 @@ type Options struct {
 	// MaxEntities; an invalid or repeated one makes NewCatalog panic, as
 	// configuration validates them first.
 	Entities []Entity
+	// SenderAuth configures the sender authentication signals of the
+	// domain map; see SenderAuth.
+	SenderAuth SenderAuth
 }
 
 // NewCatalog returns a Catalog that keeps its counters in s and computes the
@@ -87,10 +90,13 @@ func NewCatalog(s store.Store, opts Options) Catalog {
 		}
 		seen[e.Name] = true
 	}
+	if opts.SenderAuth.VerifiedDomainsAttribute == "" {
+		opts.SenderAuth.VerifiedDomainsAttribute = DefaultVerifiedDomainsAttribute
+	}
 	return &catalog{
 		store: s, retention: opts.Retention, dedupeTTL: opts.DedupeTTL, leaked: newLeakedKeys(maxLeakedKeys),
 		recipientMemoryTTL: opts.RecipientMemory, recipientHashKey: slices.Clone(opts.RecipientHashKey),
-		entityDefs: slices.Clone(opts.Entities),
+		entityDefs: slices.Clone(opts.Entities), auth: opts.SenderAuth,
 	}
 }
 
@@ -110,6 +116,7 @@ type catalog struct {
 	recipientMemoryTTL time.Duration
 	recipientHashKey   []byte
 	entityDefs         []Entity
+	auth               SenderAuth
 }
 
 // Store keys, before the store's own prefix and layout. Entity ids come last
@@ -164,6 +171,7 @@ func (c *catalog) Observe(ctx context.Context, ev event.Event) (Set, error) {
 	dom := domainSignals(&b, ev, f)
 	suppressed := c.recipientMemory(&b, ev)
 	ents := c.entities(&b, ev)
+	auth := c.readAuth(&b, ev, f)
 	// Marked last, so new_ip compares against the IPs seen before this event.
 	if ev.Type == event.Send && f.ip != "" {
 		if ev.AccountID != "" {
@@ -180,6 +188,13 @@ func (c *catalog) Observe(ctx context.Context, ev event.Event) (Set, error) {
 
 	if err := c.store.Do(ctx, &b); err != nil {
 		set.Key = c.knownLeaked(ev.APIKeyID)
+		if f.fromDomain != "" {
+			// The sender authentication signals read unknown rather than
+			// absent, so a rule comparing them is false whatever its
+			// on_error.
+			set.Domain = map[string]any{}
+			c.addAuth(ctx, set.Domain, ev, f, nil, false)
+		}
 		return set, fmt.Errorf("signal: observe %s event: %w", ev.Type, err)
 	}
 	set.Duplicate = repeated != nil && repeated.Val()
@@ -187,6 +202,9 @@ func (c *catalog) Observe(ctx context.Context, ev event.Event) (Set, error) {
 	set.Key = key.signals(ev.Time)
 	set.IP = ip.signals()
 	set.Domain = dom.signals()
+	if set.Domain != nil {
+		c.addAuth(ctx, set.Domain, ev, f, auth, true)
+	}
 	set.Entity = entitySignals(ents)
 	suppressed.addTo(set.Event)
 	if key != nil && key.leaked.Found() {

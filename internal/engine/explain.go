@@ -6,6 +6,7 @@ import (
 
 	"github.com/guilhermebsantiago/catraca/internal/event"
 	"github.com/guilhermebsantiago/catraca/internal/rules"
+	"github.com/guilhermebsantiago/catraca/internal/signal"
 )
 
 // Explanation is what Explain found for one event: every signal, every
@@ -39,6 +40,9 @@ type Explanation struct {
 // id it was decided with, within the catalog's dedupe TTL. Explanation.Counted
 // says which happened.
 //
+// Explain never queues a sender domain lookup: a domain not cached reads
+// unknown (see signal.WithoutLookups).
+//
 // A key_leak event is refused with ErrInvalidEvent: observing one marks
 // its key leaked.
 func (e *Engine) Explain(ctx context.Context, ev event.Event, observe bool) (Explanation, error) {
@@ -59,7 +63,9 @@ func (e *Engine) Explain(ctx context.Context, ev event.Event, observe bool) (Exp
 		return Explanation{}, fmt.Errorf("%w: %w", ErrInvalidEvent, err)
 	}
 
-	octx, call, cancel := e.storeContext(ctx, !observe, opObserve)
+	// Explaining reads the sender authentication cache as deciding would,
+	// but never queues a DNS lookup on a miss.
+	octx, call, cancel := e.storeContext(signal.WithoutLookups(ctx), !observe, opObserve)
 	set, err := e.catalog.Observe(octx, ev)
 	cancel()
 	e.storeDone(ctx, call, err)

@@ -91,4 +91,13 @@ var specs = []Spec{
 	{"domain", "sends_1h", "int"},
 	{"domain", "distinct_accounts_24h", "int"},
 	{"domain", "complaints_24h", "int"},
+	{"domain", "spf", "string"},
+	{"domain", "spf_all", "string"},
+	{"domain", "spf_provider", "string"},
+	{"domain", "dkim", "string"},
+	{"domain", "dmarc_policy", "string"},
+	{"domain", "dmarc_pct", "int"},
+	{"domain", "dmarc_adkim", "string"},
+	{"domain", "dmarc_aspf", "string"},
+	{"domain", "verified", "string"},
 }
