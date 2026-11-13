@@ -33,7 +33,7 @@ internal/replay      Backtest a ruleset on labeled events (precision, recall)
 internal/audit       Decision log, labels, rule stats: SQLite and Postgres
 internal/precision   Wilson interval, promotion gate, report
 internal/hooks       Signed outgoing webhooks for effects, with a durable outbox
-internal/feedback    SES (via SNS, signature verified), useSend, generic
+internal/feedback    SES (via SNS, signature verified), useSend, Resend, generic
 internal/secretscan  GitHub secret scanning partner endpoint and its report workers
 internal/api         HTTP server, auth, metrics
 internal/config      catraca.yaml
@@ -348,10 +348,11 @@ dead ones.
   complaint and delivery notifications become feedback events. The account
   is read from a configurable SES message tag or header.
 - `POST /v1/feedback/usesend`: useSend webhooks, signature verified.
+- `POST /v1/feedback/resend`: Resend webhooks, Svix signature verified.
 - `POST /v1/feedback`: a generic JSON feedback event.
 
 Each feedback event gets an id the provider keeps across deliveries (SNS's
-MessageId, useSend's call id, the generic event's own), so when an event
+MessageId, useSend's call id, Resend's svix-id, the generic event's own), so when an event
 comes back uncounted, or the Decider fails on it, the endpoint answers 503
 and the provider's retry counts each event once. A decision degraded only
 by the deadline keeps its 200.
@@ -389,7 +390,7 @@ scanning routes, which authenticate by signature.
 | GET /v1/rules/{id}/review | unlabeled matches of a rule, for reviewers |
 | GET /v1/stats/rules?since=720h | precision per rule |
 | GET, PUT, DELETE /v1/accounts/{id}/state | an account's state: read, set (optionally until a time), reset |
-| POST /v1/feedback, /v1/feedback/ses, /v1/feedback/usesend | feedback |
+| POST /v1/feedback, /v1/feedback/ses, /v1/feedback/usesend, /v1/feedback/resend | feedback |
 | POST /v1/secret-scanning/github | GitHub partner endpoint |
 | GET /healthz, /readyz, /metrics | health and Prometheus metrics, on `server.admin_addr` when it is set |
 

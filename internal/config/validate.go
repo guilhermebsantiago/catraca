@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/guilhermebsantiago/catraca/internal/audit"
+	"github.com/guilhermebsantiago/catraca/internal/feedback"
 	"github.com/guilhermebsantiago/catraca/internal/signal"
 	"github.com/guilhermebsantiago/catraca/internal/store"
 )
@@ -484,6 +485,22 @@ func (v *validator) httpURL(path, raw string, required bool) bool {
 	return true
 }
 
+// resendTagName matches the tag names Resend accepts on a send.
+var resendTagName = regexp.MustCompile(`^[A-Za-z0-9_-]{1,256}$`)
+
+// resendSecret checks a Resend signing secret: Resend makes it, so only
+// its form is checked.
+func (v *validator) resendSecret(path string, s Secret) bool {
+	if !v.trimmed(path, s) {
+		return false
+	}
+	if _, err := feedback.DecodeResendSecret(s.Value()); err != nil {
+		v.add(path, "is not whsec_ followed by base64; copy it whole from the webhook's page in Resend")
+		return false
+	}
+	return true
+}
+
 func (v *validator) feedback(f Feedback) {
 	if s := f.SES; s != nil {
 		if len(s.TopicARNs) == 0 {
@@ -504,6 +521,17 @@ func (v *validator) feedback(f Feedback) {
 		}
 		// useSend makes its secrets, so their length is not checked here.
 		v.previous("feedback.usesend.previous_secrets", u.Secret, u.PreviousSecrets, v.trimmed)
+	}
+	if r := f.Resend; r != nil {
+		if r.Secret == "" {
+			v.add("feedback.resend.secret", "is required: the webhook signing secret shown by Resend")
+		} else {
+			v.resendSecret("feedback.resend.secret", r.Secret)
+		}
+		v.previous("feedback.resend.previous_secrets", r.Secret, r.PreviousSecrets, v.resendSecret)
+		if !resendTagName.MatchString(r.AccountTag) {
+			v.add("feedback.resend.account_tag", "want a Resend tag name, at most 256 ASCII letters, digits, _ or -, got %q", r.AccountTag)
+		}
 	}
 	if g := f.Generic; g != nil {
 		v.secret("feedback.generic.secret", g.Secret)

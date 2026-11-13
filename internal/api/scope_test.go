@@ -162,6 +162,7 @@ func TestUnscopedRoutesTakeNoToken(t *testing.T) {
 		{"POST", "/v1/feedback"},
 		{"POST", "/v1/feedback/ses"},
 		{"POST", "/v1/feedback/usesend"},
+		{"POST", "/v1/feedback/resend"},
 		{"POST", "/v1/secret-scanning/github"},
 		{"GET", "/healthz"},
 		{"GET", "/readyz"},

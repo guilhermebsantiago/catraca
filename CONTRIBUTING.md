@@ -55,8 +55,8 @@ go run golang.org/x/vuln/cmd/govulncheck@v1.9.0 ./...
 
 Every parser of untrusted input has a native Go fuzz target (`func
 FuzzX(f *testing.F)`): events, rulesets, fixtures and rule evaluation,
-the configuration, the `signature` package, the SES (SNS), useSend and
-generic feedback endpoints, and GitHub secret scanning with its sealed
+the configuration, the `signature` package, the SES (SNS), useSend, Resend
+and generic feedback endpoints, and GitHub secret scanning with its sealed
 tokens. `FuzzStoresAgree` and `FuzzSignalsAgree` in `internal/store` run
 generated sequences of batches and of events on the memory store and on
 the Redis store, and compare every read and every signal; they include a

@@ -215,6 +215,11 @@ feedback:
   # usesend:
   #   secret: ${USESEND_WEBHOOK_SECRET}
 
+  # Resend webhooks. Each send is tagged with its account id.
+  # resend:
+  #   secret: ${RESEND_WEBHOOK_SECRET}
+  #   account_tag: catraca-account
+
   # Catraca's own format, signed with a shared secret. Requests signed with
   # a previous secret are accepted while the platform switches.
   generic:

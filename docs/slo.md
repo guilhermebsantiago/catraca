@@ -139,7 +139,8 @@ show each.
 ## feedback-acceptance
 
 **SLI:** the share of feedback events on `POST /v1/feedback`,
-`/v1/feedback/ses` and `/v1/feedback/usesend` that were counted, out of
+`/v1/feedback/ses`, `/v1/feedback/usesend` and `/v1/feedback/resend` that
+were counted, out of
 those counted, those that failed (`decide_failed`), those the store did not
 take (`uncounted`, answered 503) and the requests admission control shed.
 

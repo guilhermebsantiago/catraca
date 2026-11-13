@@ -201,6 +201,9 @@ func (c *cli) summary(cfg *config.Config, rs *rules.Ruleset) {
 	if cfg.Feedback.UseSend != nil {
 		names = append(names, "usesend")
 	}
+	if cfg.Feedback.Resend != nil {
+		names = append(names, "resend")
+	}
 	if cfg.Feedback.Generic != nil {
 		names = append(names, "generic")
 	}

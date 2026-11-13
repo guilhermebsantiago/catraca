@@ -14,6 +14,7 @@ from any account, counts in `event.suppressed_recipients`.
 |---|---|---|
 | `POST /v1/feedback/ses` | Amazon SES, through Amazon SNS | SNS message signature |
 | `POST /v1/feedback/usesend` | useSend webhooks | `X-UseSend-Signature` |
+| `POST /v1/feedback/resend` | Resend webhooks | `svix-signature` |
 | `POST /v1/feedback` | anything else, in Catraca's format | `Catraca-Signature` |
 
 None of these routes takes the API bearer token: each one is authenticated
@@ -36,7 +37,7 @@ What Catraca records for each kind:
 | `blocklist` | | [generic endpoint](#generic-endpoint) only; see [third-party reputation](#third-party-reputation) |
 
 Provider details that rules may want go to `event.attributes`: `provider`
-(`ses`, `usesend`), `bounce_subtype` (`General`, `MailboxFull`,
+(`ses`, `usesend`, `resend`), `bounce_subtype` (`General`, `MailboxFull`,
 `OnAccountSuppressionList`, ...), `bounce_status` (the DSN status, such as
 `5.1.1` or `5.7.1`), `complaint_type` (`abuse`, `fraud`, ...) and, for SES,
 `ses_bounce_type` and `complaint_subtype`.
@@ -53,8 +54,8 @@ counted does not count again for `engine.dedupe_ttl` (10 minutes; see
 [retries](api.md#retries)), so the events of a notification that did count
 the first time are not counted twice. The same goes when an event fails for
 another reason a retry may fix, such as no ruleset being loaded. Events
-refused as invalid keep their answer, `200` for SES and useSend and `400`
-for the generic endpoint: they would be refused again.
+refused as invalid keep their answer, `200` for SES, useSend and Resend and
+`400` for the generic endpoint: they would be refused again.
 
 A store that answers after `engine.deadline` (10 ms) has not failed: the
 decision is `degraded`, but the store's round trip goes on in the background
@@ -293,6 +294,88 @@ calls in a row have failed all their attempts, which a store outage of a few
 minutes can do when feedback flows steadily: check the webhook in useSend
 after one, and enable it again if needed.
 
+## Resend
+
+[Resend](https://resend.com) signs its webhooks with
+[Svix](https://docs.svix.com/receiving/verifying-payloads/how-manual):
+`svix-signature` holds space-separated `v1,<signature>` entries, each the
+base64 HMAC-SHA256 of `<svix-id>.<svix-timestamp>.<raw body>` keyed with
+the webhook's signing secret (`whsec_` followed by base64, of which Catraca
+uses the decoded bytes). Catraca accepts a webhook when any entry matches
+the secret or one of its `previous_secrets`, and answers `401` when none
+does, a header is missing, or `svix-timestamp` is more than five minutes
+away from its clock, as Svix's libraries do. Resend signs every attempt
+anew, so the bound refuses no retry; a recorded webhook posted again within
+it has the same `svix-id`, and counts once (below), as long as `dedupe_ttl`
+is at least five minutes.
+
+Mapped events:
+
+| Resend event | Catraca feedback |
+|---|---|
+| `email.bounced` | `bounce`; `bounce.type` `Permanent` is `permanent`, `Transient`, `Undetermined` and any other type `transient` |
+| `email.complained` | `complaint` |
+| `email.delivered` | `delivery` |
+
+Every other event (`email.sent`, `email.delivery_delayed`, `email.opened`,
+`email.failed`, `email.suppressed`, `contact.*`, `domain.*`, ...) is
+acknowledged and ignored. As with useSend, a complaint is one event per
+webhook, with the recipient only when `to` has a single address, and a
+bounce or delivery is one event per address in `to`. The event's time is
+the payload's `created_at`, and `bounce.subType` (`General`, `MailboxFull`,
+`Suppressed`, ...) goes to `bounce_subtype`.
+
+**Account id.** Resend's payloads carry the email's tags, and nothing else
+of the platform's, so the account id is the value of the tag named by
+`account_tag`, `catraca-account` by default. Tag every send with the id the
+platform sends with its `send` events:
+
+```json
+{
+  "from": "Acme <news@acme.example>",
+  "to": ["someone@example.org"],
+  "subject": "Welcome",
+  "html": "...",
+  "tags": [{"name": "catraca-account", "value": "acct_123"}]
+}
+```
+
+Tag values may contain only ASCII letters, digits, `_` and `-`, up to 256
+characters. If your account ids contain anything else, tag a mapped id
+instead.
+
+Setup:
+
+1. In Resend, open **Webhooks**, add
+   `https://catraca.example.com/v1/feedback/resend`, and select
+   `email.bounced`, `email.complained` and `email.delivered`. Deliveries are
+   optional, but without them Catraca cannot tell a quiet account from one
+   whose feedback is missing.
+2. Copy the webhook's signing secret into `feedback.resend.secret`. To
+   change it later, see [rotating secrets](rotation.md#resend-secret).
+
+```go
+h, err := feedback.NewResendHandler(feedback.ResendConfig{
+	Decider: engine,
+	Secret:  os.Getenv("RESEND_WEBHOOK_SECRET"),
+})
+```
+
+Resend treats any answer but a 2xx as a failure and attempts a webhook
+eight times in all: at once, then 5 seconds, 5 minutes, 30 minutes, 2
+hours, 5 hours, 10 hours and 10 hours after each failure, so the last
+attempt comes more than a day after the first. Catraca answers 5xx only
+when the feedback could not be counted
+([above](#when-feedback-cannot-be-counted)): a 503. Every attempt carries
+the same `svix-id`, and Catraca names the events of a webhook
+`resend:<svix-id>:<n>`, so they count once. Only the first three attempts
+fall within the default `dedupe_ttl` of 10 minutes: a webhook none of whose
+events counted counts in full whenever it gets through, but one about an
+email to several addresses, some of which counted before the store failed,
+counts those again if it gets through later. Resend disables an endpoint
+that keeps failing and emails your team; enable it again from **Webhooks**
+after a long outage.
+
 ## Generic endpoint
 
 For providers Catraca has no adapter for, the platform posts one feedback
@@ -391,7 +474,7 @@ set of values meant for a metric label: `decided`, `ignored`, `no_account`,
 and answered `503`), `subscription_confirmed`, `subscription_failed` and
 `unsubscribed`. An event the engine refuses, such
 as one over a [limit](api.md#limits) or older than `engine.max_event_age`,
-counts as `malformed`; SES and useSend get a `200` for it, since a retry
+counts as `malformed`; SES, useSend and Resend get a `200` for it, since a retry
 would be refused the same way. A rising `no_account` usually
 means emails are being sent without the tag or header; a rising
 `invalid_signature` means someone other than the provider is posting to the

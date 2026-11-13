@@ -10,6 +10,7 @@ import (
 	"net/http"
 	"reflect"
 	"slices"
+	"strconv"
 	"strings"
 	"sync"
 	"testing"
@@ -419,6 +420,103 @@ func FuzzGeneric(f *testing.F) {
 			if rec := post(t, h, other, header); rec.Code != http.StatusUnauthorized || len(dec.got()) != before {
 				t.Fatalf("a body with another's signature got %d", rec.Code)
 			}
+		}
+	})
+}
+
+// FuzzResend signs any body as Resend does, under any svix-id, and posts
+// it, then posts another body with the same headers. The signed body is
+// never refused for its signature unless it has no svix-id, and its events
+// have the shape of feedback, with ids made of the svix-id; the other body
+// is refused and decides nothing.
+func FuzzResend(f *testing.F) {
+	for _, seed := range []string{
+		resendBounce,
+		`{"type":"email.complained","created_at":"2026-11-12T10:00:00Z","data":{"email_id":"e","from":"a@b.example",
+		  "to":["x@y.example","z@y.example"],"tags":{"catraca-account":"acct_9","workspace":"ws_1"}}}`,
+		`{"type":"email.delivered","data":{"to":[],"created_at":"2026-11-12T10:00:00Z","tags":{"catraca-account":" a "}}}`,
+		`{"type":"email.bounced","data":{"to":["a@b"],"bounce":{"type":"Transient"},"tags":{"catraca-account":"a\u0000"}}}`,
+		`{"type":"email.bounced","data":{"to":["a@b"],"tags":[{"name":"catraca-account","value":"a"}]}}`,
+		`{"type":"email.bounced","created_at":"1970-01-01T00:00:00Z","data":{"to":["a@b"],"tags":{"workspace":"ws_1"}}}`,
+		`{"type":"email.opened","data":null}`,
+		`{"type":"email.bounced","data":{}}`,
+		svixDocBody,
+	} {
+		f.Add([]byte(seed), resendID, []byte(seed+" "))
+	}
+	f.Add([]byte(resendBounce), "", []byte(resendBounce))
+	f.Add([]byte(`{"type":"email.delivered","data":{"tags":{"workspace":"w"}}}`), "msg_1 2", []byte(`{}`))
+	dec := &validating{}
+	byDefault := newTestResend(f, ResendConfig{Decider: dec})
+	byWorkspace := newTestResend(f, ResendConfig{Decider: dec, AccountTag: "workspace"})
+	f.Fuzz(func(t *testing.T, body []byte, id string, other []byte) {
+		header := resendHeaders(t, resendSecret, id, time.Now(), body)
+		for _, h := range []http.Handler{byDefault, byWorkspace} {
+			before := len(dec.got())
+			rec := post(t, h, body, header)
+			switch {
+			case id == "":
+				if rec.Code != http.StatusUnauthorized {
+					t.Fatalf("a body signed without a svix-id got %d", rec.Code)
+				}
+			case rec.Code != http.StatusOK && rec.Code != http.StatusBadRequest:
+				t.Fatalf("a signed body got %d: %s", rec.Code, rec.Body)
+			}
+			checkEvents(t, dec.got()[before:], "resend", positional("resend:"+id))
+		}
+		if !bytes.Equal(other, body) {
+			before := len(dec.got())
+			if rec := post(t, byDefault, other, header); rec.Code != http.StatusUnauthorized || len(dec.got()) != before {
+				t.Fatalf("a body with another's signature got %d", rec.Code)
+			}
+		}
+	})
+}
+
+// FuzzResendSignature puts any entries before and after a valid one in the
+// svix-signature header, and any timestamp in svix-timestamp. With the
+// valid entry and its timestamp, the webhook verifies whatever else the
+// header holds; without the entry, it verifies only when the other entries
+// hold its signature; with another timestamp, it never does.
+func FuzzResendSignature(f *testing.F) {
+	f.Add("", "", "")
+	f.Add("v1,AAAA", "v2,AAAA", "1731705121")
+	f.Add("v1a,xyz v1", "v1,!!!", "+0")
+	f.Add(",", "v1,", " ")
+	f.Add("v1,v1,v1", "  ", "-1")
+	f.Add(svixDocSignature, "v1="+svixDocSignature[3:], "99999999999999999999")
+	h := newTestResend(f, ResendConfig{Decider: &recorder{}})
+	now := time.Now()
+	h.now = func() time.Time { return now }
+	body := []byte(resendBounce)
+	ts := strconv.FormatInt(now.Unix(), 10)
+	good := svixSign(f, resendSecret, resendID, now, body)
+	want, _ := base64.StdEncoding.DecodeString(good[3:])
+	holds := func(entries string) bool {
+		for e := range strings.SplitSeq(entries, " ") {
+			if sig, ok := strings.CutPrefix(e, "v1,"); ok {
+				if b, err := base64.StdEncoding.DecodeString(sig); err == nil && bytes.Equal(b, want) {
+					return true
+				}
+			}
+		}
+		return false
+	}
+	verify := func(stamp, sig string) bool {
+		_, ok := h.verify(http.Header{"Svix-Id": {resendID}, "Svix-Timestamp": {stamp}, "Svix-Signature": {sig}}, body)
+		return ok
+	}
+	f.Fuzz(func(t *testing.T, before, after, stamp string) {
+		for _, sig := range []string{before + " " + good + " " + after, before + " " + good, good + " " + after} {
+			if !verify(ts, sig) {
+				t.Fatalf("a valid entry in %q does not verify", sig)
+			}
+		}
+		if got := verify(ts, before+" "+after); got != (holds(before) || holds(after)) {
+			t.Fatalf("%q verifies: %v", before+" "+after, got)
+		}
+		if got := verify(stamp, good+" "+before); got != (stamp == ts) {
+			t.Fatalf("signed at %s, verified at %q: %v", ts, stamp, got)
 		}
 	})
 }

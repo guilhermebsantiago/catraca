@@ -14,7 +14,7 @@ can, steps to reproduce. You should get an answer within a few days.
 ## Scope
 
 In scope: the server and its endpoints (decide, events, labels, feedback,
-secret scanning), signature verification (SNS, useSend, GitHub, the
+secret scanning), signature verification (SNS, useSend, Resend, GitHub, the
 `Catraca-Signature` scheme), the outgoing hooks, the audit log and the
 configuration handling. Deployment choices are out of scope, but the docs
 say what to keep private: `/metrics`, `/healthz` and `/readyz` need no

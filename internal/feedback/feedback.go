@@ -1,12 +1,13 @@
 // Package feedback turns delivery feedback from email providers into
 // Catraca feedback events: bounces, complaints and deliveries.
 //
-// Three HTTP handlers are provided:
+// Four HTTP handlers are provided:
 //
 //   - NewSESHandler: Amazon SES notifications delivered through Amazon SNS,
 //     with the SNS message signature verified.
 //   - NewUseSendHandler: useSend webhooks, with the webhook signature
 //     verified.
+//   - NewResendHandler: Resend webhooks, with the Svix signature verified.
 //   - NewGenericHandler: a feedback event in Catraca's own JSON format,
 //     signed with a shared secret.
 //
@@ -92,8 +93,9 @@ const (
 	// does not leave a notification half recorded.
 	decideTimeout = 15 * time.Second
 	// retryAfter is the Retry-After of a 503 for feedback that could not be
-	// counted. SNS and useSend keep their own schedules; a platform posting
-	// generic feedback may wait this long before it sends the event again.
+	// counted. SNS, useSend and Resend keep their own schedules; a platform
+	// posting generic feedback may wait this long before it sends the event
+	// again.
 	retryAfter = 10 * time.Second
 )
 

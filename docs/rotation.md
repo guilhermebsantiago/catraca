@@ -11,6 +11,7 @@ value, each takes the values being rotated out:
 | resolver secret | `secret_scanning.github.resolver.secret`, `previous_secrets` | Catraca | the platform's resolver | signs with every secret, and opens raw tokens sealed with any |
 | generic feedback secret | `feedback.generic.secret`, `previous_secrets` | the platform | Catraca | accepts a request signed with any |
 | useSend secret | `feedback.usesend.secret`, `previous_secrets` | useSend | Catraca | accepts a call signed with any |
+| Resend secret | `feedback.resend.secret`, `previous_secrets` | Resend | Catraca | accepts a webhook signed with any |
 
 The rule behind every runbook below: **the side that can hold two secrets
 moves first.** Catraca holds both while the other side switches, and when
@@ -178,3 +179,27 @@ attempt; check it in useSend after a rotation that took longer than the
 retries. Do not create a second webhook with the new secret to bridge the
 window: each webhook sends its own calls, with their own ids, so every
 event would count twice.
+
+## Resend secret
+
+Resend makes the secret, and after a
+[rotation](https://resend.com/docs/api-reference/webhooks/rotate-signing-secret)
+signs every webhook with both the old and the new secret for 24 hours, so
+Catraca has a day to switch:
+
+1. Rotate the webhook's signing secret in Resend and keep the new one.
+2. Set it as `feedback.resend.secret`, move the old one to
+   `previous_secrets`, and roll out within the day. Every webhook of that
+   day carries a signature with each secret, so instances on either
+   configuration accept it.
+3. Remove `previous_secrets` and roll out. A rise of
+   `catraca_feedback_outcomes_total{provider="resend",outcome="invalid_signature"}`
+   after the day means an instance still has the old secret alone.
+
+A switch that misses the day is answered `401` until it lands, and Resend
+retries those webhooks for more than a day, each attempt signed anew with
+its current secret and with the same `svix-id`, so each counts once when
+it gets through. Rotate rather than add a second webhook with the new
+secret: Resend does not document whether two webhooks deliver an event
+under the same `svix-id`, and if they do not, every event would count
+twice.

@@ -19,7 +19,7 @@ import (
 )
 
 // fullApp builds a server with every part that registers metrics turned on:
-// hooks, the three feedback providers and secret scanning. Nothing calls
+// hooks, every feedback provider and secret scanning. Nothing calls
 // out: no hook has a delivery, and GitHub's keys are fetched only for a
 // batch.
 func fullApp(t *testing.T) *App {
@@ -40,6 +40,7 @@ hooks:
 feedback:
   ses: {topic_arns: ['arn:aws:sns:us-east-1:111122223333:catraca'], account_tag: account}
   usesend: {secret: %[1]s}
+  resend: {secret: whsec_bWV0cmljcy10ZXN0}
   generic: {secret: %[1]s}
 secret_scanning:
   github:

@@ -227,6 +227,7 @@ const (
 	routeFeedback        = "POST /v1/feedback"
 	routeFeedbackSES     = "POST /v1/feedback/ses"
 	routeFeedbackUseSend = "POST /v1/feedback/usesend"
+	routeFeedbackResend  = "POST /v1/feedback/resend"
 )
 
 func newAdmissionMetrics() admissionMetrics {
@@ -244,7 +245,7 @@ func newAdmissionMetrics() admissionMetrics {
 			Help: "How many requests may hold a slot at once, by group: decisions (adaptive unless server.inflight_limit is static) and feedback.",
 		}, []string{"group"}),
 	}
-	for _, r := range []string{routeDecide, routeEvents, routeFeedback, routeFeedbackSES, routeFeedbackUseSend} {
+	for _, r := range []string{routeDecide, routeEvents, routeFeedback, routeFeedbackSES, routeFeedbackUseSend, routeFeedbackResend} {
 		m.inflight.WithLabelValues(r)
 		m.shed.WithLabelValues(r)
 	}

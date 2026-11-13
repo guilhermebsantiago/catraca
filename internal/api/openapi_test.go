@@ -36,6 +36,7 @@ var unscopedRoutes = []string{
 	routeFeedback,
 	routeFeedbackSES,
 	routeFeedbackUseSend,
+	routeFeedbackResend,
 	"POST /v1/secret-scanning/github",
 	"GET /healthz",
 	"GET /readyz",
