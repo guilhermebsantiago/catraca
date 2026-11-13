@@ -48,16 +48,6 @@ type SPFRecord struct {
 	Terms []SPFTerm `json:"terms"`
 }
 
-// all returns the qualifier of the record's all mechanism, if it has one.
-func (r SPFRecord) all() (string, bool) {
-	for _, t := range r.Terms {
-		if !t.Modifier && t.Name == "all" {
-			return t.Qualifier, true
-		}
-	}
-	return "", false
-}
-
 // redirect returns the domain-spec of the record's redirect modifier, or "".
 func (r SPFRecord) redirect() string {
 	for _, t := range r.Terms {
@@ -185,10 +175,7 @@ func parseSPFTerm(field string) (SPFTerm, error) {
 				return fail("%v", err)
 			}
 		}
-		t.Value = arg
-		if strings.HasPrefix(t.Value, ":") {
-			t.Value = t.Value[1:]
-		}
+		t.Value = strings.TrimPrefix(arg, ":")
 	case "ip4", "ip6":
 		network, ok := strings.CutPrefix(arg, ":")
 		if !ok || network == "" {

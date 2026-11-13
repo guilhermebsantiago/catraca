@@ -74,8 +74,6 @@ type App struct {
 
 	store   store.Store
 	catalog signal.Catalog
-	// senderAuth is nil with sender_auth off.
-	senderAuth *senderauth.Refresher
 	audit   *auditLog
 	hooks   *hooks.Dispatcher
 	// stopHooks cancels hooks.Run; hooksDone is closed when it returns.
@@ -95,6 +93,8 @@ type App struct {
 	// drainEnd returns the channel that ends a drain of the given delay:
 	// time.After, or a channel a test controls.
 	drainEnd func(time.Duration) <-chan time.Time
+	// senderAuth looks sender domains up; nil with sender_auth off.
+	senderAuth *senderauth.Refresher
 
 	closeOnce sync.Once
 	closeErr  error
