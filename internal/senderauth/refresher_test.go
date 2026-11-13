@@ -255,6 +255,27 @@ func TestRefresherQueueFull(t *testing.T) {
 	}
 }
 
+// TestRefresherTracksBoundedDomains checks that the rate limit remembers
+// a bounded number of domains: when full of recent ones it drops new
+// domains, and it forgets expired ones to make room.
+func TestRefresherTracksBoundedDomains(t *testing.T) {
+	r, clock, _ := testRefresher(t, authZone(), Options{QueueSize: 10, NegativeTTL: time.Minute})
+	r.tracked = 2
+	if !r.Enqueue("a.example") || !r.Enqueue("b.example") {
+		t.Fatal("not queued")
+	}
+	if r.Enqueue("c.example") {
+		t.Error("queued past the tracked domains")
+	}
+	clock.add(time.Minute)
+	if !r.Enqueue("c.example") {
+		t.Error("expired domains were not forgotten to make room")
+	}
+	if got := counter(t, r.m.dropped); got != 1 {
+		t.Errorf("dropped = %v, want 1", got)
+	}
+}
+
 // TestRefresherTimeout checks that a check that runs out of time is cached
 // as unknown, briefly, rather than as missing.
 func TestRefresherTimeout(t *testing.T) {

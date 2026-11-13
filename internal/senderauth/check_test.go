@@ -157,3 +157,20 @@ func TestOrgDomain(t *testing.T) {
 		}
 	}
 }
+
+// BenchmarkSendPath measures what sender authentication adds to a send
+// that hits the cache: normalizing the From domain and decoding the
+// cached value. The store Get rides in the batch the send already makes.
+func BenchmarkSendPath(b *testing.B) {
+	v := Result{SPF: Found, SPFAll: AllSoftfail, SPFProvider: Yes, DKIM: Found, DMARCPolicy: PolicyReject,
+		DMARCPct: 100, DMARCADKIM: Relaxed, DMARCASPF: Relaxed, CheckedAt: time.Now()}.encode()
+	b.ReportAllocs()
+	for b.Loop() {
+		if _, err := NormalizeDomain("mail.example.com"); err != nil {
+			b.Fatal(err)
+		}
+		if _, ok := DecodeResult(v); !ok {
+			b.Fatal("unreadable")
+		}
+	}
+}

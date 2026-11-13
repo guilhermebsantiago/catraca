@@ -79,10 +79,15 @@ type Refresher struct {
 	mu sync.Mutex
 	// pending holds the domains queued or being looked up.
 	pending map[string]bool
-	// queued holds when each domain was last queued.
+	// queued holds when each domain was last queued, for at most tracked
+	// domains.
 	queued  map[string]time.Time
-	started bool
-	closed  bool
+	tracked int
+	// nextSweep is when queued may next be swept for expired entries, so a
+	// map full of recent ones costs a send one sweep a second at most.
+	nextSweep time.Time
+	started   bool
+	closed    bool
 
 	// ctx is canceled by Close, which ends the lookups in flight.
 	ctx    context.Context
@@ -115,6 +120,7 @@ func NewRefresher(opts Options) (*Refresher, error) {
 		queue:   make(chan string, cmp.Or(opts.QueueSize, DefaultQueueSize)),
 		pending: map[string]bool{},
 		queued:  map[string]time.Time{},
+		tracked: maxTracked,
 	}
 	r.negTTL = min(r.negTTL, r.ttl)
 	if r.now == nil {
@@ -194,16 +200,17 @@ func (r *Refresher) Enqueue(domain string) bool {
 	if at, ok := r.queued[domain]; ok && now.Sub(at) < r.negTTL {
 		return false
 	}
-	if len(r.queued) >= maxTracked {
+	if len(r.queued) >= r.tracked && !now.Before(r.nextSweep) {
+		r.nextSweep = now.Add(time.Second)
 		for d, at := range r.queued {
 			if now.Sub(at) >= r.negTTL {
 				delete(r.queued, d)
 			}
 		}
-		if len(r.queued) >= maxTracked {
-			r.m.dropped.Inc()
-			return false
-		}
+	}
+	if len(r.queued) >= r.tracked {
+		r.m.dropped.Inc()
+		return false
 	}
 	select {
 	case r.queue <- domain:
@@ -257,7 +264,7 @@ func (r *Refresher) refresh(domain string) {
 	}
 	wctx, wcancel := context.WithTimeout(r.ctx, r.timeout)
 	defer wcancel()
-	if err := r.put(wctx, domain, res, ttl); err != nil {
+	if err := r.put(wctx, domain, res, ttl); err != nil && r.ctx.Err() == nil {
 		r.m.writeErrors.Inc()
 		r.log.Warn("sender authentication result could not be cached", "domain", domain, "error", err)
 	}
