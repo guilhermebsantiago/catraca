@@ -259,3 +259,26 @@ tracing:
   # traceparent says its caller kept the trace is always traced.
   # sample_ratio: 0.1
   # service_name: catraca
+
+# SPF, DKIM and DMARC of sender domains, for the domain.spf, domain.dkim
+# and domain.dmarc_* signals (docs/signals.md). Off by default: on, the
+# server looks sender domains up in the background and caches the results
+# in the store; a send never waits for DNS.
+sender_auth:
+  enabled: false
+  # The domains a sender domain's SPF record should include for mail
+  # through the platform to pass.
+  # providers: [amazonses.com]
+  # The DKIM selectors the platform signs with.
+  # dkim_selectors: [s1]
+  # The event attribute that lists the domains the account verified, for
+  # domain.verified; read even with enabled false.
+  verified_domains_attribute: verified_domains
+  ttl: 1h
+  # For results with a missing record or a failed lookup.
+  negative_ttl: 5m
+  timeout: 5s
+  workers: 4
+  queue_size: 1024
+  # A DNS server to ask instead of the system's resolver.
+  # resolver: 127.0.0.1:53

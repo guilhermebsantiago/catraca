@@ -226,6 +226,44 @@ $ catraca account state acct_123 --reset
 account acct_123 is active
 ```
 
+## domain check
+
+```sh
+catraca domain check <domain> [--provider amazonses.com] [--selector s1] [--resolver host:port] [--timeout 10s] [--json]
+```
+
+Looks up a sender domain's SPF record, the DKIM keys under each
+`--selector` and the DMARC policy that applies to it, live and outside any
+cache, and prints each record, what was parsed from it, the SPF include
+tree with its lookup count, and the [signals](signals.md#sender-authentication)
+rules would read once the result is cached. `--provider` and `--selector`
+repeat or take comma-separated lists, like `sender_auth.providers` and
+`dkim_selectors`. It checks that the domain is set up to authenticate, not
+what a receiver does: SPF is evaluated for no sending IP and no DKIM
+signature is verified. It exits 0 whatever it finds, and 2 for a name that
+is not a domain.
+
+```sh
+$ catraca domain check gmail.com --provider _spf.google.com
+gmail.com (organizational domain gmail.com)
+
+SPF        found
+  record     v=spf1 redirect=_spf.google.com
+  all        softfail
+  provider   yes: redirect=_spf.google.com in gmail.com
+  lookups    1 of 10
+  records    gmail.com
+               redirect _spf.google.com
+
+DKIM       unknown
+  selectors  none given: pass --selector
+
+DMARC      none
+  record     _dmarc.gmail.com: v=DMARC1; p=none; sp=quarantine; rua=mailto:mailauth-reports@google.com
+  applies    p, the domain's own record
+  ...
+```
+
 ## outbox list
 
 ```sh

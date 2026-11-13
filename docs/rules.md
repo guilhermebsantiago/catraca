@@ -623,6 +623,42 @@ themselves, so a wider send is often decided without its signals, marked
 platform split its batches into events of at most 50 recipients, the most
 SES, Postmark and Resend take per message anyway.
 
+### Sender authentication
+
+The default ruleset has two shadow rules on the From domain's
+[authentication records](signals.md#sender-authentication), which need
+[`sender_auth`](config.md#sender_auth) on:
+
+- `dmarc-protected-domain-unverified` holds a send whose domain publishes
+  DMARC `p=reject` or `quarantine` when the account has not verified it,
+  nor a domain under the same organizational domain
+  (`domain.verified == "no"`): someone sending as a bank or a brand that
+  asked receivers to refuse what it did not authenticate. It needs the
+  platform to send each account's verified domains in
+  `event.attributes.verified_domains`; without them `domain.verified` is
+  `unknown` and the rule never matches.
+- `unauthenticated-domain-new-account` holds sends from accounts under 3
+  days old whose domain has no SPF record and no usable DKIM key under the
+  configured selectors: mail that cannot pass DMARC from an account too
+  new to have set its domain up.
+
+Both compare states, never presence: `unknown` (not cached yet, a failed
+lookup, the store down) is a string that matches neither, so they stay
+quiet whatever their `on_error`. Write your own the same way, and treat
+`invalid` as its own state: a malformed record is the owner's mistake, not
+proof of abuse.
+
+```yaml
+  - id: spf-allows-everyone
+    description: A new account sending from a domain whose SPF record ends in +all, which lets any server pass
+    when: >-
+      event.type == "send"
+      && account.age_hours < 72.0
+      && domain.spf_all == "pass"
+    action: flag
+    reason: The sender domain's SPF record authorizes every server
+```
+
 ## Checklist for a new rule
 
 - [ ] It starts in shadow mode.

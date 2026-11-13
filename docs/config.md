@@ -672,6 +672,33 @@ timeout come from the `OTEL_EXPORTER_OTLP_*` variables
 ([list](tracing.md#environment-variables)). With tracing on, the access log
 names each request's trace and `/metrics` serves exemplars.
 
+### sender_auth
+
+Background lookups of sender domains' SPF, DKIM and DMARC records, behind
+the `domain.spf`, `domain.dkim` and `domain.dmarc_*`
+[signals](signals.md#sender-authentication). Off by default, so an upgrade
+makes no outbound DNS query; with it off those signals are `unknown`.
+
+| field | default | |
+|---|---|---|
+| `enabled` | `false` | look sender domains up. A send never waits for DNS: it reads the cached result, and a domain not cached yet is queued and reads `unknown` until its lookup lands |
+| `providers` | none | the domains a sender domain's SPF record should include for mail through the platform to pass, such as `amazonses.com`; `domain.spf_provider` is `unknown` without any |
+| `dkim_selectors` | none | the selectors the platform signs with, each looked up as `<selector>._domainkey.<domain>`; `domain.dkim` is `unknown` without any |
+| `verified_domains_attribute` | `verified_domains` | the key of `event.attributes` that lists the domains the account verified, for `domain.verified`, read even with `enabled: false` |
+| `ttl` | `1h` | how long a result is cached in the store, at least `1s` |
+| `negative_ttl` | `5m`, at most `ttl` | how long a result is cached when a record is missing or a lookup failed. Each server also looks a domain up at most once per `negative_ttl` |
+| `timeout` | `5s` | bounds the lookups of one domain, every query included; one cut short reads `unknown` |
+| `workers` | `4` | domains looked up at once, from 1 to 256 |
+| `queue_size` | `1024` | domains that may wait for a worker; past that a domain is dropped (`catraca_sender_auth_queue_dropped_total`) and queued again by its next send |
+| `resolver` | the system's | a DNS server to ask, `host:port`, such as `127.0.0.1:53` for a local caching resolver |
+
+Catraca uses Go's resolver, which reads the system configuration and falls
+back to TCP for long answers, but does not report record TTLs: results are
+kept for `ttl` or `negative_ttl`, not for their DNS TTLs. A check costs
+two to three DMARC and SPF queries, one per selector, and one per SPF
+include or redirect, up to 10. Results are shared through the store, so a
+domain is looked up about once per `ttl` however many servers read it.
+
 ## Environment variables the CLI reads
 
 | variable | used by | |
