@@ -10,6 +10,15 @@ and downgrades, and what an upgrade from the launch has to act on.
 
 ## [Unreleased]
 
+### Added
+
+- `POST /v1/feedback/resend` takes Resend's bounce, complaint and delivery
+  webhooks, verified by their Svix signature with
+  `feedback.resend.secret` or a `previous_secrets` entry. The account id is
+  read from a tag (`account_tag`, `catraca-account` by default), and the
+  events of a webhook are named after its `svix-id`, so Resend's retries
+  count once ([feedback](docs/feedback.md#resend)).
+
 ## [0.1.0] - 2026-10-29
 
 The first tagged release: everything since the public launch on 2026-10-15

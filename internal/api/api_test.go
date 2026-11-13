@@ -216,7 +216,7 @@ func TestUnconfiguredRoutes(t *testing.T) {
 	s := newTestServer(t, deciderFunc(nil), nil, func(o *Options) {
 		o.Checks = []Check{{Name: "store", Check: func(context.Context) error { return errors.New("unreachable") }}}
 	})
-	for _, path := range []string{"/v1/feedback", "/v1/feedback/ses", "/v1/feedback/usesend", "/v1/secret-scanning/github", "/v1/rules/reload"} {
+	for _, path := range []string{"/v1/feedback", "/v1/feedback/ses", "/v1/feedback/usesend", "/v1/feedback/resend", "/v1/secret-scanning/github", "/v1/rules/reload"} {
 		rec := serve(s, "POST", path, "{}")
 		if rec.Code != 404 || !strings.Contains(rec.Body.String(), `"code":"not_configured"`) {
 			t.Errorf("POST %s: %d %s", path, rec.Code, rec.Body)

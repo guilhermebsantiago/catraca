@@ -43,6 +43,8 @@ const (
 	secret = "test-secret-0123456789abcdef012345678"
 	// leakedToken is the API key the fake resolver knows.
 	leakedToken = "acme_live_0123456789leaked"
+	// resendSecret is a Resend webhook signing secret: whsec_ and base64.
+	resendSecret = "whsec_dGVzdC1yZXNlbmQtc2VjcmV0LTAxMjM0NTY3ODk="
 )
 
 // testRules has an enforced rule for each action the tests need and one
@@ -191,6 +193,8 @@ feedback:
     secret: %s
   usesend:
     secret: %s
+  resend:
+    secret: %s
 secret_scanning:
   github:
     enabled: true
@@ -200,7 +204,7 @@ secret_scanning:
       secret: %s
 logging:
   level: debug
-`, opts.maxBodyBytes, opts.drainDelay, token, filepath.ToSlash(h.rulesPath), opts.auditDSN, opts.gate, h.hook.URL, secret, secret, secret, keys.URL, opts.resolverURL, secret)
+`, opts.maxBodyBytes, opts.drainDelay, token, filepath.ToSlash(h.rulesPath), opts.auditDSN, opts.gate, h.hook.URL, secret, secret, secret, resendSecret, keys.URL, opts.resolverURL, secret)
 	if opts.redisURL != "" {
 		yaml += fmt.Sprintf("store:\n  backend: redis\n  redis:\n    url: '%s'\n", opts.redisURL)
 	}
@@ -867,6 +871,24 @@ func (h *harness) useSend(kind string, createdAt time.Time, team int) response {
 		"X-UseSend-Signature", "v1="+hex.EncodeToString(mac.Sum(nil)), "X-UseSend-Timestamp", ts)
 }
 
+// resend posts a Resend webhook about one email tagged with account,
+// created at createdAt, signed as Resend signs them, as of now. Resend
+// keeps a message's svix-id, id, on every retry.
+func (h *harness) resend(kind, id, account string, createdAt time.Time) response {
+	h.t.Helper()
+	body := fmt.Sprintf(`{"type":%q,"created_at":%q,"data":{"email_id":"email_1","from":"Acme <news@rs.example>","to":["someone@mail.example"],"tags":{"catraca-account":%q}}}`,
+		kind, createdAt.UTC().Format(time.RFC3339), account)
+	key, err := base64.StdEncoding.DecodeString(strings.TrimPrefix(resendSecret, "whsec_"))
+	if err != nil {
+		h.t.Fatal(err)
+	}
+	ts := strconv.FormatInt(time.Now().Unix(), 10)
+	mac := hmac.New(sha256.New, key)
+	mac.Write([]byte(id + "." + ts + "." + body))
+	return h.do("POST", "/v1/feedback/resend", "", body,
+		"svix-id", id, "svix-timestamp", ts, "svix-signature", "v1,"+base64.StdEncoding.EncodeToString(mac.Sum(nil)))
+}
+
 // TestEventTimeBoundsOnEveryRoute sends events dated a month ahead and in
 // 1970 through every route that takes an event time. A time ahead counts
 // when it arrives, so it cannot empty the counters rules read; a time older
@@ -932,12 +954,26 @@ func TestEventTimeBoundsOnEveryRoute(t *testing.T) {
 		t.Errorf("useSend complaint dated 1970: %d %s", r.status, r.body)
 	}
 
+	// POST /v1/feedback/resend: the same, for the account tagged acct_rs.
+	for i, at := range []time.Time{ahead, time.Now()} {
+		if r := h.resend("email.complained", fmt.Sprintf("msg_bounds_%d", i), "acct_rs", at); r.status != http.StatusOK {
+			t.Fatalf("Resend complaint at %s: %d %s", at, r.status, r.body)
+		}
+	}
+	if d, _ := h.decide(send("acct_rs", "news@rs.example")); d.Action != decision.Hold {
+		t.Errorf("send after two Resend complaints, one dated a month ahead: %+v", d)
+	}
+	if r := h.resend("email.complained", "msg_bounds_epoch", "acct_rs", epoch); r.status != http.StatusOK {
+		t.Errorf("Resend complaint dated 1970: %d %s", r.status, r.body)
+	}
+
 	m := string(h.do("GET", "/metrics", "", nil).body)
 	for _, want := range []string{
-		`catraca_event_times_out_of_bounds_total{bound="future"} 3`,
-		`catraca_event_times_out_of_bounds_total{bound="past"} 3`,
+		`catraca_event_times_out_of_bounds_total{bound="future"} 4`,
+		`catraca_event_times_out_of_bounds_total{bound="past"} 4`,
 		`catraca_feedback_outcomes_total{outcome="malformed",provider="generic"} 1`,
 		`catraca_feedback_outcomes_total{outcome="malformed",provider="usesend"} 1`,
+		`catraca_feedback_outcomes_total{outcome="malformed",provider="resend"} 1`,
 	} {
 		if !strings.Contains(m, want) {
 			t.Errorf("metrics lack %s", want)
@@ -1033,6 +1069,9 @@ func TestFeedbackIsRetriedWhenTheStoreFails(t *testing.T) {
 	if r := h.useSend("email.complained", at, 4343); r.status != http.StatusServiceUnavailable {
 		t.Errorf("useSend complaint with the store failing: %d %s", r.status, r.body)
 	}
+	if r := h.resend("email.complained", "msg_down", "acct_rs_down", at); r.status != http.StatusServiceUnavailable || r.header.Get("Retry-After") != "10" {
+		t.Errorf("Resend complaint with the store failing: %d %s, Retry-After %q", r.status, r.body, r.header.Get("Retry-After"))
+	}
 
 	mr.SetError("")
 	for i := range 2 {
@@ -1045,12 +1084,16 @@ func TestFeedbackIsRetriedWhenTheStoreFails(t *testing.T) {
 		if r := h.useSend("email.complained", at, 4343); r.status != http.StatusOK {
 			t.Errorf("useSend complaint sent again, %d: %d %s", i+1, r.status, r.body)
 		}
+		if r := h.resend("email.complained", "msg_down", "acct_rs_down", at); r.status != http.StatusOK {
+			t.Errorf("Resend complaint sent again, %d: %d %s", i+1, r.status, r.body)
+		}
 	}
 	m := string(h.do("GET", "/metrics", "", nil).body)
 	for _, want := range []string{
 		`catraca_feedback_outcomes_total{outcome="uncounted",provider="generic"} 1`,
 		`catraca_feedback_outcomes_total{outcome="uncounted",provider="usesend"} 1`,
-		`catraca_duplicate_events_total{type="feedback"} 2`,
+		`catraca_feedback_outcomes_total{outcome="uncounted",provider="resend"} 1`,
+		`catraca_duplicate_events_total{type="feedback"} 3`,
 	} {
 		if !strings.Contains(m, want) {
 			t.Errorf("metrics lack %s", want)
@@ -1060,7 +1103,7 @@ func TestFeedbackIsRetriedWhenTheStoreFails(t *testing.T) {
 
 // TestRetriesCountOnce sends events again with the ids they were first sent
 // with, as platforms and providers retry, through the decide, events,
-// generic feedback and useSend routes, on each store: each event counts
+// generic feedback, useSend and Resend routes, on each store: each event counts
 // once, and the answer to a retry says it was a duplicate.
 func TestRetriesCountOnce(t *testing.T) {
 	t.Parallel()
@@ -1145,10 +1188,27 @@ func TestRetriesCountOnce(t *testing.T) {
 				t.Errorf("send after two useSend complaints: %+v", d)
 			}
 
+			// And for Resend, which signs a retry anew, at its own time,
+			// with the message's svix-id.
+			for range 2 {
+				if r := h.resend("email.complained", fmt.Sprintf("msg_%d_1", run), acct+"_rs", at); r.status != http.StatusOK {
+					t.Fatalf("Resend complaint: %d %s", r.status, r.body)
+				}
+			}
+			if d, _ := h.decide(send(acct+"_rs", "news@rs.example")); d.Action != decision.Allow {
+				t.Errorf("send after one Resend complaint sent twice: %+v", d)
+			}
+			if r := h.resend("email.complained", fmt.Sprintf("msg_%d_2", run), acct+"_rs", at); r.status != http.StatusOK {
+				t.Fatalf("Resend complaint: %d %s", r.status, r.body)
+			}
+			if d, _ := h.decide(send(acct+"_rs", "news@rs.example")); d.Action != decision.Hold {
+				t.Errorf("send after two Resend complaints: %+v", d)
+			}
+
 			m := string(h.do("GET", "/metrics", "", nil).body)
 			for _, want := range []string{
 				`catraca_duplicate_events_total{type="send"} 3`,
-				`catraca_duplicate_events_total{type="feedback"} 3`,
+				`catraca_duplicate_events_total{type="feedback"} 4`,
 			} {
 				if !strings.Contains(m, want) {
 					t.Errorf("metrics lack %s", want)

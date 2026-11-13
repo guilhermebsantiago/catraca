@@ -427,8 +427,9 @@ outlast the retries it guards against: a platform retrying a request that
 timed out does so within seconds, Amazon SNS's default delivery policy
 gives up after about a minute and useSend's after about three, but an SNS
 [delivery policy](feedback.md#amazon-ses) of your own may retry for up to
-an hour, and a useSend call retried by hand from its dashboard may come
-later still. An event sent again after the window counts again. Raise
+an hour, a useSend call retried by hand from its dashboard may come
+later still, and Resend's last attempts come hours after the first. An
+event sent again after the window counts again. Raise
 `dedupe_ttl` to the longest retry schedule you use, if the memory is there;
 with `maxmemory-policy volatile-ttl` (see [redis](#store)), the entries are
 among the first keys evicted under memory pressure, which costs retries
@@ -601,6 +602,9 @@ see [feedback](feedback.md) for each provider's setup.
 | `usesend.secret` | required | the webhook signing secret shown by useSend, for `/v1/feedback/usesend` |
 | `usesend.previous_secrets` | | secrets the webhook had before; calls signed with them are still accepted |
 | `usesend.account_metadata_key` | | read the account id from the email's metadata instead of the team id |
+| `resend.secret` | required | the webhook signing secret shown by Resend, `whsec_` followed by base64, for `/v1/feedback/resend` |
+| `resend.previous_secrets` | | secrets the webhook had before; webhooks signed with them are still accepted |
+| `resend.account_tag` | `catraca-account` | the Resend tag holding the account id: ASCII letters, digits, `_` or `-` |
 | `generic.secret` | required | the shared secret `/v1/feedback` requests are signed with; at least 16 characters |
 | `generic.previous_secrets` | | secrets being rotated out; requests signed with them are still accepted |
 

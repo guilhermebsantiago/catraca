@@ -164,6 +164,7 @@ type Options struct {
 	// Provider endpoints. A nil handler answers 404 not_configured.
 	SESFeedback          http.Handler
 	UseSendFeedback      http.Handler
+	ResendFeedback       http.Handler
 	GenericFeedback      http.Handler
 	GitHubSecretScanning http.Handler
 
@@ -323,6 +324,7 @@ func New(opts Options) (*Server, error) {
 	s.handle(s.mux, routeFeedback, provider("generic feedback", "feedback.generic", s.admitFeedback(routeFeedback, opts.GenericFeedback)))
 	s.handle(s.mux, routeFeedbackSES, provider("SES feedback", "feedback.ses", s.admitFeedback(routeFeedbackSES, opts.SESFeedback)))
 	s.handle(s.mux, routeFeedbackUseSend, provider("useSend feedback", "feedback.usesend", s.admitFeedback(routeFeedbackUseSend, opts.UseSendFeedback)))
+	s.handle(s.mux, routeFeedbackResend, provider("Resend feedback", "feedback.resend", s.admitFeedback(routeFeedbackResend, opts.ResendFeedback)))
 	s.handle(s.mux, "POST /v1/secret-scanning/github", provider("GitHub secret scanning", "secret_scanning.github", opts.GitHubSecretScanning))
 
 	if opts.TracerProvider != nil {

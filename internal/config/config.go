@@ -19,6 +19,7 @@ import (
 
 	"github.com/guilhermebsantiago/catraca/internal/audit"
 	"github.com/guilhermebsantiago/catraca/internal/engine"
+	"github.com/guilhermebsantiago/catraca/internal/feedback"
 	"github.com/guilhermebsantiago/catraca/internal/hooks"
 	"github.com/guilhermebsantiago/catraca/internal/precision"
 	"github.com/guilhermebsantiago/catraca/internal/secretscan"
@@ -415,6 +416,7 @@ type Outbox struct {
 type Feedback struct {
 	SES     *SES     `yaml:"ses"`
 	UseSend *UseSend `yaml:"usesend"`
+	Resend  *Resend  `yaml:"resend"`
 	Generic *Generic `yaml:"generic"`
 }
 
@@ -439,6 +441,19 @@ type UseSend struct {
 	// AccountMetadataKey reads the account id from the email's metadata
 	// instead of the useSend team id.
 	AccountMetadataKey string `yaml:"account_metadata_key"`
+}
+
+// Resend configures POST /v1/feedback/resend.
+type Resend struct {
+	// Secret is the webhook signing secret shown by Resend, whsec_
+	// followed by base64. Required.
+	Secret Secret `yaml:"secret"`
+	// PreviousSecrets are secrets the webhook had before; webhooks signed
+	// with them are still accepted while its secret changes.
+	PreviousSecrets []Secret `yaml:"previous_secrets"`
+	// AccountTag is the Resend tag whose value is the account id. Default
+	// feedback.DefaultResendAccountTag.
+	AccountTag string `yaml:"account_tag"`
 }
 
 // Generic configures POST /v1/feedback.
@@ -673,6 +688,9 @@ func (c *Config) applyDefaults(set func(path string) bool) {
 		if h.MaxAge == 0 {
 			h.MaxAge = hooks.DefaultMaxAge
 		}
+	}
+	if r := c.Feedback.Resend; r != nil && r.AccountTag == "" {
+		r.AccountTag = feedback.DefaultResendAccountTag
 	}
 	if c.SecretScanning.GitHub.MaxAttempts == 0 {
 		c.SecretScanning.GitHub.MaxAttempts = secretscan.DefaultMaxAttempts

@@ -73,8 +73,8 @@ Catraca sits in the send path and is built on a few principles:
   addresses that already bounced. [rules/default.yaml](rules/default.yaml)
 - **Backtesting**: `catraca replay` runs a ruleset over labeled events and
   reports precision and recall per rule before anything ships.
-- **Feedback** from Amazon SES (through SNS, signature verified) and useSend,
-  or a generic signed endpoint.
+- **Feedback** from Amazon SES (through SNS, signature verified), useSend
+  and Resend, or a generic signed endpoint.
 - **Leaked keys** through GitHub's secret scanning partner program: the
   endpoint verifies GitHub's signature and stores each report before it
   answers, then resolves the key with your platform, blocks it and fires
@@ -160,7 +160,7 @@ caveats: [docs/benchmark.md](docs/benchmark.md).
 - [Kubernetes: the Helm chart](docs/kubernetes.md)
 - [Signals](docs/signals.md) · [Writing rules](docs/rules.md)
 - [Audit log and the precision gate](docs/audit.md) · [Hooks](docs/hooks.md)
-- [Feedback: SES, useSend](docs/feedback.md) · [GitHub secret scanning](docs/secret-scanning.md)
+- [Feedback: SES, useSend, Resend](docs/feedback.md) · [GitHub secret scanning](docs/secret-scanning.md)
 - [Faults: what happens when a dependency fails](docs/faults.md) · [Objectives and alerts](docs/slo.md) · [Tracing](docs/tracing.md)
 - [Benchmarks](docs/benchmark.md) · [Brand](docs/brand.md)
 - [Compatibility: what is stable before 1.0](docs/compatibility.md) · [Upgrading](docs/upgrading.md) · [Changelog](CHANGELOG.md)

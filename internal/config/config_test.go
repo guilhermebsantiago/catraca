@@ -161,7 +161,7 @@ func TestExampleConfig(t *testing.T) {
 	if len(cfg.Hooks) != 0 {
 		t.Errorf("hooks = %#v, want none until one is uncommented", cfg.Hooks)
 	}
-	if cfg.Feedback.Generic == nil || cfg.Feedback.SES != nil || cfg.Feedback.UseSend != nil {
+	if cfg.Feedback.Generic == nil || cfg.Feedback.SES != nil || cfg.Feedback.UseSend != nil || cfg.Feedback.Resend != nil {
 		t.Errorf("feedback = %#v", cfg.Feedback)
 	}
 	if cfg.SecretScanning.GitHub.Enabled {
@@ -346,6 +346,9 @@ feedback:
   usesend:
     secret: whsec_abc
     account_metadata_key: account
+  resend:
+    secret: whsec_c2VjcmV0
+    account_tag: workspace_id
   generic:
     secret: ${HOOK_SECRET}
 secret_scanning:
@@ -418,7 +421,8 @@ logging:
 	if h := cfg.Hooks[0].Options(); h.Headers["Authorization"] != "Bearer abc" || h.Secret != testSecret {
 		t.Errorf("hooks[0].Options() = %#v", h)
 	}
-	if cfg.Feedback.SES == nil || cfg.Feedback.SES.AccountTag != "catraca-account" || cfg.Feedback.UseSend.AccountMetadataKey != "account" {
+	if cfg.Feedback.SES == nil || cfg.Feedback.SES.AccountTag != "catraca-account" || cfg.Feedback.UseSend.AccountMetadataKey != "account" ||
+		cfg.Feedback.Resend.Secret.Value() != "whsec_c2VjcmV0" || cfg.Feedback.Resend.AccountTag != "workspace_id" {
 		t.Errorf("feedback = %#v", cfg.Feedback)
 	}
 	gh := cfg.SecretScanning.GitHub
@@ -450,6 +454,9 @@ feedback:
   usesend:
     secret: whsec_new
     previous_secrets: [whsec_old]
+  resend:
+    secret: whsec_bmV3
+    previous_secrets: [whsec_b2xk, b2xkZXI=]
   generic:
     secret: `+testSecret+`
     previous_secrets: [`+old+`]
@@ -469,6 +476,9 @@ secret_scanning:
 	}
 	if got := Values(cfg.Feedback.UseSend.PreviousSecrets); !reflect.DeepEqual(got, []string{"whsec_old"}) {
 		t.Errorf("usesend previous_secrets = %q", got)
+	}
+	if got := Values(cfg.Feedback.Resend.PreviousSecrets); !reflect.DeepEqual(got, []string{"whsec_b2xk", "b2xkZXI="}) {
+		t.Errorf("resend previous_secrets = %q", got)
 	}
 	if got := Values(cfg.Feedback.Generic.PreviousSecrets); !reflect.DeepEqual(got, []string{old}) {
 		t.Errorf("generic previous_secrets = %q", got)
@@ -779,6 +789,11 @@ func TestValidation(t *testing.T) {
 		{"ses arn", "feedback: {ses: {topic_arns: [catraca], account_tag: t}}", `feedback.ses.topic_arns[0]: want an SNS topic ARN`},
 		{"ses account", "feedback: {ses: {topic_arns: ['arn:aws:sns:us-east-1:1:t']}}", "feedback.ses: set account_tag, account_header or both"},
 		{"usesend secret", "feedback: {usesend: {}}", "feedback.usesend.secret: is required"},
+		{"resend secret", "feedback: {resend: {}}", "feedback.resend.secret: is required"},
+		{"resend secret form", "feedback: {resend: {secret: whsec_not-base64}}", "feedback.resend.secret: is not whsec_ followed by base64"},
+		{"resend secret prefix only", "feedback: {resend: {secret: whsec_}}", "feedback.resend.secret: is not whsec_ followed by base64"},
+		{"resend secret space", "feedback: {resend: {secret: 'whsec_YWJj '}}", "feedback.resend.secret: has leading or trailing whitespace"},
+		{"resend account tag", "feedback: {resend: {secret: whsec_YWJj, account_tag: account.id}}", `feedback.resend.account_tag: want a Resend tag name, at most 256 ASCII letters, digits, _ or -, got "account.id"`},
 		{"generic secret", "feedback:\n  generic:\n", "feedback.generic.secret: is required"},
 		{"github resolver", "secret_scanning: {github: {enabled: true}}", "secret_scanning.github.resolver.url: is required"},
 		{"github resolver secret", "secret_scanning: {github: {enabled: true, resolver: {url: 'https://r'}}}", "secret_scanning.github.resolver.secret: is required"},
@@ -800,6 +815,9 @@ func TestValidation(t *testing.T) {
 		{"generic previous", "feedback: {generic: {secret: " + testSecret + ", previous_secrets: ['']}}", "feedback.generic.previous_secrets[0]: is empty"},
 		{"usesend previous", "feedback: {usesend: {secret: whsec_a, previous_secrets: [whsec_a]}}", "feedback.usesend.previous_secrets[0]: is the current secret"},
 		{"usesend previous space", "feedback: {usesend: {secret: whsec_a, previous_secrets: [' whsec_b']}}", "feedback.usesend.previous_secrets[0]: has leading or trailing whitespace"},
+		{"resend previous", "feedback: {resend: {secret: whsec_YWJj, previous_secrets: [whsec_YWJj]}}", "feedback.resend.previous_secrets[0]: is the current secret"},
+		{"resend previous form", "feedback: {resend: {secret: whsec_YWJj, previous_secrets: [whsec_YWJk, 'whsec_%%']}}", "feedback.resend.previous_secrets[1]: is not whsec_ followed by base64"},
+		{"resend previous empty", "feedback: {resend: {secret: whsec_YWJj, previous_secrets: ['']}}", "feedback.resend.previous_secrets[0]: is empty"},
 		{"resolver previous", "secret_scanning: {github: {enabled: true, resolver: {url: 'https://r', secret: " + testSecret + ", previous_secrets: [x]}}}", "secret_scanning.github.resolver.previous_secrets[0]: is 1 characters"},
 	}
 	for _, tt := range tests {
@@ -844,6 +862,15 @@ func TestDedupeTTLZero(t *testing.T) {
 	cfg := mustParse(t, minimal+"engine: {dedupe_ttl: 0s}\n", nil)
 	if cfg.Engine.DedupeTTL != 0 {
 		t.Errorf("dedupe_ttl = %v, want 0", cfg.Engine.DedupeTTL)
+	}
+}
+
+// TestResendAccountTagDefault checks the tag a Resend section without
+// account_tag reads the account id from.
+func TestResendAccountTagDefault(t *testing.T) {
+	cfg := mustParse(t, minimal+"feedback: {resend: {secret: whsec_YWJj}}\n", nil)
+	if got := cfg.Feedback.Resend.AccountTag; got != "catraca-account" {
+		t.Errorf("feedback.resend.account_tag = %q, want catraca-account", got)
 	}
 }
 

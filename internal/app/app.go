@@ -339,6 +339,19 @@ func (a *App) feedback(opts *api.Options) error {
 			return err
 		}
 	}
+	if c := fb.Resend; c != nil {
+		opts.ResendFeedback, err = feedback.NewResendHandler(feedback.ResendConfig{
+			Decider:         a.engine,
+			Secret:          c.Secret.Value(),
+			PreviousSecrets: config.Values(c.PreviousSecrets),
+			AccountTag:      c.AccountTag,
+			Logger:          log,
+			OnOutcome:       count("resend"),
+		})
+		if err != nil {
+			return err
+		}
+	}
 	if c := fb.Generic; c != nil {
 		opts.GenericFeedback, err = feedback.NewGenericHandler(feedback.GenericConfig{
 			Decider:         a.engine,

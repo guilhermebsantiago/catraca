@@ -20,8 +20,9 @@ keys; probes and Prometheus read health and metrics.
 | [`PUT /v1/accounts/{id}/state`](#account-states) | token | set an account's state, optionally until a time |
 | [`DELETE /v1/accounts/{id}/state`](#account-states) | token | reset an account to active |
 | [`POST /v1/feedback`](#post-v1feedback) | signature | a feedback event in Catraca's format |
-| [`POST /v1/feedback/ses`](#post-v1feedbackses-and-post-v1feedbackusesend) | SNS signature | Amazon SES notifications through SNS |
-| [`POST /v1/feedback/usesend`](#post-v1feedbackses-and-post-v1feedbackusesend) | useSend signature | useSend webhooks |
+| [`POST /v1/feedback/ses`](#provider-feedback) | SNS signature | Amazon SES notifications through SNS |
+| [`POST /v1/feedback/usesend`](#provider-feedback) | useSend signature | useSend webhooks |
+| [`POST /v1/feedback/resend`](#provider-feedback) | Svix signature | Resend webhooks |
 | [`POST /v1/secret-scanning/github`](#post-v1secret-scanninggithub) | GitHub signature | GitHub secret scanning partner endpoint |
 | [`GET /healthz`](#get-healthz-and-get-readyz) | none | liveness |
 | [`GET /readyz`](#get-healthz-and-get-readyz) | none | readiness |
@@ -924,11 +925,12 @@ event, including an event over a [limit](#limits) or older than
 `engine.max_event_age`, and `503` with `Retry-After` when the event could
 not be counted: send it again, with the same `id`, so it counts once.
 
-### POST /v1/feedback/ses and POST /v1/feedback/usesend
+### Provider feedback
 
-Amazon SES notifications delivered by SNS (signature verified, subscriptions
-confirmed for the configured topics), and useSend webhooks (signature
-verified). They are set up in the provider, not called by hand; see
+`POST /v1/feedback/ses` takes Amazon SES notifications delivered by SNS
+(signature verified, subscriptions confirmed for the configured topics),
+`POST /v1/feedback/usesend` useSend webhooks and `POST /v1/feedback/resend`
+Resend webhooks (signatures verified). They are set up in the provider, not called by hand; see
 [feedback](feedback.md) for the setup and the status codes each provider's
 retry policy needs.
 

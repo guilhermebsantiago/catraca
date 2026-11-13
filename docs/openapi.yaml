@@ -662,6 +662,31 @@ paths:
           $ref: '#/components/responses/ProviderError'
         '5XX':
           $ref: '#/components/responses/ProviderError'
+  /v1/feedback/resend:
+    post:
+      operationId: resendFeedback
+      summary: Resend webhooks
+      description: |
+        Resend webhooks, verified by their Svix signature. Set up in the
+        provider, not called by hand: see docs/feedback.md.
+        `404 not_configured` without the `feedback.resend` section.
+      tags: [providers]
+      security:
+        - svixSignature: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              description: A Resend webhook payload.
+      responses:
+        '200':
+          description: Accepted.
+        '4XX':
+          $ref: '#/components/responses/ProviderError'
+        '5XX':
+          $ref: '#/components/responses/ProviderError'
   /v1/secret-scanning/github:
     post:
       operationId: githubSecretScanning
@@ -809,6 +834,11 @@ components:
       in: header
       name: X-UseSend-Signature
       description: useSend's webhook signature, verified with `feedback.usesend.secret`. See docs/feedback.md.
+    svixSignature:
+      type: apiKey
+      in: header
+      name: svix-signature
+      description: 'Resend''s Svix signature: space-separated `v1,<base64 HMAC-SHA256 of "<svix-id>.<svix-timestamp>.<raw body>">` entries, verified with `feedback.resend.secret`, with `svix-timestamp` within five minutes of the server clock. See docs/feedback.md.'
     githubSignature:
       type: apiKey
       in: header

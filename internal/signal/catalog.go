@@ -26,7 +26,8 @@ const (
 	// DefaultDedupeTTL is the default for Options.DedupeTTL. It outlasts the
 	// retries of a platform whose request timed out, and those of the
 	// feedback providers Catraca takes: Amazon SNS's default delivery policy
-	// and useSend's webhooks both give up within about five minutes. Each
+	// and useSend's webhooks both give up within about five minutes, and
+	// Resend's first three attempts come within about five minutes. Each
 	// event with an id costs an entry for this long, so a longer one costs
 	// memory in proportion.
 	DefaultDedupeTTL = 10 * time.Minute
