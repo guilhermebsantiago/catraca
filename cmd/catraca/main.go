@@ -66,6 +66,7 @@ Commands:
   decisions      list decisions by account, API key, IP, action or time
   audit export   write labeled decisions as a replay file
   account state  print or set an account's state on a running server
+  domain check   look up a sender domain's SPF, DKIM and DMARC records
   outbox list       list webhook deliveries
   outbox retry      requeue dead webhook deliveries
   outbox stats      count webhook deliveries per hook
@@ -137,6 +138,8 @@ func run(ctx context.Context, args []string, stdout, stderr io.Writer, lookupEnv
 		return c.group(ctx, "audit", rest, map[string]command{"export": c.auditExport})
 	case "account":
 		return c.group(ctx, "account", rest, map[string]command{"state": c.accountState})
+	case "domain":
+		return c.group(ctx, "domain", rest, map[string]command{"check": c.domainCheck})
 	case "outbox":
 		return c.group(ctx, "outbox", rest, map[string]command{"list": c.outboxList, "retry": c.outboxRetry, "stats": c.outboxStats})
 	case "secretscan":

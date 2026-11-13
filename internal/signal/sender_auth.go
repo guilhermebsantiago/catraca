@@ -2,6 +2,7 @@ package signal
 
 import (
 	"context"
+	"maps"
 	"strings"
 
 	"github.com/guilhermebsantiago/catraca/internal/event"
@@ -99,15 +100,24 @@ func (c *catalog) addAuth(ctx context.Context, m map[string]any, ev event.Event,
 			c.auth.Cache.Miss(r.domain)
 		}
 	}
-	m["spf"] = res.SPF
-	m["spf_all"] = res.SPFAll
-	m["spf_provider"] = res.SPFProvider
-	m["dkim"] = res.DKIM
-	m["dmarc_policy"] = res.DMARCPolicy
-	m["dmarc_pct"] = int64(res.DMARCPct)
-	m["dmarc_adkim"] = res.DMARCADKIM
-	m["dmarc_aspf"] = res.DMARCASPF
+	maps.Copy(m, SenderAuthSignals(res))
 	m["verified"] = c.verified(ev, f)
+}
+
+// SenderAuthSignals returns the domain signals a cached result gives: all
+// the sender authentication signals but verified, which comes from the
+// event.
+func SenderAuthSignals(res senderauth.Result) map[string]any {
+	return map[string]any{
+		"spf":          res.SPF,
+		"spf_all":      res.SPFAll,
+		"spf_provider": res.SPFProvider,
+		"dkim":         res.DKIM,
+		"dmarc_policy": res.DMARCPolicy,
+		"dmarc_pct":    int64(res.DMARCPct),
+		"dmarc_adkim":  res.DMARCADKIM,
+		"dmarc_aspf":   res.DMARCASPF,
+	}
 }
 
 // verified says whether the From domain is one the account verified, as
